@@ -1,6 +1,10 @@
+.DS_Store
 node_modules
 dist
 coverage
 playwright-report
 .superpowers
+bin
 *.tsbuildinfo
+console/node_modules
+console/dist
