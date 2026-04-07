@@ -137,8 +137,6 @@ go 1.22.0
 
 use (
 	./common
-	./gateway
-	./client
 )
 ```
 
@@ -366,6 +364,7 @@ git commit -m "feat: add common domain and protocol packages"
 ## Task 3: Build The Go Gateway Skeleton And Northbound HTTP Surface
 
 **Files:**
+- Modify: `go.work`
 - Create: `gateway/go.mod`
 - Create: `gateway/cmd/gateway/main.go`
 - Create: `gateway/internal/config/config.go`
@@ -434,6 +433,16 @@ Run: `go test ./gateway/internal/...`
 Expected: FAIL with missing `Read`, `NewStore`, or `NewServer`
 
 - [ ] **Step 3: Write minimal implementation**
+
+```go
+// go.work
+go 1.22.0
+
+use (
+	./common
+	./gateway
+)
+```
 
 ```go
 // gateway/go.mod
@@ -610,6 +619,7 @@ git commit -m "feat: add go gateway skeleton"
 ## Task 4: Build The Go Client Skeleton, Agent Abstraction, And Fake Codex Adapter
 
 **Files:**
+- Modify: `go.work`
 - Create: `client/go.mod`
 - Create: `client/cmd/client/main.go`
 - Create: `client/internal/config/config.go`
@@ -682,6 +692,17 @@ Run: `go test ./client/internal/...`
 Expected: FAIL with missing `NewSession` or `NewFakeAdapter`
 
 - [ ] **Step 3: Write minimal implementation**
+
+```go
+// go.work
+go 1.22.0
+
+use (
+	./common
+	./gateway
+	./client
+)
+```
 
 ```go
 // client/go.mod
