@@ -77,3 +77,23 @@ func TestCommandEnvelopeRequiresRequestID(t *testing.T) {
 		t.Fatalf("expected requestId validation error, got %q", err.Error())
 	}
 }
+
+func TestCommandEnvelopeMarshalRequiresRequestID(t *testing.T) {
+	msg := Envelope{
+		Version:   "v1",
+		Category:  CategoryCommand,
+		Name:      "thread.create",
+		MachineID: "machine_01",
+		Timestamp: "2026-04-07T10:00:00Z",
+		Payload:   json.RawMessage(`{"title":"Investigate flaky test"}`),
+	}
+
+	_, err := json.Marshal(msg)
+	if err == nil {
+		t.Fatal("expected marshal to fail when command envelope has empty requestId")
+	}
+
+	if !strings.Contains(err.Error(), "requestId") {
+		t.Fatalf("expected requestId validation error, got %q", err.Error())
+	}
+}

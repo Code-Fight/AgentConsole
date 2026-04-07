@@ -8,11 +8,11 @@ const (
 	EnvironmentKindMCP    EnvironmentKind = "mcp"
 	EnvironmentKindPlugin EnvironmentKind = "plugin"
 
-	EnvironmentResourceStatusUnknown    EnvironmentResourceStatus = "unknown"
-	EnvironmentResourceStatusHealthy    EnvironmentResourceStatus = "healthy"
-	EnvironmentResourceStatusDegraded   EnvironmentResourceStatus = "degraded"
-	EnvironmentResourceStatusUnhealthy  EnvironmentResourceStatus = "unhealthy"
-	EnvironmentResourceStatusRestarting EnvironmentResourceStatus = "restarting"
+	EnvironmentResourceStatusUnknown      EnvironmentResourceStatus = "unknown"
+	EnvironmentResourceStatusEnabled      EnvironmentResourceStatus = "enabled"
+	EnvironmentResourceStatusDisabled     EnvironmentResourceStatus = "disabled"
+	EnvironmentResourceStatusAuthRequired EnvironmentResourceStatus = "auth_required"
+	EnvironmentResourceStatusError        EnvironmentResourceStatus = "error"
 )
 
 type EnvironmentResource struct {

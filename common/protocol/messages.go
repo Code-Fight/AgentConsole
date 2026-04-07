@@ -32,3 +32,12 @@ func (e Envelope) Validate() error {
 
 	return nil
 }
+
+func (e Envelope) MarshalJSON() ([]byte, error) {
+	if err := e.Validate(); err != nil {
+		return nil, err
+	}
+
+	type envelopeAlias Envelope
+	return json.Marshal(envelopeAlias(e))
+}
