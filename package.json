@@ -1,0 +1,16 @@
+{
+  "name": "code-agent-gateway",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}
