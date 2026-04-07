@@ -20,6 +20,9 @@ importers:
 
   apps/gateway:
     dependencies:
+      '@cag/domain':
+        specifier: workspace:*
+        version: link:../../packages/domain
       fastify:
         specifier: ^5.0.0
         version: 5.8.4

@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@cag/domain": "workspace:*",
     "fastify": "^5.0.0"
   },
   "devDependencies": {

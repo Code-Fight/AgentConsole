@@ -1,9 +1,4 @@
-export type ThreadSummary = {
-  threadId: string;
-  machineId: string;
-  title: string;
-  status: "ready" | "running" | "waiting_input" | "archived";
-};
+import type { ThreadSummary } from "@cag/domain/dist/thread.js";
 
 export class ThreadStore {
   #threads = new Map<string, ThreadSummary>();
