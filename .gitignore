@@ -3,3 +3,4 @@ dist
 coverage
 playwright-report
 .superpowers
+*.tsbuildinfo

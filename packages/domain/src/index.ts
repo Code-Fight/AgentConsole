@@ -1,3 +1,3 @@
-export * from "./machine";
-export * from "./thread";
-export * from "./environment";
+export * from "./machine.js";
+export * from "./thread.js";
+export * from "./environment.js";

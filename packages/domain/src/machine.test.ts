@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMachineId, buildRuntimeId } from "./machine";
+import { buildMachineId, buildRuntimeId } from "./machine.js";
 
 describe("machine identity helpers", () => {
   it("builds stable machine and runtime ids", () => {
