@@ -1,4 +1,4 @@
-import type { ThreadSummary } from "@cag/domain/dist/thread.js";
+import type { ThreadSummary } from "@cag/domain";
 
 export class ThreadStore {
   #threads = new Map<string, ThreadSummary>();
