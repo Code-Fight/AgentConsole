@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { commandEnvelopeSchema, resourceSnapshotSchema } from "./index";
+import { commandEnvelopeSchema, resourceSnapshotSchema } from "./index.js";
 
 describe("protocol schemas", () => {
   it("accepts a start thread command and a plugin snapshot", () => {
@@ -23,6 +23,22 @@ describe("protocol schemas", () => {
         restartRequired: false,
         lastObservedAt: "2026-04-07T09:00:00.000Z",
       }),
-    ).toMatchObject({ kind: "plugin" });
+      ).toMatchObject({ kind: "plugin" });
+  });
+
+  it("rejects invalid lastObservedAt values", () => {
+    expect(() =>
+      resourceSnapshotSchema.parse({
+        resourceId: "plugin:figma",
+        kind: "plugin",
+        machineId: "mac-mini-01:codex",
+        displayName: "Figma Plugin",
+        scope: "user",
+        status: "enabled",
+        source: "plugin-bundle",
+        restartRequired: false,
+        lastObservedAt: "not-an-iso-date",
+      }),
+    ).toThrow();
   });
 });

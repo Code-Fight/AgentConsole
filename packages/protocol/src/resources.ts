@@ -10,5 +10,5 @@ export const resourceSnapshotSchema = z.object({
   status: z.enum(["enabled", "disabled", "auth_required", "error", "unknown"]),
   source: z.enum(["builtin", "curated", "local-path", "config-entry", "plugin-bundle"]),
   restartRequired: z.boolean(),
-  lastObservedAt: z.string(),
+  lastObservedAt: z.string().datetime(),
 });
