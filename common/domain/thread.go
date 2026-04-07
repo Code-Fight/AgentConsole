@@ -20,14 +20,14 @@ const (
 )
 
 type Thread struct {
-	ID        string       `json:"id"`
+	ThreadID  string       `json:"threadId"`
 	MachineID string       `json:"machineId"`
 	Status    ThreadStatus `json:"status"`
 	Title     string       `json:"title"`
 }
 
 type Turn struct {
-	ID       string     `json:"id"`
+	TurnID   string     `json:"turnId"`
 	ThreadID string     `json:"threadId"`
 	Status   TurnStatus `json:"status"`
 }

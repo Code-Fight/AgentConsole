@@ -1,6 +1,10 @@
 package protocol
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"errors"
+	"strings"
+)
 
 type Category string
 
@@ -19,4 +23,12 @@ type Envelope struct {
 	MachineID string          `json:"machineId,omitempty"`
 	Timestamp string          `json:"timestamp"`
 	Payload   json.RawMessage `json:"payload"`
+}
+
+func (e Envelope) Validate() error {
+	if e.Category == CategoryCommand && strings.TrimSpace(e.RequestID) == "" {
+		return errors.New("requestId is required for command envelopes")
+	}
+
+	return nil
 }
