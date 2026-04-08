@@ -3,8 +3,10 @@ import { AppShell } from "./shell";
 import { EnvironmentPage } from "../pages/environment-page";
 import { MachinesPage } from "../pages/machines-page";
 import { OverviewPage } from "../pages/overview-page";
+import { ThreadWorkspacePage } from "../pages/thread-workspace-page";
+import { ThreadsPage } from "../pages/threads-page";
 
-export const appRouter = createBrowserRouter([
+export const router = createBrowserRouter([
   {
     path: "/",
     element: <AppShell />,
@@ -18,9 +20,19 @@ export const appRouter = createBrowserRouter([
         element: <MachinesPage />
       },
       {
+        path: "threads",
+        element: <ThreadsPage />
+      },
+      {
+        path: "threads/:threadId",
+        element: <ThreadWorkspacePage />
+      },
+      {
         path: "environment",
         element: <EnvironmentPage />
       }
     ]
   }
 ]);
+
+export const appRouter = router;

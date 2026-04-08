@@ -6,9 +6,7 @@ export function AppShell() {
       <aside className="left-nav">
         <NavLink to="/">Overview</NavLink>
         <NavLink to="/machines">Machines</NavLink>
-        <span className="nav-disabled" aria-disabled="true">
-          Threads
-        </span>
+        <NavLink to="/threads/thread-1">Threads</NavLink>
         <NavLink to="/environment">Environment</NavLink>
       </aside>
       <main className="center-pane">

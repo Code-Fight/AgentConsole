@@ -14,5 +14,5 @@ test("renders the console shell", () => {
   expect(screen.getByText("Machines")).toBeInTheDocument();
   expect(screen.getByText("Threads")).toBeInTheDocument();
   expect(screen.getByText("Environment")).toBeInTheDocument();
-  expect(screen.queryByRole("link", { name: "Threads" })).not.toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "Threads" })).toBeInTheDocument();
 });
