@@ -49,6 +49,24 @@ type RuntimeTurnEventSource interface {
 	SetTurnEventHandler(func(RuntimeTurnEvent))
 }
 
+type RuntimeApprovalRequest struct {
+	RequestID string
+	ThreadID  string
+	TurnID    string
+	ItemID    string
+	Kind      string
+	Reason    string
+	Command   string
+}
+
+type RuntimeApprovalEventSource interface {
+	SetApprovalHandler(func(RuntimeApprovalRequest))
+}
+
+type RuntimeApprovalResponder interface {
+	RespondApproval(requestID string, decision string) error
+}
+
 type StartTurnResult struct {
 	TurnID   string
 	ThreadID string

@@ -27,6 +27,7 @@ type ClientHub struct {
 	runtimeIndex      *runtimeindex.Store
 	router            *routing.Router
 	snapshotByMachine map[string]machineSnapshotState
+	approvalRequests  map[string]string
 	pendingCommands   map[string]pendingCommandWaiter
 	commandTimeout    time.Duration
 	nextRequestID     atomic.Uint64
@@ -96,6 +97,7 @@ func NewClientHubWithStores(reg *registry.Store, idx *runtimeindex.Store, router
 		runtimeIndex:      idx,
 		router:            routerStore,
 		snapshotByMachine: map[string]machineSnapshotState{},
+		approvalRequests:  map[string]string{},
 		pendingCommands:   map[string]pendingCommandWaiter{},
 		commandTimeout:    defaultCommandTimeout,
 	}
@@ -113,6 +115,14 @@ func (h *ClientHub) SetConsoleHub(consoleHub *ConsoleHub) {
 	defer h.mu.Unlock()
 
 	h.consoleHub = consoleHub
+}
+
+func (h *ClientHub) ResolveApprovalMachine(requestID string) (string, bool) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	machineID, ok := h.approvalRequests[requestID]
+	return machineID, ok
 }
 
 func (h *ClientHub) Handler() http.Handler {
@@ -222,6 +232,30 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 				Reason:      payload.Reason,
 			},
 		})
+	case "approval.required":
+		requestID := envelope.RequestID
+		var payload protocol.ApprovalRequiredPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil && payload.RequestID != "" {
+			requestID = payload.RequestID
+		}
+		if requestID == "" || envelope.MachineID == "" {
+			return
+		}
+		h.mu.Lock()
+		h.approvalRequests[requestID] = envelope.MachineID
+		h.mu.Unlock()
+	case "approval.resolved":
+		requestID := envelope.RequestID
+		var payload protocol.ApprovalResolvedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil && payload.RequestID != "" {
+			requestID = payload.RequestID
+		}
+		if requestID == "" {
+			return
+		}
+		h.mu.Lock()
+		delete(h.approvalRequests, requestID)
+		h.mu.Unlock()
 	}
 }
 
@@ -340,6 +374,11 @@ func (h *ClientHub) cleanupMachineLocked(machineID string, markOffline bool) []p
 	}
 
 	delete(h.snapshotByMachine, machineID)
+	for requestID, requestMachineID := range h.approvalRequests {
+		if requestMachineID == machineID {
+			delete(h.approvalRequests, requestID)
+		}
+	}
 
 	waiters := make([]pendingCommandWaiter, 0)
 	for requestID, waiter := range h.pendingCommands {

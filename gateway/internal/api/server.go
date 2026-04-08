@@ -17,6 +17,10 @@ type CommandSender interface {
 	SendCommand(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error)
 }
 
+type approvalRequestResolver interface {
+	ResolveApprovalMachine(requestID string) (string, bool)
+}
+
 type createThreadRequest struct {
 	MachineID string `json:"machineId"`
 	Title     string `json:"title"`
@@ -24,6 +28,10 @@ type createThreadRequest struct {
 
 type startTurnRequest struct {
 	Input string `json:"input"`
+}
+
+type approvalRespondRequest struct {
+	Decision string `json:"decision"`
 }
 
 func resolveThreadMachineID(router *routing.Router, threadID string) (string, bool) {
@@ -341,6 +349,64 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{"turn": result.Turn})
+	})
+
+	mux.HandleFunc("POST /approvals/{requestId}/respond", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		resolver, ok := sender.(approvalRequestResolver)
+		if !ok {
+			http.Error(w, "approval resolver unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		requestID := r.PathValue("requestId")
+		if strings.TrimSpace(requestID) == "" {
+			http.Error(w, "requestId is required", http.StatusBadRequest)
+			return
+		}
+
+		var req approvalRespondRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Decision) == "" {
+			http.Error(w, "decision is required", http.StatusBadRequest)
+			return
+		}
+
+		machineID, ok := resolver.ResolveApprovalMachine(requestID)
+		if !ok {
+			http.Error(w, "approval route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "approval.respond", protocol.ApprovalRespondCommandPayload{
+			RequestID: requestID,
+			Decision:  req.Decision,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.ApprovalRespondCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid approval.respond result", http.StatusBadGateway)
+			return
+		}
+		if result.RequestID == "" {
+			result.RequestID = requestID
+		}
+		if result.Decision == "" {
+			result.Decision = req.Decision
+		}
+
+		writeJSON(w, http.StatusOK, result)
 	})
 
 	mux.HandleFunc("GET /environment/skills", func(w http.ResponseWriter, _ *http.Request) {

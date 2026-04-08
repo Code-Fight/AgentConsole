@@ -199,6 +199,72 @@ func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) 
 	}
 }
 
+func TestBindRuntimeApprovalEventsEmitsApprovalRequired(t *testing.T) {
+	runtime := &notifyingRuntime{}
+	session, sent := newRecordingSession()
+
+	if !bindRuntimeApprovalEvents(runtime, session) {
+		t.Fatal("expected runtime approval event binding")
+	}
+
+	runtime.emitApproval(agenttypes.RuntimeApprovalRequest{
+		RequestID: "approval-1",
+		ThreadID:  "thread-01",
+		TurnID:    "turn-01",
+		ItemID:    "item-01",
+		Kind:      "command",
+		Command:   "go test ./...",
+	})
+
+	if len(*sent) != 1 {
+		t.Fatalf("expected 1 approval event, got %d", len(*sent))
+	}
+
+	envelope := decodeEnvelope(t, (*sent)[0])
+	if envelope.Name != "approval.required" || envelope.RequestID != "approval-1" {
+		t.Fatalf("unexpected approval envelope: %+v", envelope)
+	}
+
+	var payload protocol.ApprovalRequiredPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("decode payload failed: %v", err)
+	}
+	if payload.RequestID != "approval-1" || payload.Command != "go test ./..." || payload.Kind != "command" {
+		t.Fatalf("unexpected approval payload: %+v", payload)
+	}
+}
+
+func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
+	runtime := &notifyingRuntime{}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	err := handleCommandEnvelope(session, mgr, "codex", false, protocol.Envelope{
+		Name:      "approval.respond",
+		RequestID: "req-approval-1",
+		Payload:   []byte(`{"requestId":"approval-1","decision":"accept"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if runtime.lastApprovalDecision.requestID != "approval-1" || runtime.lastApprovalDecision.decision != "accept" {
+		t.Fatalf("unexpected approval response: %+v", runtime.lastApprovalDecision)
+	}
+
+	if len(*sent) != 2 {
+		t.Fatalf("expected command ack and approval event, got %d frames", len(*sent))
+	}
+	if decodeEnvelope(t, (*sent)[0]).Name != "command.completed" {
+		t.Fatalf("unexpected ack envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	}
+	if decodeEnvelope(t, (*sent)[1]).Name != "approval.resolved" {
+		t.Fatalf("unexpected resolved envelope: %+v", decodeEnvelope(t, (*sent)[1]))
+	}
+}
+
 func TestBuildRuntimeUsesFakeOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeFake}
 	calledFake := false
@@ -313,8 +379,13 @@ func decodeRejectedPayload(t *testing.T, raw []byte) protocol.CommandRejectedPay
 }
 
 type notifyingRuntime struct {
-	startTurnResult agenttypes.StartTurnResult
-	handler         func(agenttypes.RuntimeTurnEvent)
+	startTurnResult      agenttypes.StartTurnResult
+	handler              func(agenttypes.RuntimeTurnEvent)
+	approvalHandler      func(agenttypes.RuntimeApprovalRequest)
+	lastApprovalDecision struct {
+		requestID string
+		decision  string
+	}
 }
 
 func (r *notifyingRuntime) ListThreads() ([]domain.Thread, error) {
@@ -357,8 +428,24 @@ func (r *notifyingRuntime) SetTurnEventHandler(handler func(agenttypes.RuntimeTu
 	r.handler = handler
 }
 
+func (r *notifyingRuntime) SetApprovalHandler(handler func(agenttypes.RuntimeApprovalRequest)) {
+	r.approvalHandler = handler
+}
+
+func (r *notifyingRuntime) RespondApproval(requestID string, decision string) error {
+	r.lastApprovalDecision.requestID = requestID
+	r.lastApprovalDecision.decision = decision
+	return nil
+}
+
 func (r *notifyingRuntime) emit(event agenttypes.RuntimeTurnEvent) {
 	if r.handler != nil {
 		r.handler(event)
+	}
+}
+
+func (r *notifyingRuntime) emitApproval(event agenttypes.RuntimeApprovalRequest) {
+	if r.approvalHandler != nil {
+		r.approvalHandler(event)
 	}
 }

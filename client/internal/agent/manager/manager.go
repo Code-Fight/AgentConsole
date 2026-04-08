@@ -89,6 +89,20 @@ func (m *Manager) InterruptTurn(runtimeName string, params types.InterruptTurnPa
 	return runtime.InterruptTurn(params)
 }
 
+func (m *Manager) RespondApproval(runtimeName string, requestID string, decision string) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	responder, ok := runtime.(types.RuntimeApprovalResponder)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support approval responses", runtimeName)
+	}
+
+	return responder.RespondApproval(requestID, decision)
+}
+
 func (m *Manager) Snapshot(runtimeName string) (snapshot.Snapshot, error) {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {

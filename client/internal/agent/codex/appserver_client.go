@@ -1,9 +1,11 @@
 package codex
 
 import (
+	"bytes"
 	agenttypes "code-agent-gateway/client/internal/agent/types"
 	"code-agent-gateway/common/domain"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -15,6 +17,11 @@ type Runner interface {
 
 type notificationRunner interface {
 	SetNotificationHandler(func(jsonRPCNotification))
+}
+
+type serverRequestRunner interface {
+	SetServerRequestHandler(func(jsonRPCServerRequest))
+	Respond(id json.RawMessage, result any, rpcErr *jsonRPCError) error
 }
 
 type initializeResponse struct {
@@ -94,21 +101,30 @@ type AppServerClient struct {
 	now              func() time.Time
 	turnEventMu      sync.RWMutex
 	turnEventHandler func(agenttypes.RuntimeTurnEvent)
+	approvalMu       sync.RWMutex
+	approvalHandler  func(agenttypes.RuntimeApprovalRequest)
+	pendingApprovals map[string]pendingApprovalRequest
 	deltaMu          sync.Mutex
 	deltaSequence    map[string]int
 }
 
 var _ agenttypes.Runtime = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeTurnEventSource = (*AppServerClient)(nil)
+var _ agenttypes.RuntimeApprovalEventSource = (*AppServerClient)(nil)
+var _ agenttypes.RuntimeApprovalResponder = (*AppServerClient)(nil)
 
 func NewAppServerClient(runner Runner) *AppServerClient {
 	client := &AppServerClient{
-		runner:        runner,
-		now:           time.Now,
-		deltaSequence: make(map[string]int),
+		runner:           runner,
+		now:              time.Now,
+		pendingApprovals: make(map[string]pendingApprovalRequest),
+		deltaSequence:    make(map[string]int),
 	}
 	if notifier, ok := runner.(notificationRunner); ok {
 		notifier.SetNotificationHandler(client.handleNotification)
+	}
+	if requester, ok := runner.(serverRequestRunner); ok {
+		requester.SetServerRequestHandler(client.handleServerRequest)
 	}
 	return client
 }
@@ -175,6 +191,12 @@ func (c *AppServerClient) SetTurnEventHandler(handler func(agenttypes.RuntimeTur
 	c.turnEventMu.Lock()
 	c.turnEventHandler = handler
 	c.turnEventMu.Unlock()
+}
+
+func (c *AppServerClient) SetApprovalHandler(handler func(agenttypes.RuntimeApprovalRequest)) {
+	c.approvalMu.Lock()
+	c.approvalHandler = handler
+	c.approvalMu.Unlock()
 }
 
 func (r threadRecord) toDomain() domain.Thread {
@@ -253,6 +275,75 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 				Status:   status,
 			},
 		})
+	case "serverRequest/resolved":
+		requestID := extractNotificationString(notification.Params,
+			[]string{"requestId"},
+			[]string{"requestID"},
+			[]string{"id"},
+		)
+		if requestID != "" {
+			c.deletePendingApproval(requestID)
+		}
+	}
+}
+
+func (c *AppServerClient) handleServerRequest(request jsonRPCServerRequest) {
+	requestID, err := normalizeServerRequestID(request.ID)
+	if err != nil {
+		return
+	}
+
+	approvalKind, supported := approvalKindFromMethod(request.Method)
+	if !supported {
+		c.respondToServerRequestError(request.ID, fmt.Sprintf("unsupported approval kind: %s", approvalKind))
+		return
+	}
+
+	approval := ApprovalRequest{
+		RequestID: requestID,
+		ThreadID: extractNotificationString(request.Params,
+			[]string{"threadId"},
+			[]string{"item", "threadId"},
+		),
+		TurnID: extractNotificationString(request.Params,
+			[]string{"turnId"},
+			[]string{"item", "turnId"},
+		),
+		ItemID: extractNotificationString(request.Params,
+			[]string{"itemId"},
+			[]string{"item", "itemId"},
+			[]string{"item", "id"},
+		),
+		Kind: approvalKind,
+		Reason: extractNotificationString(request.Params,
+			[]string{"reason"},
+			[]string{"message"},
+			[]string{"item", "reason"},
+		),
+		Command: extractNotificationString(request.Params,
+			[]string{"command"},
+			[]string{"item", "command"},
+		),
+	}
+
+	c.approvalMu.Lock()
+	c.pendingApprovals[requestID] = pendingApprovalRequest{
+		id:      append(json.RawMessage(nil), request.ID...),
+		request: approval,
+	}
+	handler := c.approvalHandler
+	c.approvalMu.Unlock()
+
+	if handler != nil {
+		handler(agenttypes.RuntimeApprovalRequest{
+			RequestID: approval.RequestID,
+			ThreadID:  approval.ThreadID,
+			TurnID:    approval.TurnID,
+			ItemID:    approval.ItemID,
+			Kind:      approval.Kind,
+			Reason:    approval.Reason,
+			Command:   approval.Command,
+		})
 	}
 }
 
@@ -263,6 +354,23 @@ func (c *AppServerClient) emitTurnEvent(event agenttypes.RuntimeTurnEvent) {
 	if handler != nil {
 		handler(event)
 	}
+}
+
+func (c *AppServerClient) deletePendingApproval(requestID string) {
+	c.approvalMu.Lock()
+	delete(c.pendingApprovals, requestID)
+	c.approvalMu.Unlock()
+}
+
+func (c *AppServerClient) respondToServerRequestError(id json.RawMessage, message string) {
+	responder, ok := c.runner.(serverRequestRunner)
+	if !ok {
+		return
+	}
+	_ = responder.Respond(id, nil, &jsonRPCError{
+		Code:    -32000,
+		Message: message,
+	})
 }
 
 func (c *AppServerClient) nextDeltaSequence(turnID string) int {
@@ -365,4 +473,27 @@ func nestedValue(payload map[string]any, path ...string) (any, bool) {
 		}
 	}
 	return current, true
+}
+
+func normalizeServerRequestID(raw json.RawMessage) (string, error) {
+	var stringID string
+	if err := json.Unmarshal(raw, &stringID); err == nil {
+		stringID = strings.TrimSpace(stringID)
+		if stringID != "" {
+			return stringID, nil
+		}
+	}
+
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+
+	var number json.Number
+	if err := decoder.Decode(&number); err == nil {
+		normalized := strings.TrimSpace(number.String())
+		if normalized != "" {
+			return normalized, nil
+		}
+	}
+
+	return "", fmt.Errorf("unsupported server request id")
 }

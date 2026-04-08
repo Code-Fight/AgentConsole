@@ -395,6 +395,46 @@ func TestClientHubDisconnectClearsMachineRuntimeAndRoutes(t *testing.T) {
 	})
 }
 
+func TestClientHubTracksApprovalRequestOwnership(t *testing.T) {
+	hub := NewClientHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "approval.required",
+		RequestID: "approval-1",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:01Z",
+		Payload:   []byte(`{"requestId":"approval-1","threadId":"thread-1","turnId":"turn-1","itemId":"item-1","kind":"command","command":"go test ./..."}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		machineID, ok := hub.ResolveApprovalMachine("approval-1")
+		return ok && machineID == "machine-01"
+	})
+}
+
 func TestClientHubSendCommandRoundTripsCompletedResponse(t *testing.T) {
 	hub := NewClientHub()
 	server := httptest.NewServer(hub.Handler())

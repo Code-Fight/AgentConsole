@@ -192,6 +192,94 @@ func TestStdioRunnerDispatchesNotificationsWithoutConsumingResponses(t *testing.
 	}
 }
 
+func TestStdioRunnerDispatchesServerRequestsAndWritesResponses(t *testing.T) {
+	serverReader, runnerWriter := io.Pipe()
+	runnerReader, serverWriter := io.Pipe()
+
+	runner := newStdioRunnerFromStreams(runnerReader, runnerWriter, nil)
+	defer runner.Close()
+
+	requests := make(chan jsonRPCServerRequest, 1)
+	runner.SetServerRequestHandler(func(request jsonRPCServerRequest) {
+		requests <- request
+	})
+
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+
+		if err := json.NewEncoder(serverWriter).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      "approval-1",
+			"method":  "item/commandExecution/requestApproval",
+			"params": map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+				"itemId":   "item-1",
+				"command":  "go test ./...",
+			},
+		}); err != nil {
+			done <- err
+			return
+		}
+
+		var response struct {
+			JSONRPC string         `json:"jsonrpc"`
+			ID      string         `json:"id"`
+			Result  map[string]any `json:"result"`
+		}
+		if err := json.NewDecoder(serverReader).Decode(&response); err != nil {
+			done <- err
+			return
+		}
+		if response.JSONRPC != "2.0" {
+			done <- errors.New("unexpected jsonrpc version")
+			return
+		}
+		if response.ID != "approval-1" {
+			done <- errors.New("unexpected response id")
+			return
+		}
+		if response.Result["decision"] != "accept" {
+			done <- errors.New("unexpected approval response payload")
+			return
+		}
+		done <- nil
+	}()
+
+	var request jsonRPCServerRequest
+	select {
+	case request = <-requests:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected server request")
+	}
+
+	if request.Method != "item/commandExecution/requestApproval" {
+		t.Fatalf("unexpected request method: %q", request.Method)
+	}
+
+	var params map[string]any
+	if err := json.Unmarshal(request.Params, &params); err != nil {
+		t.Fatalf("unmarshal request params failed: %v", err)
+	}
+	if params["command"] != "go test ./..." {
+		t.Fatalf("unexpected request params: %#v", params)
+	}
+
+	if err := runner.Respond(request.ID, map[string]any{"decision": "accept"}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("server did not receive response")
+	}
+}
+
 func TestNewStdioRunnerStartsConfiguredCommand(t *testing.T) {
 	ctx := context.Background()
 	var gotName string

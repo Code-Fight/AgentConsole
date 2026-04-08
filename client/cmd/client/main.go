@@ -74,6 +74,7 @@ func main() {
 			return conn.Write(shutdownCtx, cws.MessageText, msg)
 		}, time.Now)
 		runtimeStreamsTurnEvents := bindRuntimeTurnEvents(runtime, session)
+		bindRuntimeApprovalEvents(runtime, session)
 		if err := session.Register(); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "register-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
@@ -175,6 +176,14 @@ func (s *clientSession) TurnCompleted(requestID string, payload protocol.TurnCom
 
 func (s *clientSession) TurnStarted(requestID string, payload protocol.TurnStartedPayload) error {
 	return s.sendEnvelope(protocol.CategoryEvent, "turn.started", requestID, payload)
+}
+
+func (s *clientSession) ApprovalRequired(payload protocol.ApprovalRequiredPayload) error {
+	return s.sendEnvelope(protocol.CategoryEvent, "approval.required", payload.RequestID, payload)
+}
+
+func (s *clientSession) ApprovalResolved(payload protocol.ApprovalResolvedPayload) error {
+	return s.sendEnvelope(protocol.CategoryEvent, "approval.resolved", payload.RequestID, payload)
 }
 
 func (s *clientSession) sendEnvelope(category protocol.Category, name string, requestID string, payload any) error {
@@ -295,6 +304,30 @@ func emitRuntimeTurnEvent(session *clientSession, event agenttypes.RuntimeTurnEv
 	default:
 		return nil
 	}
+}
+
+func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSession) bool {
+	source, ok := runtime.(agenttypes.RuntimeApprovalEventSource)
+	if !ok {
+		return false
+	}
+
+	source.SetApprovalHandler(func(event agenttypes.RuntimeApprovalRequest) {
+		_ = emitRuntimeApprovalEvent(session, event)
+	})
+	return true
+}
+
+func emitRuntimeApprovalEvent(session *clientSession, event agenttypes.RuntimeApprovalRequest) error {
+	return session.ApprovalRequired(protocol.ApprovalRequiredPayload{
+		RequestID: event.RequestID,
+		ThreadID:  event.ThreadID,
+		TurnID:    event.TurnID,
+		ItemID:    event.ItemID,
+		Kind:      event.Kind,
+		Reason:    event.Reason,
+		Command:   event.Command,
+	})
 }
 
 func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, heartbeatInterval time.Duration) error {
@@ -558,6 +591,27 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 
 		return session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
 			Turn: turn,
+		})
+	case "approval.respond":
+		var payload protocol.ApprovalRespondCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		if err := mgr.RespondApproval(runtimeName, payload.RequestID, payload.Decision); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ApprovalRespondCommandResult{
+			RequestID: payload.RequestID,
+			Decision:  payload.Decision,
+		}); err != nil {
+			return err
+		}
+
+		return session.ApprovalResolved(protocol.ApprovalResolvedPayload{
+			RequestID: payload.RequestID,
+			Decision:  payload.Decision,
 		})
 	default:
 		return session.CommandRejected(envelope.RequestID, envelope.Name, "unsupported command", "")

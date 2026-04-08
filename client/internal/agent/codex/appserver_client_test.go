@@ -10,8 +10,10 @@ import (
 )
 
 type fakeRunner struct {
-	call                func(method string, payload any, out any) error
-	notificationHandler func(jsonRPCNotification)
+	call                 func(method string, payload any, out any) error
+	notificationHandler  func(jsonRPCNotification)
+	serverRequestHandler func(jsonRPCServerRequest)
+	respond              func(id json.RawMessage, result any, rpcErr *jsonRPCError) error
 }
 
 func (r *fakeRunner) Call(method string, payload any, out any) error {
@@ -23,6 +25,17 @@ func (r *fakeRunner) Call(method string, payload any, out any) error {
 
 func (r *fakeRunner) SetNotificationHandler(handler func(jsonRPCNotification)) {
 	r.notificationHandler = handler
+}
+
+func (r *fakeRunner) SetServerRequestHandler(handler func(jsonRPCServerRequest)) {
+	r.serverRequestHandler = handler
+}
+
+func (r *fakeRunner) Respond(id json.RawMessage, result any, rpcErr *jsonRPCError) error {
+	if r.respond != nil {
+		return r.respond(id, result, rpcErr)
+	}
+	return nil
 }
 
 func (r *fakeRunner) emitNotification(t *testing.T, method string, params any) {
@@ -40,6 +53,30 @@ func (r *fakeRunner) emitNotification(t *testing.T, method string, params any) {
 	r.notificationHandler(jsonRPCNotification{
 		Method: method,
 		Params: raw,
+	})
+}
+
+func (r *fakeRunner) emitServerRequest(t *testing.T, id string, method string, params any) {
+	t.Helper()
+
+	if r.serverRequestHandler == nil {
+		t.Fatal("server request handler not registered")
+	}
+
+	rawParams, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal server request params failed: %v", err)
+	}
+
+	rawID, err := json.Marshal(id)
+	if err != nil {
+		t.Fatalf("marshal server request id failed: %v", err)
+	}
+
+	r.serverRequestHandler(jsonRPCServerRequest{
+		ID:     rawID,
+		Method: method,
+		Params: rawParams,
 	})
 }
 
@@ -371,6 +408,50 @@ func TestAppServerClientTranslatesNotificationsIntoTurnEvents(t *testing.T) {
 	}
 	if events[3].Turn.ThreadID != "thread-1" || events[3].Turn.TurnID != "turn-1" || events[3].Turn.Status != domain.TurnStatusCompleted {
 		t.Fatalf("unexpected completed turn: %+v", events[3].Turn)
+	}
+}
+
+func TestAppServerClientRespondApprovalWritesStoredServerRequestResponse(t *testing.T) {
+	var gotID string
+	var gotResult map[string]any
+
+	runner := &fakeRunner{
+		respond: func(id json.RawMessage, result any, rpcErr *jsonRPCError) error {
+			if rpcErr != nil {
+				t.Fatalf("unexpected rpc error: %+v", rpcErr)
+			}
+			if err := json.Unmarshal(id, &gotID); err != nil {
+				t.Fatalf("unmarshal id failed: %v", err)
+			}
+
+			raw, err := json.Marshal(result)
+			if err != nil {
+				t.Fatalf("marshal result failed: %v", err)
+			}
+			if err := json.Unmarshal(raw, &gotResult); err != nil {
+				t.Fatalf("unmarshal result failed: %v", err)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	runner.emitServerRequest(t, "approval-1", "item/commandExecution/requestApproval", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "item-1",
+		"command":  "go test ./...",
+	})
+
+	if err := client.RespondApproval("approval-1", "accept"); err != nil {
+		t.Fatal(err)
+	}
+
+	if gotID != "approval-1" {
+		t.Fatalf("unexpected response id: %q", gotID)
+	}
+	if gotResult["decision"] != "accept" {
+		t.Fatalf("unexpected response payload: %#v", gotResult)
 	}
 }
 

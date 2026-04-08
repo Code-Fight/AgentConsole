@@ -473,8 +473,65 @@ func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	}
 }
 
+func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
+	sender := &fakeCommandSender{
+		resolveApprovalMachine: func(requestID string) (string, bool) {
+			if requestID != "approval-1" {
+				t.Fatalf("requestID = %q", requestID)
+			}
+			return "machine-01", true
+		},
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("machineID = %q", machineID)
+			}
+			if name != "approval.respond" {
+				t.Fatalf("name = %q", name)
+			}
+
+			commandPayload, ok := payload.(protocol.ApprovalRespondCommandPayload)
+			if !ok {
+				t.Fatalf("payload type = %T", payload)
+			}
+			if commandPayload.RequestID != "approval-1" || commandPayload.Decision != "accept" {
+				t.Fatalf("unexpected payload: %+v", commandPayload)
+			}
+
+			return protocol.CommandCompletedPayload{
+				CommandName: "approval.respond",
+				Result: mustMarshalJSON(t, protocol.ApprovalRespondCommandResult{
+					RequestID: "approval-1",
+					Decision:  "accept",
+				}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodPost, "/approvals/approval-1/respond", bytes.NewBufferString(`{"decision":"accept"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		RequestID string `json:"requestId"`
+		Decision  string `json:"decision"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.RequestID != "approval-1" || body.Decision != "accept" {
+		t.Fatalf("unexpected response body: %+v", body)
+	}
+}
+
 type fakeCommandSender struct {
-	send func(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error)
+	send                   func(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error)
+	resolveApprovalMachine func(requestID string) (string, bool)
 }
 
 func (s *fakeCommandSender) SendCommand(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
@@ -483,6 +540,13 @@ func (s *fakeCommandSender) SendCommand(ctx context.Context, machineID string, n
 	}
 
 	return s.send(ctx, machineID, name, payload)
+}
+
+func (s *fakeCommandSender) ResolveApprovalMachine(requestID string) (string, bool) {
+	if s.resolveApprovalMachine == nil {
+		return "", false
+	}
+	return s.resolveApprovalMachine(requestID)
 }
 
 func mustMarshalJSON(t *testing.T, value any) []byte {

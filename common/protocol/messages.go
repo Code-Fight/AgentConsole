@@ -61,6 +61,11 @@ type TurnInterruptCommandPayload struct {
 	TurnID   string `json:"turnId"`
 }
 
+type ApprovalRespondCommandPayload struct {
+	RequestID string `json:"requestId"`
+	Decision  string `json:"decision"`
+}
+
 type CommandCompletedPayload struct {
 	CommandName string          `json:"commandName"`
 	Result      json.RawMessage `json:"result,omitempty"`
@@ -102,6 +107,11 @@ type TurnInterruptCommandResult struct {
 	Turn domain.Turn `json:"turn"`
 }
 
+type ApprovalRespondCommandResult struct {
+	RequestID string `json:"requestId"`
+	Decision  string `json:"decision"`
+}
+
 type TurnDeltaPayload struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
@@ -116,6 +126,21 @@ type TurnStartedPayload struct {
 
 type TurnCompletedPayload struct {
 	Turn domain.Turn `json:"turn"`
+}
+
+type ApprovalRequiredPayload struct {
+	RequestID string `json:"requestId"`
+	ThreadID  string `json:"threadId,omitempty"`
+	TurnID    string `json:"turnId,omitempty"`
+	ItemID    string `json:"itemId,omitempty"`
+	Kind      string `json:"kind"`
+	Reason    string `json:"reason,omitempty"`
+	Command   string `json:"command,omitempty"`
+}
+
+type ApprovalResolvedPayload struct {
+	RequestID string `json:"requestId"`
+	Decision  string `json:"decision"`
 }
 
 type Envelope struct {
