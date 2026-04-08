@@ -12,12 +12,12 @@ import (
 
 type ClientHub struct {
 	mu      sync.Mutex
-	clients map[string]struct{}
+	clients map[string]*cws.Conn
 }
 
 func NewClientHub() *ClientHub {
 	return &ClientHub{
-		clients: map[string]struct{}{},
+		clients: map[string]*cws.Conn{},
 	}
 }
 
@@ -44,7 +44,9 @@ func (h *ClientHub) Handler() http.Handler {
 			}
 
 			h.mu.Lock()
-			delete(h.clients, registeredMachineID)
+			if h.clients[registeredMachineID] == conn {
+				delete(h.clients, registeredMachineID)
+			}
 			h.mu.Unlock()
 		}()
 
@@ -67,9 +69,12 @@ func (h *ClientHub) Handler() http.Handler {
 				if envelope.MachineID == "" {
 					continue
 				}
-				registeredMachineID = envelope.MachineID
 				h.mu.Lock()
-				h.clients[envelope.MachineID] = struct{}{}
+				if registeredMachineID != "" && registeredMachineID != envelope.MachineID && h.clients[registeredMachineID] == conn {
+					delete(h.clients, registeredMachineID)
+				}
+				h.clients[envelope.MachineID] = conn
+				registeredMachineID = envelope.MachineID
 				h.mu.Unlock()
 			case "client.heartbeat":
 				continue
