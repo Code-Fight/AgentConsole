@@ -3,14 +3,58 @@ package codex
 import "code-agent-gateway/common/domain"
 
 func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error) {
-	var records []EnvironmentRecord
-	if err := c.runner.Call("environment/list", map[string]any{}, &records); err != nil {
+	var skills skillsListResponse
+	if err := c.runner.Call("skills/list", map[string]any{}, &skills); err != nil {
 		return nil, err
 	}
 
-	environment := make([]domain.EnvironmentResource, 0, len(records))
-	for _, record := range records {
-		environment = append(environment, record.toDomain())
+	var plugins pluginListResponse
+	if err := c.runner.Call("plugin/list", map[string]any{}, &plugins); err != nil {
+		return nil, err
 	}
+
+	lastObservedAt := c.now().UTC().Format(timeLayoutRFC3339)
+	environment := make([]domain.EnvironmentResource, 0, len(skills.Data)+len(plugins.Marketplaces))
+	for _, entry := range skills.Data {
+		for _, skill := range entry.Skills {
+			environment = append(environment, domain.EnvironmentResource{
+				ResourceID:      skill.Name,
+				Kind:            domain.EnvironmentKindSkill,
+				DisplayName:     skill.Name,
+				Status:          enabledStatus(skill.Enabled),
+				RestartRequired: false,
+				LastObservedAt:  lastObservedAt,
+			})
+		}
+	}
+	for _, marketplace := range plugins.Marketplaces {
+		for _, plugin := range marketplace.Plugins {
+			environment = append(environment, domain.EnvironmentResource{
+				ResourceID:      plugin.ID,
+				Kind:            domain.EnvironmentKindPlugin,
+				DisplayName:     plugin.Name,
+				Status:          pluginStatus(plugin),
+				RestartRequired: false,
+				LastObservedAt:  lastObservedAt,
+			})
+		}
+	}
+
 	return environment, nil
+}
+
+const timeLayoutRFC3339 = "2006-01-02T15:04:05Z07:00"
+
+func enabledStatus(enabled bool) domain.EnvironmentResourceStatus {
+	if enabled {
+		return domain.EnvironmentResourceStatusEnabled
+	}
+	return domain.EnvironmentResourceStatusDisabled
+}
+
+func pluginStatus(plugin pluginSummary) domain.EnvironmentResourceStatus {
+	if !plugin.Installed {
+		return domain.EnvironmentResourceStatusUnknown
+	}
+	return enabledStatus(plugin.Enabled)
 }

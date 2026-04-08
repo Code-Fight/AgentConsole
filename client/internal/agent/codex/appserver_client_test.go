@@ -43,8 +43,12 @@ func TestClientListThreads(t *testing.T) {
 					if tt.callErr != nil {
 						return tt.callErr
 					}
-					threads := out.(*[]ThreadRecord)
-					*threads = []ThreadRecord{{ID: "thread-1", Title: "Investigate flaky test"}}
+					response := out.(*threadListResponse)
+					response.Data = []threadRecord{{
+						ID:     "thread-1",
+						Name:   "Investigate flaky test",
+						Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+					}}
 					return nil
 				},
 			}
@@ -86,25 +90,36 @@ func TestClientListEnvironment(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var calls []string
 			runner := &fakeRunner{
 				call: func(method string, payload any, out any) error {
-					if method != "environment/list" {
-						t.Fatalf("unexpected method: %s", method)
-					}
+					calls = append(calls, method)
 					if tt.callErr != nil {
 						return tt.callErr
 					}
-					records := out.(*[]EnvironmentRecord)
-					*records = []EnvironmentRecord{
-						{
-							ResourceID:      "skill-1",
-							MachineID:       "machine-1",
-							Kind:            domain.EnvironmentKindSkill,
-							DisplayName:     "Skill A",
-							Status:          domain.EnvironmentResourceStatusEnabled,
-							RestartRequired: true,
-							LastObservedAt:  "2026-04-08T10:00:00Z",
-						},
+					switch method {
+					case "skills/list":
+						response := out.(*skillsListResponse)
+						response.Data = []skillsListEntry{
+							{
+								Cwd: "/tmp/project",
+								Skills: []skillMetadata{
+									{Name: "skill-a", Enabled: true, Path: "/tmp/project/.codex/skills/skill-a/SKILL.md"},
+								},
+							},
+						}
+					case "plugin/list":
+						response := out.(*pluginListResponse)
+						response.Marketplaces = []pluginMarketplaceEntry{
+							{
+								Name: "local",
+								Plugins: []pluginSummary{
+									{ID: "plugin-a", Name: "Plugin A", Enabled: true, Installed: true},
+								},
+							},
+						}
+					default:
+						t.Fatalf("unexpected method: %s", method)
 					}
 					return nil
 				},
@@ -121,10 +136,16 @@ func TestClientListEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(environment) != 1 {
+			if len(calls) != 2 || calls[0] != "skills/list" || calls[1] != "plugin/list" {
+				t.Fatalf("unexpected calls: %#v", calls)
+			}
+			if len(environment) != 2 {
 				t.Fatalf("unexpected environment count: %d", len(environment))
 			}
-			if environment[0].ResourceID != "skill-1" || environment[0].DisplayName != "Skill A" {
+			if environment[0].ResourceID != "skill-a" || environment[0].Kind != domain.EnvironmentKindSkill {
+				t.Fatalf("unexpected skill environment: %+v", environment[0])
+			}
+			if environment[1].ResourceID != "plugin-a" || environment[1].Kind != domain.EnvironmentKindPlugin {
 				t.Fatalf("unexpected environment: %+v", environment)
 			}
 		})
@@ -160,8 +181,12 @@ func TestClientCreateThreadUsesExpectedMethodAndPayload(t *testing.T) {
 					if tt.callErr != nil {
 						return tt.callErr
 					}
-					record := out.(*ThreadRecord)
-					*record = ThreadRecord{ID: "thread-1", Title: tt.title, Status: domain.ThreadStatusIdle}
+					response := out.(*threadStartResponse)
+					response.Thread = threadRecord{
+						ID:     "thread-1",
+						Name:   tt.title,
+						Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+					}
 					return nil
 				},
 			}
@@ -178,6 +203,9 @@ func TestClientCreateThreadUsesExpectedMethodAndPayload(t *testing.T) {
 			}
 			if payloadMap["title"] != tt.title {
 				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+			if payloadMap["experimentalRawEvents"] != false || payloadMap["persistExtendedHistory"] != false {
+				t.Fatalf("expected thread/start defaults in payload: %#v", payloadMap)
 			}
 
 			if tt.callErr != nil {
@@ -228,10 +256,8 @@ func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 					if tt.callErr != nil {
 						return tt.callErr
 					}
-					result := out.(*struct {
-						TurnID string `json:"turnId"`
-					})
-					result.TurnID = "turn-1"
+					response := out.(*turnStartResponse)
+					response.Turn = turnRecord{ID: "turn-1"}
 					return nil
 				},
 			}
@@ -249,8 +275,15 @@ func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 			if !ok {
 				t.Fatalf("unexpected payload type: %T", gotPayload)
 			}
-			if payloadMap["threadId"] != tt.threadID || payloadMap["input"] != tt.prompt {
+			inputs, ok := payloadMap["input"].([]map[string]any)
+			if !ok {
+				t.Fatalf("unexpected input payload type: %T", payloadMap["input"])
+			}
+			if payloadMap["threadId"] != tt.threadID || len(inputs) != 1 || inputs[0]["text"] != tt.prompt {
 				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+			if inputs[0]["type"] != "text" {
+				t.Fatalf("unexpected input payload: %#v", inputs[0])
 			}
 
 			if tt.callErr != nil {

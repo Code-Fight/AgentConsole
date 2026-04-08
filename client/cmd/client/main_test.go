@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"code-agent-gateway/client/internal/agent/manager"
 	agentregistry "code-agent-gateway/client/internal/agent/registry"
 	agenttypes "code-agent-gateway/client/internal/agent/types"
+	"code-agent-gateway/client/internal/config"
 	"code-agent-gateway/client/internal/gateway"
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
@@ -127,6 +129,64 @@ func TestHandleCommandEnvelopeRejectsFailedTurnStartWithoutDisconnecting(t *test
 	}
 	if rejection.Reason == "" {
 		t.Fatal("expected rejection reason")
+	}
+}
+
+func TestBuildRuntimeUsesFakeOnlyWhenConfigured(t *testing.T) {
+	cfg := config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeFake}
+	calledFake := false
+	calledAppServer := false
+
+	runtime, cleanup, err := buildRuntime(context.Background(), cfg, time.Now, runtimeFactories{
+		newFake: func(config.Config, func() time.Time) agenttypes.Runtime {
+			calledFake = true
+			return codex.NewFakeAdapter()
+		},
+		newAppServer: func(context.Context, config.Config) (agenttypes.Runtime, func() error, error) {
+			calledAppServer = true
+			return codex.NewFakeAdapter(), func() error { return nil }, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime == nil {
+		t.Fatal("expected runtime")
+	}
+	if cleanup == nil {
+		t.Fatal("expected cleanup")
+	}
+	if !calledFake || calledAppServer {
+		t.Fatalf("unexpected selection fake=%v appserver=%v", calledFake, calledAppServer)
+	}
+}
+
+func TestBuildRuntimeUsesAppServerByDefault(t *testing.T) {
+	cfg := config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeAppServer}
+	calledFake := false
+	calledAppServer := false
+
+	runtime, cleanup, err := buildRuntime(context.Background(), cfg, time.Now, runtimeFactories{
+		newFake: func(config.Config, func() time.Time) agenttypes.Runtime {
+			calledFake = true
+			return codex.NewFakeAdapter()
+		},
+		newAppServer: func(context.Context, config.Config) (agenttypes.Runtime, func() error, error) {
+			calledAppServer = true
+			return codex.NewFakeAdapter(), func() error { return nil }, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime == nil {
+		t.Fatal("expected runtime")
+	}
+	if cleanup == nil {
+		t.Fatal("expected cleanup")
+	}
+	if calledFake || !calledAppServer {
+		t.Fatalf("unexpected selection fake=%v appserver=%v", calledFake, calledAppServer)
 	}
 }
 

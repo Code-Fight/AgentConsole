@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -28,33 +29,20 @@ func main() {
 	const reconnectMaxBackoff = 5 * time.Second
 	const runtimeName = "codex"
 
-	cfg := config.Read()
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
-	adapter := codex.NewFakeAdapter()
-	adapter.SeedSnapshot(
-		[]domain.Thread{
-			{
-				ThreadID:  "thread-01",
-				MachineID: cfg.MachineID,
-				Status:    domain.ThreadStatusIdle,
-				Title:     "Gateway bootstrap thread",
-			},
-		},
-		[]domain.EnvironmentResource{
-			{
-				ResourceID:      "skill-01",
-				MachineID:       cfg.MachineID,
-				Kind:            domain.EnvironmentKindSkill,
-				DisplayName:     "Bootstrap Skill",
-				Status:          domain.EnvironmentResourceStatusEnabled,
-				RestartRequired: false,
-				LastObservedAt:  time.Now().UTC().Format(time.RFC3339),
-			},
-		},
-	)
+	cfg := config.Read()
+	runtime, cleanupRuntime, err := buildRuntime(shutdownCtx, cfg, time.Now, defaultRuntimeFactories())
+	if err != nil {
+		return
+	}
+	defer func() {
+		_ = cleanupRuntime()
+	}()
 
 	runtimeRegistry := agentregistry.New()
-	runtimeRegistry.Register(runtimeName, adapter)
+	runtimeRegistry.Register(runtimeName, runtime)
 	agentManager := manager.New(runtimeRegistry)
 
 	machine := domain.Machine{
@@ -62,9 +50,6 @@ func main() {
 		Name:   cfg.MachineID,
 		Status: domain.MachineStatusOnline,
 	}
-
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
 
 	backoff := time.Duration(0)
 	for {
@@ -116,6 +101,72 @@ func main() {
 		_ = conn.Close(cws.StatusNormalClosure, "done")
 		return
 	}
+}
+
+type runtimeFactories struct {
+	newFake      func(cfg config.Config, now func() time.Time) agenttypes.Runtime
+	newAppServer func(ctx context.Context, cfg config.Config) (agenttypes.Runtime, func() error, error)
+}
+
+func defaultRuntimeFactories() runtimeFactories {
+	return runtimeFactories{
+		newFake: newFakeRuntime,
+		newAppServer: func(ctx context.Context, cfg config.Config) (agenttypes.Runtime, func() error, error) {
+			runner, err := codex.NewStdioRunner(ctx, cfg.CodexBin)
+			if err != nil {
+				return nil, nil, err
+			}
+			client := codex.NewAppServerClient(runner)
+			if err := client.Initialize(); err != nil {
+				_ = runner.Close()
+				return nil, nil, err
+			}
+			return client, runner.Close, nil
+		},
+	}
+}
+
+func buildRuntime(ctx context.Context, cfg config.Config, now func() time.Time, factories runtimeFactories) (agenttypes.Runtime, func() error, error) {
+	switch cfg.RuntimeMode {
+	case "", config.RuntimeModeAppServer:
+		if factories.newAppServer == nil {
+			return nil, nil, fmt.Errorf("app-server runtime factory is not configured")
+		}
+		return factories.newAppServer(ctx, cfg)
+	case config.RuntimeModeFake:
+		if factories.newFake == nil {
+			return nil, nil, fmt.Errorf("fake runtime factory is not configured")
+		}
+		return factories.newFake(cfg, now), func() error { return nil }, nil
+	default:
+		return nil, nil, fmt.Errorf("unsupported runtime mode %q", cfg.RuntimeMode)
+	}
+}
+
+func newFakeRuntime(cfg config.Config, now func() time.Time) agenttypes.Runtime {
+	adapter := codex.NewFakeAdapter()
+	adapter.SeedSnapshot(
+		[]domain.Thread{
+			{
+				ThreadID:  "thread-01",
+				MachineID: cfg.MachineID,
+				Status:    domain.ThreadStatusIdle,
+				Title:     "Gateway bootstrap thread",
+			},
+		},
+		[]domain.EnvironmentResource{
+			{
+				ResourceID:      "skill-01",
+				MachineID:       cfg.MachineID,
+				Kind:            domain.EnvironmentKindSkill,
+				DisplayName:     "Bootstrap Skill",
+				Status:          domain.EnvironmentResourceStatusEnabled,
+				RestartRequired: false,
+				LastObservedAt:  now().UTC().Format(time.RFC3339),
+			},
+		},
+	)
+	return adapter
 }
 
 func runConnection(ctx context.Context, conn *cws.Conn, session *gateway.Session, mgr *manager.Manager, runtimeName string, heartbeatInterval time.Duration) error {
