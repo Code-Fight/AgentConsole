@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 export function buildThreadApiPath(threadId: string, resource?: string): string {
   const encodedThreadId = encodeURIComponent(threadId);

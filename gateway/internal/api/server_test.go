@@ -16,7 +16,7 @@ import (
 )
 
 func TestServerServesEmptyControlPlaneViews(t *testing.T) {
-	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, http.NotFoundHandler())
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
 
 	for _, path := range []string{"/health", "/machines", "/threads", "/environment/skills", "/environment/mcps", "/environment/plugins"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -61,7 +61,7 @@ func TestServerMountsClientWebsocketRoute(t *testing.T) {
 		w.WriteHeader(http.StatusTeapot)
 	})
 
-	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, wsHandler)
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, wsHandler, http.NotFoundHandler())
 	req := httptest.NewRequest(http.MethodGet, "/ws/client", nil)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -71,6 +71,33 @@ func TestServerMountsClientWebsocketRoute(t *testing.T) {
 	}
 	if !called {
 		t.Fatal("/ws/client handler was not invoked")
+	}
+}
+
+func TestServerMountsConsoleWebsocketRoute(t *testing.T) {
+	called := false
+	wsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	})
+
+	handler := NewServer(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		http.NotFoundHandler(),
+		wsHandler,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusSwitchingProtocols {
+		t.Fatalf("/ws returned %d", rec.Code)
+	}
+	if !called {
+		t.Fatal("/ws handler was not invoked")
 	}
 }
 
@@ -106,7 +133,7 @@ func TestServerCreatesThreadThroughCommandSender(t *testing.T) {
 		},
 	}
 
-	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler())
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
 	req := httptest.NewRequest(http.MethodPost, "/threads", bytes.NewBufferString(`{"machineId":"machine-01","title":"Investigate flaky test"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -159,7 +186,7 @@ func TestServerStartsTurnOnResolvedMachine(t *testing.T) {
 		},
 	}
 
-	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler())
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
 	req := httptest.NewRequest(http.MethodPost, "/threads/thread-01/turns", bytes.NewBufferString(`{"input":"run tests"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()

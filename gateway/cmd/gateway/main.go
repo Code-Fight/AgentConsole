@@ -29,6 +29,8 @@ func buildServerHandler() http.Handler {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()
 	router := routing.NewRouter()
+	consoleHub := ws.NewConsoleHub()
 	clientHub := ws.NewClientHubWithStores(reg, idx, router)
-	return api.NewServer(reg, idx, router, clientHub, clientHub.Handler())
+	clientHub.SetConsoleHub(consoleHub)
+	return api.NewServer(reg, idx, router, clientHub, clientHub.Handler(), consoleHub.Handler())
 }

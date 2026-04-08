@@ -23,6 +23,12 @@ test("preserves default accept header when caller provides custom headers", asyn
 
   expect(headers.get("Accept")).toBe("application/json");
   expect(headers.get("Authorization")).toBe("Bearer token");
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/status",
+    expect.objectContaining({
+      headers: expect.any(Headers)
+    }),
+  );
 });
 
 test("builds thread api path for workspace placeholders", () => {

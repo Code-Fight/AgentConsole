@@ -32,11 +32,14 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler) http.Handler {
+func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
 	mux := http.NewServeMux()
 
 	if clientWS != nil {
 		mux.Handle("/ws/client", clientWS)
+	}
+	if consoleWS != nil {
+		mux.Handle("/ws", consoleWS)
 	}
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {

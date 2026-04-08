@@ -15,9 +15,10 @@ export function buildThreadSocketUrl(threadId: string): string {
 }
 
 export function connectConsoleSocket(
+  threadId: string,
   onMessage: (event: MessageEvent<string>) => void,
 ): () => void {
-  const socket = new WebSocket(WS_URL);
+  const socket = new WebSocket(buildThreadSocketUrl(threadId));
   socket.addEventListener("message", onMessage);
 
   return () => {

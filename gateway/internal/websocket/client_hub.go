@@ -22,6 +22,7 @@ import (
 type ClientHub struct {
 	mu                sync.RWMutex
 	clients           map[string]*clientConn
+	consoleHub        *ConsoleHub
 	registry          *registry.Store
 	runtimeIndex      *runtimeindex.Store
 	router            *routing.Router
@@ -65,6 +66,13 @@ func (h *ClientHub) Count() int {
 	defer h.mu.RUnlock()
 
 	return len(h.clients)
+}
+
+func (h *ClientHub) SetConsoleHub(consoleHub *ConsoleHub) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.consoleHub = consoleHub
 }
 
 func (h *ClientHub) Handler() http.Handler {
@@ -156,6 +164,13 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 }
 
 func (h *ClientHub) handleEventEnvelope(envelope protocol.Envelope) {
+	h.mu.RLock()
+	consoleHub := h.consoleHub
+	h.mu.RUnlock()
+	if consoleHub != nil {
+		_ = consoleHub.Broadcast(envelope)
+	}
+
 	if envelope.Name != "command.completed" || envelope.RequestID == "" {
 		return
 	}

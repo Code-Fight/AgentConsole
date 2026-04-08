@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -270,6 +271,68 @@ func TestClientHubSendCommandRoundTripsCompletedResponse(t *testing.T) {
 	}
 
 	<-done
+}
+
+func TestClientHubFansOutEventEnvelopesToConsoleClients(t *testing.T) {
+	consoleHub := NewConsoleHub()
+	hub := NewClientHub()
+	hub.SetConsoleHub(consoleHub)
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws/client", hub.Handler())
+	mux.Handle("/ws", consoleHub.Handler())
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	consoleConn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consoleConn.Close(websocket.StatusNormalClosure, "done")
+
+	clientConn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientConn.Close(websocket.StatusNormalClosure, "done")
+
+	done := make(chan protocol.Envelope, 1)
+	go func() {
+		_, data, err := consoleConn.Read(context.Background())
+		if err != nil {
+			t.Errorf("read console event failed: %v", err)
+			return
+		}
+
+		var envelope protocol.Envelope
+		if err := transport.Decode(data, &envelope); err != nil {
+			t.Errorf("decode console event failed: %v", err)
+			return
+		}
+
+		done <- envelope
+	}()
+
+	if err := writeEnvelope(t, clientConn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "turn.delta",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:20Z",
+		Payload:   []byte(`{"threadId":"thread-01","turnId":"turn-01","sequence":1,"delta":"hello"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case envelope := <-done:
+		if envelope.Name != "turn.delta" {
+			t.Fatalf("name = %q", envelope.Name)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("timed out waiting for console event")
+	}
 }
 
 func waitForCount(t *testing.T, hub *ClientHub, expected int, timeout time.Duration) {

@@ -24,11 +24,11 @@ test("uses an origin-aware websocket default url", () => {
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
   const onMessage = vi.fn();
-  const disconnect = connectConsoleSocket(onMessage);
+  const disconnect = connectConsoleSocket("thread-1", onMessage);
 
   const socket = FakeWebSocket.instances[0];
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const expectedUrl = `${protocol}://${window.location.host}/ws`;
+  const expectedUrl = `${protocol}://${window.location.host}/ws?threadId=thread-1`;
 
   expect(socket.url).toBe(expectedUrl);
 
