@@ -18,6 +18,10 @@ type Session struct {
 }
 
 func NewSession(machineID string, send Sender, now func() time.Time) *Session {
+	if now == nil {
+		now = time.Now
+	}
+
 	return &Session{
 		machineID: machineID,
 		send:      send,
