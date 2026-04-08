@@ -27,7 +27,7 @@ type ClientHub struct {
 	runtimeIndex      *runtimeindex.Store
 	router            *routing.Router
 	snapshotByMachine map[string]machineSnapshotState
-	pendingCommands   map[string]chan pendingCommandResult
+	pendingCommands   map[string]pendingCommandWaiter
 	commandTimeout    time.Duration
 	nextRequestID     atomic.Uint64
 }
@@ -42,6 +42,11 @@ type pendingCommandResult struct {
 	err      error
 }
 
+type pendingCommandWaiter struct {
+	machineID string
+	ch        chan pendingCommandResult
+}
+
 type clientConn struct {
 	conn    *cws.Conn
 	writeMu sync.Mutex
@@ -52,6 +57,10 @@ type CommandRejectedError struct {
 	Reason      string
 }
 
+type MachineDisconnectedError struct {
+	MachineID string
+}
+
 func (e *CommandRejectedError) Error() string {
 	if e == nil {
 		return "command rejected"
@@ -60,6 +69,13 @@ func (e *CommandRejectedError) Error() string {
 		return fmt.Sprintf("command %q rejected", e.CommandName)
 	}
 	return fmt.Sprintf("command %q rejected: %s", e.CommandName, e.Reason)
+}
+
+func (e *MachineDisconnectedError) Error() string {
+	if e == nil {
+		return "machine disconnected"
+	}
+	return fmt.Sprintf("machine %q disconnected", e.MachineID)
 }
 
 const defaultCommandTimeout = 30 * time.Second
@@ -80,7 +96,7 @@ func NewClientHubWithStores(reg *registry.Store, idx *runtimeindex.Store, router
 		runtimeIndex:      idx,
 		router:            routerStore,
 		snapshotByMachine: map[string]machineSnapshotState{},
-		pendingCommands:   map[string]chan pendingCommandResult{},
+		pendingCommands:   map[string]pendingCommandWaiter{},
 		commandTimeout:    defaultCommandTimeout,
 	}
 }
@@ -110,21 +126,7 @@ func (h *ClientHub) Handler() http.Handler {
 
 		registeredMachineID := ""
 		defer func() {
-			if registeredMachineID == "" {
-				return
-			}
-
-			markOffline := false
-			h.mu.Lock()
-			if existing := h.clients[registeredMachineID]; existing != nil && existing.conn == conn {
-				delete(h.clients, registeredMachineID)
-				markOffline = true
-			}
-			h.mu.Unlock()
-
-			if markOffline && h.registry != nil {
-				h.registry.MarkOffline(registeredMachineID)
-			}
+			h.disconnectClient(conn, registeredMachineID)
 		}()
 
 		for {
@@ -159,21 +161,18 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 			return
 		}
 
-		previousMachineID := ""
+		var waiters []pendingCommandWaiter
 		h.mu.Lock()
 		if *registeredMachineID != "" && *registeredMachineID != envelope.MachineID {
 			if existing := h.clients[*registeredMachineID]; existing != nil && existing.conn == conn {
 				delete(h.clients, *registeredMachineID)
-				previousMachineID = *registeredMachineID
+				waiters = h.cleanupMachineLocked(*registeredMachineID, true)
 			}
 		}
 		h.clients[envelope.MachineID] = &clientConn{conn: conn}
 		*registeredMachineID = envelope.MachineID
 		h.mu.Unlock()
-
-		if previousMachineID != "" && h.registry != nil {
-			h.registry.MarkOffline(previousMachineID)
-		}
+		h.failPendingWaiters(waiters)
 
 		if h.registry != nil {
 			h.registry.Upsert(domain.Machine{
@@ -228,12 +227,12 @@ func (h *ClientHub) resolvePendingCommand(requestID string, result pendingComman
 	delete(h.pendingCommands, requestID)
 	h.mu.Unlock()
 
-	if waiter == nil {
+	if waiter.ch == nil {
 		return
 	}
 
 	select {
-	case waiter <- result:
+	case waiter.ch <- result:
 	default:
 	}
 }
@@ -273,7 +272,10 @@ func (h *ClientHub) SendCommand(ctx context.Context, machineID string, name stri
 	responseCh := make(chan pendingCommandResult, 1)
 
 	h.mu.Lock()
-	h.pendingCommands[requestID] = responseCh
+	h.pendingCommands[requestID] = pendingCommandWaiter{
+		machineID: machineID,
+		ch:        responseCh,
+	}
 	h.mu.Unlock()
 
 	client.writeMu.Lock()
@@ -310,6 +312,66 @@ func (h *ClientHub) commandContext(ctx context.Context) (context.Context, contex
 	}
 
 	return context.WithTimeout(ctx, h.commandTimeout)
+}
+
+func (h *ClientHub) disconnectClient(conn *cws.Conn, machineID string) {
+	if machineID == "" {
+		return
+	}
+
+	var waiters []pendingCommandWaiter
+	h.mu.Lock()
+	if existing := h.clients[machineID]; existing != nil && existing.conn == conn {
+		delete(h.clients, machineID)
+		waiters = h.cleanupMachineLocked(machineID, true)
+	}
+	h.mu.Unlock()
+
+	h.failPendingWaiters(waiters)
+}
+
+func (h *ClientHub) cleanupMachineLocked(machineID string, markOffline bool) []pendingCommandWaiter {
+	if machineID == "" {
+		return nil
+	}
+
+	delete(h.snapshotByMachine, machineID)
+
+	waiters := make([]pendingCommandWaiter, 0)
+	for requestID, waiter := range h.pendingCommands {
+		if waiter.machineID != machineID {
+			continue
+		}
+		waiters = append(waiters, waiter)
+		delete(h.pendingCommands, requestID)
+	}
+
+	if markOffline && h.registry != nil {
+		h.registry.MarkOffline(machineID)
+	}
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ClearMachine(machineID)
+	}
+	if h.router != nil {
+		h.router.ClearMachine(machineID)
+	}
+
+	return waiters
+}
+
+func (h *ClientHub) failPendingWaiters(waiters []pendingCommandWaiter) {
+	for _, waiter := range waiters {
+		if waiter.ch == nil {
+			continue
+		}
+
+		select {
+		case waiter.ch <- pendingCommandResult{
+			err: &MachineDisconnectedError{MachineID: waiter.machineID},
+		}:
+		default:
+		}
+	}
 }
 
 func (h *ClientHub) handleSnapshotEnvelope(envelope protocol.Envelope) {

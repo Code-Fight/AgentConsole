@@ -44,6 +44,21 @@ func (r *Router) ReplaceSnapshot(machineID string, threads []domain.Thread) {
 	}
 }
 
+func (r *Router) ClearMachine(machineID string) {
+	if machineID == "" {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for threadID, ownerMachineID := range r.threads {
+		if ownerMachineID == machineID {
+			delete(r.threads, threadID)
+		}
+	}
+}
+
 func (r *Router) ResolveThread(threadID string) (string, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

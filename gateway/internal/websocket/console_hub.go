@@ -17,10 +17,14 @@ type ConsoleHub struct {
 }
 
 type consoleConn struct {
-	threadID string
-	conn     *cws.Conn
-	writeMu  sync.Mutex
+	threadID  string
+	conn      *cws.Conn
+	outbound  chan []byte
+	done      chan struct{}
+	closeOnce sync.Once
 }
+
+const consoleOutboundBufferSize = 32
 
 func NewConsoleHub() *ConsoleHub {
 	return &ConsoleHub{
@@ -39,17 +43,18 @@ func (h *ConsoleHub) Handler() http.Handler {
 		client := &consoleConn{
 			threadID: strings.TrimSpace(r.URL.Query().Get("threadId")),
 			conn:     conn,
+			outbound: make(chan []byte, consoleOutboundBufferSize),
+			done:     make(chan struct{}),
 		}
 
 		h.mu.Lock()
 		h.clients[client] = struct{}{}
 		h.mu.Unlock()
 
+		go h.writeLoop(client)
+
 		defer func() {
-			h.mu.Lock()
-			delete(h.clients, client)
-			h.mu.Unlock()
-			_ = conn.Close(cws.StatusNormalClosure, "done")
+			h.removeClient(client, cws.StatusNormalClosure, "done")
 		}()
 
 		for {
@@ -80,18 +85,51 @@ func (h *ConsoleHub) Broadcast(envelope protocol.Envelope) error {
 			continue
 		}
 
-		client.writeMu.Lock()
-		err := client.conn.Write(context.Background(), cws.MessageText, encoded)
-		client.writeMu.Unlock()
-		if err != nil {
-			h.mu.Lock()
-			delete(h.clients, client)
-			h.mu.Unlock()
-			_ = client.conn.Close(cws.StatusInternalError, "write failed")
+		select {
+		case client.outbound <- encoded:
+		default:
+			h.removeClient(client, cws.StatusPolicyViolation, "console client too slow")
 		}
 	}
 
 	return nil
+}
+
+func (h *ConsoleHub) writeLoop(client *consoleConn) {
+	if client == nil || client.conn == nil {
+		return
+	}
+
+	for {
+		select {
+		case <-client.done:
+			return
+		case data := <-client.outbound:
+			if err := client.conn.Write(context.Background(), cws.MessageText, data); err != nil {
+				h.removeClient(client, cws.StatusInternalError, "write failed")
+				return
+			}
+		}
+	}
+}
+
+func (h *ConsoleHub) removeClient(client *consoleConn, status cws.StatusCode, reason string) {
+	if client == nil {
+		return
+	}
+
+	h.mu.Lock()
+	delete(h.clients, client)
+	h.mu.Unlock()
+
+	client.closeOnce.Do(func() {
+		if client.done != nil {
+			close(client.done)
+		}
+		if client.conn != nil {
+			_ = client.conn.Close(status, reason)
+		}
+	})
 }
 
 func shouldDeliverEnvelope(threadID string, envelope protocol.Envelope) bool {

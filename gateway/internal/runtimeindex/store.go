@@ -27,6 +27,18 @@ func (s *Store) ReplaceSnapshot(machineID string, threads []domain.Thread, envir
 	s.environmentByMachine[machineID] = cloneEnvironment(environment)
 }
 
+func (s *Store) ClearMachine(machineID string) {
+	if machineID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	delete(s.threadsByMachine, machineID)
+	delete(s.environmentByMachine, machineID)
+}
+
 func (s *Store) Threads() []domain.Thread {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

@@ -127,6 +127,60 @@ func TestConsoleHubFiltersEventsBySubscribedThreadID(t *testing.T) {
 	}
 }
 
+func TestConsoleHubBroadcastDoesNotBlockOnSlowClient(t *testing.T) {
+	hub := NewConsoleHub()
+
+	slowClient := &consoleConn{
+		threadID: "",
+		outbound: make(chan []byte, 1),
+	}
+	slowClient.outbound <- []byte("full")
+
+	fastClient := &consoleConn{
+		threadID: "",
+		outbound: make(chan []byte, 1),
+	}
+
+	hub.clients[slowClient] = struct{}{}
+	hub.clients[fastClient] = struct{}{}
+
+	start := time.Now()
+	if err := hub.Broadcast(protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "turn.delta",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T14:00:00Z",
+		Payload:   []byte(`{"threadId":"thread-01","turnId":"turn-01","sequence":1,"delta":"hello"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if time.Since(start) > 50*time.Millisecond {
+		t.Fatal("Broadcast blocked on slow console client")
+	}
+
+	select {
+	case encoded := <-fastClient.outbound:
+		var envelope protocol.Envelope
+		if err := transport.Decode(encoded, &envelope); err != nil {
+			t.Fatalf("decode broadcast failed: %v", err)
+		}
+		if envelope.Name != "turn.delta" {
+			t.Fatalf("name = %q", envelope.Name)
+		}
+	default:
+		t.Fatal("expected fast client to receive queued broadcast")
+	}
+
+	waitForCondition(t, 1*time.Second, func() bool {
+		hub.mu.RLock()
+		defer hub.mu.RUnlock()
+		_, ok := hub.clients[slowClient]
+		return !ok
+	})
+}
+
 func readConsoleEnvelope(t *testing.T, conn *cws.Conn, out chan<- protocol.Envelope) {
 	t.Helper()
 

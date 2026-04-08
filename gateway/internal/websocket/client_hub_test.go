@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,6 +180,78 @@ func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 	}
 }
 
+func TestClientHubDisconnectClearsMachineRuntimeAndRoutes(t *testing.T) {
+	reg := registry.NewStore()
+	idx := runtimeindex.NewStore()
+	router := routing.NewRouter()
+	hub := NewClientHubWithStores(reg, idx, router)
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySnapshot,
+		Name:      "thread.snapshot",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:01Z",
+		Payload:   []byte(`{"threads":[{"threadId":"thread-01","status":"idle","title":"One"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySnapshot,
+		Name:      "environment.snapshot",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:02Z",
+		Payload:   []byte(`{"environment":[{"resourceId":"skill-01","kind":"skill","displayName":"Skill A","status":"enabled","restartRequired":false,"lastObservedAt":"2026-04-08T10:00:02Z"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		return len(idx.Threads()) == 1 && len(idx.Environment(domain.EnvironmentKindSkill)) == 1
+	})
+	waitForCondition(t, 2*time.Second, func() bool {
+		machineID, ok := router.ResolveThread("thread-01")
+		return ok && machineID == "machine-01"
+	})
+
+	if err := conn.Close(websocket.StatusNormalClosure, "disconnect"); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		machines := reg.List()
+		return len(machines) == 1 && machines[0].ID == "machine-01" && machines[0].Status == domain.MachineStatusOffline
+	})
+	waitForCondition(t, 2*time.Second, func() bool {
+		if len(idx.Threads()) != 0 {
+			return false
+		}
+		if len(idx.Environment(domain.EnvironmentKindSkill)) != 0 {
+			return false
+		}
+		_, ok := router.ResolveThread("thread-01")
+		return !ok
+	})
+}
+
 func TestClientHubSendCommandRoundTripsCompletedResponse(t *testing.T) {
 	hub := NewClientHub()
 	server := httptest.NewServer(hub.Handler())
@@ -344,6 +417,67 @@ func TestClientHubSendCommandReturnsRejectedCommandError(t *testing.T) {
 	}
 
 	<-done
+}
+
+func TestClientHubSendCommandFailsWhenTargetMachineDisconnects(t *testing.T) {
+	hub := NewClientHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCount(t, hub, 1, 1*time.Second)
+
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		if _, _, err := conn.Read(context.Background()); err != nil {
+			t.Errorf("read command failed: %v", err)
+			return
+		}
+		_ = conn.Close(websocket.StatusNormalClosure, "disconnect before response")
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := hub.SendCommand(ctx, "machine-01", "thread.create", protocol.ThreadCreateCommandPayload{Title: "One"})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected disconnect error")
+		}
+		if err == context.DeadlineExceeded {
+			t.Fatalf("expected disconnect error, got deadline exceeded")
+		}
+		if !strings.Contains(err.Error(), `machine "machine-01" disconnected`) {
+			t.Fatalf("expected machine disconnect error, got %v", err)
+		}
+	case <-time.After(150 * time.Millisecond):
+		t.Fatal("SendCommand did not fail promptly after disconnect")
+	}
+
+	<-readDone
 }
 
 func TestClientHubSendCommandUsesBoundedTimeoutWithoutCallerDeadline(t *testing.T) {
