@@ -57,11 +57,6 @@ func main() {
 	runtimeRegistry.Register(runtimeName, adapter)
 	agentManager := manager.New(runtimeRegistry)
 
-	snap, err := agentManager.Snapshot(runtimeName)
-	if err != nil {
-		panic(err)
-	}
-
 	machine := domain.Machine{
 		ID:     cfg.MachineID,
 		Name:   cfg.MachineID,
@@ -99,7 +94,7 @@ func main() {
 			}
 			continue
 		}
-		if err := sendInitialSnapshot(session, machine, snap); err != nil {
+		if err := sendLiveSnapshot(session, machine, agentManager, runtimeName); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "snapshot-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
@@ -144,6 +139,15 @@ func runConnection(ctx context.Context, conn *cws.Conn, session *gateway.Session
 	}
 
 	return nil
+}
+
+func sendLiveSnapshot(session *gateway.Session, machine domain.Machine, mgr *manager.Manager, runtimeName string) error {
+	snap, err := mgr.Snapshot(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	return sendInitialSnapshot(session, machine, snap)
 }
 
 func sendInitialSnapshot(session *gateway.Session, machine domain.Machine, snap snapshot.Snapshot) error {
@@ -202,14 +206,14 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 	case "thread.create":
 		var payload protocol.ThreadCreateCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return err
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
 		thread, err := mgr.CreateThread(runtimeName, agenttypes.CreateThreadParams{
 			Title: payload.Title,
 		})
 		if err != nil {
-			return err
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadCreateCommandResult{
@@ -227,7 +231,7 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 	case "turn.start":
 		var payload protocol.TurnStartCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
-			return err
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
 		result, err := mgr.StartTurn(runtimeName, agenttypes.StartTurnParams{
@@ -235,7 +239,7 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 			Input:    payload.Input,
 		})
 		if err != nil {
-			return err
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.TurnStartCommandResult{
@@ -264,7 +268,7 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 			},
 		})
 	default:
-		return nil
+		return session.CommandRejected(envelope.RequestID, envelope.Name, "unsupported command", "")
 	}
 }
 

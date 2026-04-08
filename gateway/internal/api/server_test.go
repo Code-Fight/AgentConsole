@@ -155,6 +155,71 @@ func TestServerCreatesThreadThroughCommandSender(t *testing.T) {
 	}
 }
 
+func TestServerCreateThreadUpdatesRouterBeforeNextTurnRequest(t *testing.T) {
+	router := routing.NewRouter()
+
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			switch name {
+			case "thread.create":
+				return protocol.CommandCompletedPayload{
+					CommandName: "thread.create",
+					Result: mustMarshalJSON(t, protocol.ThreadCreateCommandResult{
+						Thread: domain.Thread{
+							ThreadID:  "thread-01",
+							MachineID: "machine-01",
+							Status:    domain.ThreadStatusIdle,
+							Title:     "Investigate flaky test",
+						},
+					}),
+				}, nil
+			case "turn.start":
+				commandPayload, ok := payload.(protocol.TurnStartCommandPayload)
+				if !ok {
+					t.Fatalf("payload type = %T", payload)
+				}
+				if machineID != "machine-01" {
+					t.Fatalf("machineID = %q", machineID)
+				}
+				if commandPayload.ThreadID != "thread-01" {
+					t.Fatalf("threadID = %q", commandPayload.ThreadID)
+				}
+
+				return protocol.CommandCompletedPayload{
+					CommandName: "turn.start",
+					Result: mustMarshalJSON(t, protocol.TurnStartCommandResult{
+						TurnID:   "turn-01",
+						ThreadID: "thread-01",
+					}),
+				}, nil
+			default:
+				t.Fatalf("unexpected command %q", name)
+				return protocol.CommandCompletedPayload{}, nil
+			}
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	createReq := httptest.NewRequest(http.MethodPost, "/threads", bytes.NewBufferString(`{"machineId":"machine-01","title":"Investigate flaky test"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("create thread returned %d", createRec.Code)
+	}
+
+	turnReq := httptest.NewRequest(http.MethodPost, "/threads/thread-01/turns", bytes.NewBufferString(`{"input":"run tests"}`))
+	turnReq.Header.Set("Content-Type", "application/json")
+	turnRec := httptest.NewRecorder()
+	handler.ServeHTTP(turnRec, turnReq)
+
+	if turnRec.Code != http.StatusAccepted {
+		t.Fatalf("expected immediate turn start to succeed, got %d with %s", turnRec.Code, turnRec.Body.String())
+	}
+}
+
 func TestServerStartsTurnOnResolvedMachine(t *testing.T) {
 	router := routing.NewRouter()
 	router.TrackThread("thread-01", "machine-01")

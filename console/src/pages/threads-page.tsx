@@ -3,15 +3,6 @@ import { Link } from "react-router-dom";
 import { http } from "../common/api/http";
 import type { ThreadListResponse, ThreadSummary } from "../common/api/types";
 
-const FALLBACK_THREADS: ThreadSummary[] = [
-  {
-    threadId: "thread-1",
-    machineId: "local",
-    status: "idle",
-    title: "thread-1"
-  }
-];
-
 export function ThreadsPage() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -28,7 +19,7 @@ export function ThreadsPage() {
         }
       } catch {
         if (!cancelled) {
-          setThreads(FALLBACK_THREADS);
+          setThreads([]);
           setError("Unable to load live threads.");
         }
       }

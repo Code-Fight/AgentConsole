@@ -1,4 +1,4 @@
-export type MachineStatus = "online" | "offline" | "unknown";
+export type MachineStatus = "online" | "offline" | "reconnecting" | "unknown";
 export type ThreadStatus = "notLoaded" | "idle" | "active" | "systemError";
 export type TurnStatus = "completed" | "interrupted" | "failed";
 export type EventCategory = "system" | "command" | "event" | "snapshot";

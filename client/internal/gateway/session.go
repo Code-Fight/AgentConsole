@@ -95,6 +95,14 @@ func (s *Session) CommandCompleted(requestID string, commandName string, result 
 	})
 }
 
+func (s *Session) CommandRejected(requestID string, commandName string, reason string, threadID string) error {
+	return s.sendEnvelope(protocol.CategoryEvent, "command.rejected", requestID, protocol.CommandRejectedPayload{
+		CommandName: commandName,
+		Reason:      reason,
+		ThreadID:    threadID,
+	})
+}
+
 func (s *Session) TurnDelta(requestID string, payload protocol.TurnDeltaPayload) error {
 	return s.sendEnvelope(protocol.CategoryEvent, "turn.delta", requestID, payload)
 }

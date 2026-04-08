@@ -43,6 +43,12 @@ type CommandCompletedPayload struct {
 	Result      json.RawMessage `json:"result,omitempty"`
 }
 
+type CommandRejectedPayload struct {
+	CommandName string `json:"commandName"`
+	Reason      string `json:"reason,omitempty"`
+	ThreadID    string `json:"threadId,omitempty"`
+}
+
 type ThreadCreateCommandResult struct {
 	Thread domain.Thread `json:"thread"`
 }

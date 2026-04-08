@@ -83,6 +83,12 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			http.Error(w, "invalid thread.create result", http.StatusBadGateway)
 			return
 		}
+		if result.Thread.MachineID == "" {
+			result.Thread.MachineID = req.MachineID
+		}
+		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
+			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+		}
 
 		writeJSON(w, http.StatusCreated, map[string]any{"thread": result.Thread})
 	})

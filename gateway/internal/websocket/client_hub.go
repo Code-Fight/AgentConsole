@@ -27,7 +27,8 @@ type ClientHub struct {
 	runtimeIndex      *runtimeindex.Store
 	router            *routing.Router
 	snapshotByMachine map[string]machineSnapshotState
-	pendingCommands   map[string]chan protocol.CommandCompletedPayload
+	pendingCommands   map[string]chan pendingCommandResult
+	commandTimeout    time.Duration
 	nextRequestID     atomic.Uint64
 }
 
@@ -36,10 +37,32 @@ type machineSnapshotState struct {
 	environment []domain.EnvironmentResource
 }
 
+type pendingCommandResult struct {
+	response protocol.CommandCompletedPayload
+	err      error
+}
+
 type clientConn struct {
 	conn    *cws.Conn
 	writeMu sync.Mutex
 }
+
+type CommandRejectedError struct {
+	CommandName string
+	Reason      string
+}
+
+func (e *CommandRejectedError) Error() string {
+	if e == nil {
+		return "command rejected"
+	}
+	if e.Reason == "" {
+		return fmt.Sprintf("command %q rejected", e.CommandName)
+	}
+	return fmt.Sprintf("command %q rejected: %s", e.CommandName, e.Reason)
+}
+
+const defaultCommandTimeout = 30 * time.Second
 
 func NewClientHub() *ClientHub {
 	return NewClientHubWithStores(nil, nil)
@@ -57,7 +80,8 @@ func NewClientHubWithStores(reg *registry.Store, idx *runtimeindex.Store, router
 		runtimeIndex:      idx,
 		router:            routerStore,
 		snapshotByMachine: map[string]machineSnapshotState{},
-		pendingCommands:   map[string]chan protocol.CommandCompletedPayload{},
+		pendingCommands:   map[string]chan pendingCommandResult{},
+		commandTimeout:    defaultCommandTimeout,
 	}
 }
 
@@ -171,18 +195,37 @@ func (h *ClientHub) handleEventEnvelope(envelope protocol.Envelope) {
 		_ = consoleHub.Broadcast(envelope)
 	}
 
-	if envelope.Name != "command.completed" || envelope.RequestID == "" {
+	if envelope.RequestID == "" {
 		return
 	}
 
-	var payload protocol.CommandCompletedPayload
-	if err := transport.Decode(envelope.Payload, &payload); err != nil {
-		return
+	switch envelope.Name {
+	case "command.completed":
+		var payload protocol.CommandCompletedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return
+		}
+		h.resolvePendingCommand(envelope.RequestID, pendingCommandResult{
+			response: payload,
+		})
+	case "command.rejected":
+		var payload protocol.CommandRejectedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return
+		}
+		h.resolvePendingCommand(envelope.RequestID, pendingCommandResult{
+			err: &CommandRejectedError{
+				CommandName: payload.CommandName,
+				Reason:      payload.Reason,
+			},
+		})
 	}
+}
 
+func (h *ClientHub) resolvePendingCommand(requestID string, result pendingCommandResult) {
 	h.mu.Lock()
-	waiter := h.pendingCommands[envelope.RequestID]
-	delete(h.pendingCommands, envelope.RequestID)
+	waiter := h.pendingCommands[requestID]
+	delete(h.pendingCommands, requestID)
 	h.mu.Unlock()
 
 	if waiter == nil {
@@ -190,12 +233,15 @@ func (h *ClientHub) handleEventEnvelope(envelope protocol.Envelope) {
 	}
 
 	select {
-	case waiter <- payload:
+	case waiter <- result:
 	default:
 	}
 }
 
 func (h *ClientHub) SendCommand(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+	commandCtx, cancel := h.commandContext(ctx)
+	defer cancel()
+
 	requestID := fmt.Sprintf("req-%d", h.nextRequestID.Add(1))
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
@@ -224,14 +270,14 @@ func (h *ClientHub) SendCommand(ctx context.Context, machineID string, name stri
 		return protocol.CommandCompletedPayload{}, err
 	}
 
-	responseCh := make(chan protocol.CommandCompletedPayload, 1)
+	responseCh := make(chan pendingCommandResult, 1)
 
 	h.mu.Lock()
 	h.pendingCommands[requestID] = responseCh
 	h.mu.Unlock()
 
 	client.writeMu.Lock()
-	err = client.conn.Write(ctx, cws.MessageText, encoded)
+	err = client.conn.Write(commandCtx, cws.MessageText, encoded)
 	client.writeMu.Unlock()
 	if err != nil {
 		h.mu.Lock()
@@ -241,14 +287,29 @@ func (h *ClientHub) SendCommand(ctx context.Context, machineID string, name stri
 	}
 
 	select {
-	case <-ctx.Done():
+	case <-commandCtx.Done():
 		h.mu.Lock()
 		delete(h.pendingCommands, requestID)
 		h.mu.Unlock()
-		return protocol.CommandCompletedPayload{}, ctx.Err()
+		return protocol.CommandCompletedPayload{}, commandCtx.Err()
 	case response := <-responseCh:
-		return response, nil
+		if response.err != nil {
+			return protocol.CommandCompletedPayload{}, response.err
+		}
+		return response.response, nil
 	}
+}
+
+func (h *ClientHub) commandContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), h.commandTimeout)
+	}
+
+	if _, ok := ctx.Deadline(); ok || h.commandTimeout <= 0 {
+		return ctx, func() {}
+	}
+
+	return context.WithTimeout(ctx, h.commandTimeout)
 }
 
 func (h *ClientHub) handleSnapshotEnvelope(envelope protocol.Envelope) {

@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync"
 
 	"code-agent-gateway/common/protocol"
@@ -16,8 +17,9 @@ type ConsoleHub struct {
 }
 
 type consoleConn struct {
-	conn    *cws.Conn
-	writeMu sync.Mutex
+	threadID string
+	conn     *cws.Conn
+	writeMu  sync.Mutex
 }
 
 func NewConsoleHub() *ConsoleHub {
@@ -34,7 +36,10 @@ func (h *ConsoleHub) Handler() http.Handler {
 			return
 		}
 
-		client := &consoleConn{conn: conn}
+		client := &consoleConn{
+			threadID: strings.TrimSpace(r.URL.Query().Get("threadId")),
+			conn:     conn,
+		}
 
 		h.mu.Lock()
 		h.clients[client] = struct{}{}
@@ -71,6 +76,10 @@ func (h *ConsoleHub) Broadcast(envelope protocol.Envelope) error {
 	h.mu.RUnlock()
 
 	for _, client := range clients {
+		if !shouldDeliverEnvelope(client.threadID, envelope) {
+			continue
+		}
+
 		client.writeMu.Lock()
 		err := client.conn.Write(context.Background(), cws.MessageText, encoded)
 		client.writeMu.Unlock()
@@ -83,4 +92,52 @@ func (h *ConsoleHub) Broadcast(envelope protocol.Envelope) error {
 	}
 
 	return nil
+}
+
+func shouldDeliverEnvelope(threadID string, envelope protocol.Envelope) bool {
+	if threadID == "" {
+		return true
+	}
+
+	eventThreadID := envelopeThreadID(envelope)
+	return eventThreadID == "" || eventThreadID == threadID
+}
+
+func envelopeThreadID(envelope protocol.Envelope) string {
+	switch envelope.Name {
+	case "turn.delta":
+		var payload protocol.TurnDeltaPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.ThreadID
+		}
+	case "turn.completed":
+		var payload protocol.TurnCompletedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.Turn.ThreadID
+		}
+	case "command.completed":
+		var payload protocol.CommandCompletedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return ""
+		}
+		switch payload.CommandName {
+		case "turn.start":
+			var result protocol.TurnStartCommandResult
+			if err := transport.Decode(payload.Result, &result); err == nil {
+				return result.ThreadID
+			}
+		case "thread.create":
+			var result protocol.ThreadCreateCommandResult
+			if err := transport.Decode(payload.Result, &result); err == nil {
+				return result.Thread.ThreadID
+			}
+		}
+	case "command.rejected":
+		var payload protocol.CommandRejectedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.ThreadID
+		}
+	}
+
+	return ""
 }

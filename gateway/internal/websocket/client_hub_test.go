@@ -273,6 +273,123 @@ func TestClientHubSendCommandRoundTripsCompletedResponse(t *testing.T) {
 	<-done
 }
 
+func TestClientHubSendCommandReturnsRejectedCommandError(t *testing.T) {
+	hub := NewClientHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCount(t, hub, 1, 1*time.Second)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		_, data, err := conn.Read(context.Background())
+		if err != nil {
+			t.Errorf("read command failed: %v", err)
+			return
+		}
+
+		var envelope protocol.Envelope
+		if err := transport.Decode(data, &envelope); err != nil {
+			t.Errorf("decode command failed: %v", err)
+			return
+		}
+
+		payload, err := json.Marshal(protocol.CommandRejectedPayload{
+			CommandName: "thread.create",
+			Reason:      "unsupported command",
+		})
+		if err != nil {
+			t.Errorf("marshal rejection failed: %v", err)
+			return
+		}
+
+		if err := writeEnvelope(t, conn, protocol.Envelope{
+			Version:   version.CurrentProtocolVersion,
+			Category:  protocol.CategoryEvent,
+			Name:      "command.rejected",
+			RequestID: envelope.RequestID,
+			MachineID: "machine-01",
+			Timestamp: "2026-04-08T10:00:01Z",
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("write rejection failed: %v", err)
+		}
+	}()
+
+	_, err = hub.SendCommand(context.Background(), "machine-01", "thread.create", protocol.ThreadCreateCommandPayload{Title: "One"})
+	if err == nil {
+		t.Fatal("expected command rejection error")
+	}
+	if got := err.Error(); got != `command "thread.create" rejected: unsupported command` {
+		t.Fatalf("unexpected error: %q", got)
+	}
+
+	<-done
+}
+
+func TestClientHubSendCommandUsesBoundedTimeoutWithoutCallerDeadline(t *testing.T) {
+	hub := NewClientHub()
+	hub.commandTimeout = 20 * time.Millisecond
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCount(t, hub, 1, 1*time.Second)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := hub.SendCommand(context.Background(), "machine-01", "thread.create", protocol.ThreadCreateCommandPayload{Title: "One"})
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected timeout error")
+		}
+		if err != context.DeadlineExceeded {
+			t.Fatalf("expected deadline exceeded, got %v", err)
+		}
+	case <-time.After(250 * time.Millisecond):
+		t.Fatal("SendCommand did not finish within bounded timeout")
+	}
+}
+
 func TestClientHubFansOutEventEnvelopesToConsoleClients(t *testing.T) {
 	consoleHub := NewConsoleHub()
 	hub := NewClientHub()

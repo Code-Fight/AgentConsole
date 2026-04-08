@@ -85,6 +85,29 @@ func TestSessionSnapshotFramesUseEnvelopeShape(t *testing.T) {
 	assertSnapshotFrame(t, sent[2], "environment.snapshot", now, []byte(`{"environment":[{"resourceId":"skill-01","machineId":"machine-01","kind":"skill","displayName":"Skill A","status":"enabled","restartRequired":false,"lastObservedAt":"2026-04-08T11:00:00Z"}]}`))
 }
 
+func TestSessionCommandRejectedFrameUsesEnvelopeShape(t *testing.T) {
+	var sent [][]byte
+	now := time.Date(2026, 4, 8, 11, 5, 0, 0, time.UTC)
+
+	session := NewSession("machine-01", func(msg []byte) error {
+		copyMsg := append([]byte(nil), msg...)
+		sent = append(sent, copyMsg)
+		return nil
+	}, func() time.Time {
+		return now
+	})
+
+	if err := session.CommandRejected("req-1", "turn.start", "thread not found", "thread-01"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(sent) != 1 {
+		t.Fatalf("expected 1 frame, got %d", len(sent))
+	}
+
+	assertEventFrame(t, sent[0], "command.rejected", "req-1", now, []byte(`{"commandName":"turn.start","reason":"thread not found","threadId":"thread-01"}`))
+}
+
 func assertFrame(t *testing.T, raw []byte, expectedName string, now time.Time) {
 	t.Helper()
 
@@ -121,6 +144,18 @@ func assertFrame(t *testing.T, raw []byte, expectedName string, now time.Time) {
 func assertSnapshotFrame(t *testing.T, raw []byte, expectedName string, now time.Time, expectedPayload []byte) {
 	t.Helper()
 
+	assertEnvelopeShape(t, raw, protocol.CategorySnapshot, expectedName, "", now, expectedPayload)
+}
+
+func assertEventFrame(t *testing.T, raw []byte, expectedName string, expectedRequestID string, now time.Time, expectedPayload []byte) {
+	t.Helper()
+
+	assertEnvelopeShape(t, raw, protocol.CategoryEvent, expectedName, expectedRequestID, now, expectedPayload)
+}
+
+func assertEnvelopeShape(t *testing.T, raw []byte, expectedCategory protocol.Category, expectedName string, expectedRequestID string, now time.Time, expectedPayload []byte) {
+	t.Helper()
+
 	var envelope protocol.Envelope
 	if err := transport.Decode(raw, &envelope); err != nil {
 		t.Fatalf("decode frame failed: %v", err)
@@ -129,11 +164,14 @@ func assertSnapshotFrame(t *testing.T, raw []byte, expectedName string, now time
 	if envelope.Version != version.CurrentProtocolVersion {
 		t.Fatalf("expected version %q, got %q", version.CurrentProtocolVersion, envelope.Version)
 	}
-	if envelope.Category != protocol.CategorySnapshot {
-		t.Fatalf("expected category %q, got %q", protocol.CategorySnapshot, envelope.Category)
+	if envelope.Category != expectedCategory {
+		t.Fatalf("expected category %q, got %q", expectedCategory, envelope.Category)
 	}
 	if envelope.Name != expectedName {
 		t.Fatalf("expected name %q, got %q", expectedName, envelope.Name)
+	}
+	if envelope.RequestID != expectedRequestID {
+		t.Fatalf("expected requestId %q, got %q", expectedRequestID, envelope.RequestID)
 	}
 	if envelope.MachineID != "machine-01" {
 		t.Fatalf("expected machineId %q, got %q", "machine-01", envelope.MachineID)
