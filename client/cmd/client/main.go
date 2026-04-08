@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"code-agent-gateway/client/internal/agent/codex"
@@ -13,6 +16,8 @@ import (
 )
 
 func main() {
+	const heartbeatInterval = 30 * time.Second
+
 	cfg := config.Read()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -37,4 +42,21 @@ func main() {
 	}
 
 	fmt.Println(cfg.GatewayURL, len(snap.Threads))
+
+	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-shutdownCtx.Done():
+			return
+		case <-ticker.C:
+			if err := session.Heartbeat(); err != nil {
+				panic(err)
+			}
+		}
+	}
 }

@@ -10,6 +10,7 @@ import (
 	"code-agent-gateway/gateway/internal/config"
 	"code-agent-gateway/gateway/internal/registry"
 	"code-agent-gateway/gateway/internal/runtimeindex"
+	ws "code-agent-gateway/gateway/internal/websocket"
 )
 
 func main() {
@@ -18,7 +19,8 @@ func main() {
 		log.Fatal(err)
 	}
 
-	handler := api.NewServer(registry.NewStore(), runtimeindex.NewStore())
+	clientHub := ws.NewClientHub()
+	handler := api.NewServer(registry.NewStore(), runtimeindex.NewStore(), clientHub.Handler())
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	log.Fatal(http.ListenAndServe(addr, handler))
 }

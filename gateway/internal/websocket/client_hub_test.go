@@ -27,10 +27,17 @@ func TestClientHubAcceptsRegisterMessage(t *testing.T) {
 	deadline := time.Now().Add(1 * time.Second)
 	for time.Now().Before(deadline) {
 		if hub.Count() == 1 {
-			return
+			break
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	t.Fatalf("expected 1 client, got %d", hub.Count())
+	if hub.Count() != 1 {
+		t.Fatalf("expected 1 client, got %d", hub.Count())
+	}
+
+	time.Sleep(20 * time.Millisecond)
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.heartbeat","machineId":"machine-01","timestamp":"2026-04-07T10:00:05Z","version":"v1","payload":{}}`)); err != nil {
+		t.Fatalf("expected second system frame write to succeed, got %v", err)
+	}
 }

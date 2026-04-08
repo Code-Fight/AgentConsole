@@ -11,7 +11,7 @@ import (
 )
 
 func TestServerServesEmptyControlPlaneViews(t *testing.T) {
-	handler := NewServer(registry.NewStore(), runtimeindex.NewStore())
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), http.NotFoundHandler())
 
 	for _, path := range []string{"/health", "/machines", "/threads", "/environment/skills", "/environment/mcps", "/environment/plugins"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
@@ -46,5 +46,25 @@ func TestServerServesEmptyControlPlaneViews(t *testing.T) {
 		if len(items) != 0 {
 			t.Fatalf("%s expected empty items, got: %v", path, items)
 		}
+	}
+}
+
+func TestServerMountsClientWebsocketRoute(t *testing.T) {
+	called := false
+	wsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusTeapot)
+	})
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), wsHandler)
+	req := httptest.NewRequest(http.MethodGet, "/ws/client", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("/ws/client returned %d", rec.Code)
+	}
+	if !called {
+		t.Fatal("/ws/client handler was not invoked")
 	}
 }

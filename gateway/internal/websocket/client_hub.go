@@ -37,22 +37,44 @@ func (h *ClientHub) Handler() http.Handler {
 		}
 		defer conn.Close(cws.StatusNormalClosure, "done")
 
-		_, data, err := conn.Read(context.Background())
-		if err != nil {
-			return
-		}
+		registeredMachineID := ""
+		defer func() {
+			if registeredMachineID == "" {
+				return
+			}
 
-		var envelope protocol.Envelope
-		if err := transport.Decode(data, &envelope); err != nil {
-			return
-		}
-		if envelope.Name != "client.register" || envelope.MachineID == "" {
-			return
-		}
+			h.mu.Lock()
+			delete(h.clients, registeredMachineID)
+			h.mu.Unlock()
+		}()
 
-		h.mu.Lock()
-		h.clients[envelope.MachineID] = struct{}{}
-		h.mu.Unlock()
+		for {
+			_, data, err := conn.Read(context.Background())
+			if err != nil {
+				return
+			}
+
+			var envelope protocol.Envelope
+			if err := transport.Decode(data, &envelope); err != nil {
+				continue
+			}
+			if envelope.Category != protocol.CategorySystem {
+				continue
+			}
+
+			switch envelope.Name {
+			case "client.register":
+				if envelope.MachineID == "" {
+					continue
+				}
+				registeredMachineID = envelope.MachineID
+				h.mu.Lock()
+				h.clients[envelope.MachineID] = struct{}{}
+				h.mu.Unlock()
+			case "client.heartbeat":
+				continue
+			}
+		}
 	})
 
 	return mux

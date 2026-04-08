@@ -14,8 +14,12 @@ func writeJSON(w http.ResponseWriter, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
-func NewServer(reg *registry.Store, idx *runtimeindex.Store) http.Handler {
+func NewServer(reg *registry.Store, idx *runtimeindex.Store, clientWS http.Handler) http.Handler {
 	mux := http.NewServeMux()
+
+	if clientWS != nil {
+		mux.Handle("/ws/client", clientWS)
+	}
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, map[string]bool{"ok": true})
