@@ -1,5 +1,13 @@
-const DEFAULT_WS_URL = "ws://localhost:8080/ws";
-const WS_URL = import.meta.env.VITE_WS_URL ?? DEFAULT_WS_URL;
+function getDefaultWsUrl(): string {
+  if (typeof window === "undefined") {
+    return "ws://localhost/ws";
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${protocol}://${window.location.host}/ws`;
+}
+
+const WS_URL = import.meta.env.VITE_WS_URL ?? getDefaultWsUrl();
 
 export function connectConsoleSocket(
   onMessage: (event: MessageEvent<string>) => void,
