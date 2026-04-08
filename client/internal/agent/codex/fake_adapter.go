@@ -11,6 +11,7 @@ import (
 type FakeAdapter struct {
 	mu          sync.RWMutex
 	threads     []domain.Thread
+	turns       map[string]domain.Turn
 	environment []domain.EnvironmentResource
 	nextThread  int
 	nextTurn    int
@@ -19,6 +20,7 @@ type FakeAdapter struct {
 func NewFakeAdapter() *FakeAdapter {
 	return &FakeAdapter{
 		threads:     []domain.Thread{},
+		turns:       map[string]domain.Turn{},
 		environment: []domain.EnvironmentResource{},
 		nextThread:  1,
 		nextTurn:    1,
@@ -30,6 +32,7 @@ func (a *FakeAdapter) SeedSnapshot(threads []domain.Thread, environment []domain
 	defer a.mu.Unlock()
 
 	a.threads = append([]domain.Thread(nil), threads...)
+	a.turns = map[string]domain.Turn{}
 	a.environment = append([]domain.EnvironmentResource(nil), environment...)
 	a.nextThread = len(a.threads) + 1
 }
@@ -63,11 +66,49 @@ func (a *FakeAdapter) CreateThread(params agenttypes.CreateThreadParams) (domain
 	return thread, nil
 }
 
+func (a *FakeAdapter) ReadThread(threadID string) (domain.Thread, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	index := a.findThreadIndex(threadID)
+	if index < 0 {
+		return domain.Thread{}, fmt.Errorf("thread %q not found", threadID)
+	}
+
+	return a.threads[index], nil
+}
+
+func (a *FakeAdapter) ResumeThread(threadID string) (domain.Thread, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	index := a.findThreadIndex(threadID)
+	if index < 0 {
+		return domain.Thread{}, fmt.Errorf("thread %q not found", threadID)
+	}
+
+	a.threads[index].Status = domain.ThreadStatusIdle
+	return a.threads[index], nil
+}
+
+func (a *FakeAdapter) ArchiveThread(threadID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	index := a.findThreadIndex(threadID)
+	if index < 0 {
+		return fmt.Errorf("thread %q not found", threadID)
+	}
+
+	a.threads[index].Status = domain.ThreadStatusNotLoaded
+	return nil
+}
+
 func (a *FakeAdapter) StartTurn(params agenttypes.StartTurnParams) (agenttypes.StartTurnResult, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 
-	if !a.hasThread(params.ThreadID) {
+	if a.findThreadIndex(params.ThreadID) < 0 {
 		return agenttypes.StartTurnResult{}, fmt.Errorf("thread %q not found", params.ThreadID)
 	}
 
@@ -80,16 +121,54 @@ func (a *FakeAdapter) StartTurn(params agenttypes.StartTurnParams) (agenttypes.S
 		},
 	}
 	a.nextTurn++
+	a.turns[result.TurnID] = domain.Turn{
+		TurnID:   result.TurnID,
+		ThreadID: params.ThreadID,
+		Status:   domain.TurnStatusCompleted,
+	}
 
 	return result, nil
 }
 
-func (a *FakeAdapter) hasThread(threadID string) bool {
-	for _, thread := range a.threads {
+func (a *FakeAdapter) SteerTurn(params agenttypes.SteerTurnParams) (agenttypes.SteerTurnResult, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	turn, ok := a.turns[params.TurnID]
+	if !ok || turn.ThreadID != params.ThreadID {
+		return agenttypes.SteerTurnResult{}, fmt.Errorf("turn %q not found", params.TurnID)
+	}
+
+	return agenttypes.SteerTurnResult{
+		TurnID:   params.TurnID,
+		ThreadID: params.ThreadID,
+		Deltas: []agenttypes.TurnDelta{
+			{Sequence: 1, Delta: "assistant: steer accepted"},
+			{Sequence: 2, Delta: "assistant: updated"},
+		},
+	}, nil
+}
+
+func (a *FakeAdapter) InterruptTurn(params agenttypes.InterruptTurnParams) (domain.Turn, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	turn, ok := a.turns[params.TurnID]
+	if !ok || turn.ThreadID != params.ThreadID {
+		return domain.Turn{}, fmt.Errorf("turn %q not found", params.TurnID)
+	}
+
+	turn.Status = domain.TurnStatusInterrupted
+	a.turns[params.TurnID] = turn
+	return turn, nil
+}
+
+func (a *FakeAdapter) findThreadIndex(threadID string) int {
+	for idx, thread := range a.threads {
 		if thread.ThreadID == threadID {
-			return true
+			return idx
 		}
 	}
 
-	return false
+	return -1
 }

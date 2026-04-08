@@ -26,6 +26,13 @@ type startTurnRequest struct {
 	Input string `json:"input"`
 }
 
+func resolveThreadMachineID(router *routing.Router, threadID string) (string, bool) {
+	if router == nil {
+		return "", false
+	}
+	return router.ResolveThread(threadID)
+}
+
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
@@ -52,6 +59,47 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 
 	mux.HandleFunc("GET /threads", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": idx.Threads()})
+	})
+
+	mux.HandleFunc("GET /threads/{threadId}", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		threadID := r.PathValue("threadId")
+		if strings.TrimSpace(threadID) == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return
+		}
+
+		machineID, ok := resolveThreadMachineID(router, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "thread.read", protocol.ThreadReadCommandPayload{
+			ThreadID: threadID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.ThreadReadCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid thread.read result", http.StatusBadGateway)
+			return
+		}
+		if result.Thread.MachineID == "" {
+			result.Thread.MachineID = machineID
+		}
+		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
+			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"thread": result.Thread})
 	})
 
 	mux.HandleFunc("POST /threads", func(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +141,85 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		writeJSON(w, http.StatusCreated, map[string]any{"thread": result.Thread})
 	})
 
+	mux.HandleFunc("POST /threads/{threadId}/resume", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		threadID := r.PathValue("threadId")
+		if strings.TrimSpace(threadID) == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return
+		}
+
+		machineID, ok := resolveThreadMachineID(router, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "thread.resume", protocol.ThreadResumeCommandPayload{
+			ThreadID: threadID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.ThreadResumeCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid thread.resume result", http.StatusBadGateway)
+			return
+		}
+		if result.Thread.MachineID == "" {
+			result.Thread.MachineID = machineID
+		}
+		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
+			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"thread": result.Thread})
+	})
+
+	mux.HandleFunc("POST /threads/{threadId}/archive", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		threadID := r.PathValue("threadId")
+		if strings.TrimSpace(threadID) == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return
+		}
+
+		machineID, ok := resolveThreadMachineID(router, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
+			ThreadID: threadID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.ThreadArchiveCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid thread.archive result", http.StatusBadGateway)
+			return
+		}
+		if result.ThreadID == "" {
+			result.ThreadID = threadID
+		}
+
+		writeJSON(w, http.StatusAccepted, map[string]any{"threadId": result.ThreadID})
+	})
+
 	mux.HandleFunc("POST /threads/{threadId}/turns", func(w http.ResponseWriter, r *http.Request) {
 		if sender == nil {
 			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
@@ -105,11 +232,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			return
 		}
 
-		if router == nil {
-			http.Error(w, "router unavailable", http.StatusServiceUnavailable)
-			return
-		}
-		machineID, ok := router.ResolveThread(threadID)
+		machineID, ok := resolveThreadMachineID(router, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
@@ -137,6 +260,87 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		}
 
 		writeJSON(w, http.StatusAccepted, map[string]any{"turn": result})
+	})
+
+	mux.HandleFunc("POST /threads/{threadId}/turns/{turnId}/steer", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		threadID := r.PathValue("threadId")
+		turnID := r.PathValue("turnId")
+		if strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+			http.Error(w, "threadId and turnId are required", http.StatusBadRequest)
+			return
+		}
+
+		machineID, ok := resolveThreadMachineID(router, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		var req startTurnRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "turn.steer", protocol.TurnSteerCommandPayload{
+			ThreadID: threadID,
+			TurnID:   turnID,
+			Input:    req.Input,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.TurnSteerCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid turn.steer result", http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusAccepted, map[string]any{"turn": result})
+	})
+
+	mux.HandleFunc("POST /threads/{threadId}/turns/{turnId}/interrupt", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		threadID := r.PathValue("threadId")
+		turnID := r.PathValue("turnId")
+		if strings.TrimSpace(threadID) == "" || strings.TrimSpace(turnID) == "" {
+			http.Error(w, "threadId and turnId are required", http.StatusBadRequest)
+			return
+		}
+
+		machineID, ok := resolveThreadMachineID(router, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "turn.interrupt", protocol.TurnInterruptCommandPayload{
+			ThreadID: threadID,
+			TurnID:   turnID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.TurnInterruptCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid turn.interrupt result", http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"turn": result.Turn})
 	})
 
 	mux.HandleFunc("GET /environment/skills", func(w http.ResponseWriter, _ *http.Request) {

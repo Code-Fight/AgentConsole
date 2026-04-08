@@ -11,6 +11,17 @@ type StartTurnParams struct {
 	Input    string
 }
 
+type SteerTurnParams struct {
+	ThreadID string
+	TurnID   string
+	Input    string
+}
+
+type InterruptTurnParams struct {
+	ThreadID string
+	TurnID   string
+}
+
 type TurnDelta struct {
 	Sequence int
 	Delta    string
@@ -22,9 +33,20 @@ type StartTurnResult struct {
 	Deltas   []TurnDelta
 }
 
+type SteerTurnResult struct {
+	TurnID   string
+	ThreadID string
+	Deltas   []TurnDelta
+}
+
 type Runtime interface {
 	ListThreads() ([]domain.Thread, error)
 	ListEnvironment() ([]domain.EnvironmentResource, error)
 	CreateThread(params CreateThreadParams) (domain.Thread, error)
+	ReadThread(threadID string) (domain.Thread, error)
+	ResumeThread(threadID string) (domain.Thread, error)
+	ArchiveThread(threadID string) error
 	StartTurn(params StartTurnParams) (StartTurnResult, error)
+	SteerTurn(params SteerTurnParams) (SteerTurnResult, error)
+	InterruptTurn(params InterruptTurnParams) (domain.Turn, error)
 }

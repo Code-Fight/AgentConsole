@@ -301,3 +301,350 @@ func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 		})
 	}
 }
+
+func TestClientReadThreadUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		threadID string
+		callErr  error
+	}{
+		{
+			name:     "uses thread/read payload keys",
+			threadID: "thread-1",
+		},
+		{
+			name:     "propagates runner error",
+			threadID: "thread-2",
+			callErr:  errors.New("thread read failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					response := out.(*threadReadResponse)
+					response.Thread = threadRecord{
+						ID:     tt.threadID,
+						Name:   "Investigate flaky test",
+						Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			thread, err := client.ReadThread(tt.threadID)
+			if gotMethod != "thread/read" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			if payloadMap["threadId"] != tt.threadID || payloadMap["includeTurns"] != false {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if thread.ThreadID != tt.threadID || thread.Title != "Investigate flaky test" {
+				t.Fatalf("unexpected thread: %+v", thread)
+			}
+		})
+	}
+}
+
+func TestClientResumeThreadUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		threadID string
+		callErr  error
+	}{
+		{
+			name:     "uses thread/resume payload keys",
+			threadID: "thread-1",
+		},
+		{
+			name:     "propagates runner error",
+			threadID: "thread-2",
+			callErr:  errors.New("thread resume failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					response := out.(*threadResumeResponse)
+					response.Thread = threadRecord{
+						ID:     tt.threadID,
+						Name:   "Resumed thread",
+						Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			thread, err := client.ResumeThread(tt.threadID)
+			if gotMethod != "thread/resume" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			if payloadMap["threadId"] != tt.threadID || payloadMap["persistExtendedHistory"] != false {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if thread.ThreadID != tt.threadID || thread.Title != "Resumed thread" {
+				t.Fatalf("unexpected thread: %+v", thread)
+			}
+		})
+	}
+}
+
+func TestClientArchiveThreadUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		threadID string
+		callErr  error
+	}{
+		{
+			name:     "uses thread/archive payload keys",
+			threadID: "thread-1",
+		},
+		{
+			name:     "propagates runner error",
+			threadID: "thread-2",
+			callErr:  errors.New("thread archive failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			err := client.ArchiveThread(tt.threadID)
+			if gotMethod != "thread/archive" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			if payloadMap["threadId"] != tt.threadID {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestClientSteerTurnUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		threadID string
+		turnID   string
+		input    string
+		callErr  error
+	}{
+		{
+			name:     "uses turn/steer payload keys",
+			threadID: "thread-1",
+			turnID:   "turn-1",
+			input:    "try a different fix",
+		},
+		{
+			name:     "propagates runner error",
+			threadID: "thread-2",
+			turnID:   "turn-2",
+			input:    "stop and summarize",
+			callErr:  errors.New("turn steer failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			result, err := client.SteerTurn(agenttypes.SteerTurnParams{
+				ThreadID: tt.threadID,
+				TurnID:   tt.turnID,
+				Input:    tt.input,
+			})
+			if gotMethod != "turn/steer" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			inputs, ok := payloadMap["input"].([]map[string]any)
+			if !ok {
+				t.Fatalf("unexpected input payload type: %T", payloadMap["input"])
+			}
+			if payloadMap["threadId"] != tt.threadID || payloadMap["expectedTurnId"] != tt.turnID {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+			if len(inputs) != 1 || inputs[0]["text"] != tt.input || inputs[0]["type"] != "text" {
+				t.Fatalf("unexpected input payload: %#v", inputs)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ThreadID != tt.threadID || result.TurnID != tt.turnID {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestClientInterruptTurnUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		threadID string
+		turnID   string
+		callErr  error
+	}{
+		{
+			name:     "uses turn/interrupt payload keys",
+			threadID: "thread-1",
+			turnID:   "turn-1",
+		},
+		{
+			name:     "propagates runner error",
+			threadID: "thread-2",
+			turnID:   "turn-2",
+			callErr:  errors.New("turn interrupt failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			turn, err := client.InterruptTurn(agenttypes.InterruptTurnParams{
+				ThreadID: tt.threadID,
+				TurnID:   tt.turnID,
+			})
+			if gotMethod != "turn/interrupt" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			if payloadMap["threadId"] != tt.threadID || payloadMap["turnId"] != tt.turnID {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if turn.ThreadID != tt.threadID || turn.TurnID != tt.turnID || turn.Status != domain.TurnStatusInterrupted {
+				t.Fatalf("unexpected turn: %+v", turn)
+			}
+		})
+	}
+}

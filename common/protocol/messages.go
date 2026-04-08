@@ -33,9 +33,32 @@ type ThreadCreateCommandPayload struct {
 	Title string `json:"title,omitempty"`
 }
 
+type ThreadReadCommandPayload struct {
+	ThreadID string `json:"threadId"`
+}
+
+type ThreadResumeCommandPayload struct {
+	ThreadID string `json:"threadId"`
+}
+
+type ThreadArchiveCommandPayload struct {
+	ThreadID string `json:"threadId"`
+}
+
 type TurnStartCommandPayload struct {
 	ThreadID string `json:"threadId"`
 	Input    string `json:"input"`
+}
+
+type TurnSteerCommandPayload struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	Input    string `json:"input"`
+}
+
+type TurnInterruptCommandPayload struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
 }
 
 type CommandCompletedPayload struct {
@@ -53,9 +76,30 @@ type ThreadCreateCommandResult struct {
 	Thread domain.Thread `json:"thread"`
 }
 
+type ThreadReadCommandResult struct {
+	Thread domain.Thread `json:"thread"`
+}
+
+type ThreadResumeCommandResult struct {
+	Thread domain.Thread `json:"thread"`
+}
+
+type ThreadArchiveCommandResult struct {
+	ThreadID string `json:"threadId"`
+}
+
 type TurnStartCommandResult struct {
 	TurnID   string `json:"turnId"`
 	ThreadID string `json:"threadId"`
+}
+
+type TurnSteerCommandResult struct {
+	TurnID   string `json:"turnId"`
+	ThreadID string `json:"threadId"`
+}
+
+type TurnInterruptCommandResult struct {
+	Turn domain.Turn `json:"turn"`
 }
 
 type TurnDeltaPayload struct {

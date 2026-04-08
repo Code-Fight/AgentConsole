@@ -21,7 +21,7 @@ func TestSnapshotReturnsErrorWhenRuntimeMissing(t *testing.T) {
 	}
 }
 
-func TestManagerRoutesCreateThreadAndStartTurnToRuntime(t *testing.T) {
+func TestManagerRoutesThreadAndTurnOperationsToRuntime(t *testing.T) {
 	reg := agentregistry.New()
 	reg.Register("fake", &stubRuntime{})
 	mgr := New(reg)
@@ -44,6 +44,49 @@ func TestManagerRoutesCreateThreadAndStartTurnToRuntime(t *testing.T) {
 	if result.TurnID != "turn-01" || result.ThreadID != "thread-01" {
 		t.Fatalf("unexpected turn result: %+v", result)
 	}
+
+	readThread, err := mgr.ReadThread("fake", "thread-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if readThread.ThreadID != "thread-01" {
+		t.Fatalf("unexpected read thread: %+v", readThread)
+	}
+
+	resumedThread, err := mgr.ResumeThread("fake", "thread-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumedThread.ThreadID != "thread-01" || resumedThread.Status != domain.ThreadStatusIdle {
+		t.Fatalf("unexpected resumed thread: %+v", resumedThread)
+	}
+
+	if err := mgr.ArchiveThread("fake", "thread-01"); err != nil {
+		t.Fatal(err)
+	}
+
+	steerResult, err := mgr.SteerTurn("fake", agenttypes.SteerTurnParams{
+		ThreadID: "thread-01",
+		TurnID:   "turn-01",
+		Input:    "try a smaller patch",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steerResult.TurnID != "turn-01" || steerResult.ThreadID != "thread-01" {
+		t.Fatalf("unexpected steer result: %+v", steerResult)
+	}
+
+	interruptedTurn, err := mgr.InterruptTurn("fake", agenttypes.InterruptTurnParams{
+		ThreadID: "thread-01",
+		TurnID:   "turn-01",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if interruptedTurn.TurnID != "turn-01" || interruptedTurn.Status != domain.TurnStatusInterrupted {
+		t.Fatalf("unexpected interrupted turn: %+v", interruptedTurn)
+	}
 }
 
 type stubRuntime struct{}
@@ -65,6 +108,28 @@ func (s *stubRuntime) CreateThread(params agenttypes.CreateThreadParams) (domain
 	}, nil
 }
 
+func (s *stubRuntime) ReadThread(threadID string) (domain.Thread, error) {
+	return domain.Thread{
+		ThreadID:  threadID,
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Investigate flaky test",
+	}, nil
+}
+
+func (s *stubRuntime) ResumeThread(threadID string) (domain.Thread, error) {
+	return domain.Thread{
+		ThreadID:  threadID,
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Investigate flaky test",
+	}, nil
+}
+
+func (s *stubRuntime) ArchiveThread(string) error {
+	return nil
+}
+
 func (s *stubRuntime) StartTurn(params agenttypes.StartTurnParams) (agenttypes.StartTurnResult, error) {
 	return agenttypes.StartTurnResult{
 		TurnID:   "turn-01",
@@ -73,5 +138,23 @@ func (s *stubRuntime) StartTurn(params agenttypes.StartTurnParams) (agenttypes.S
 			{Sequence: 1, Delta: "assistant: thinking"},
 			{Sequence: 2, Delta: "assistant: done"},
 		},
+	}, nil
+}
+
+func (s *stubRuntime) SteerTurn(params agenttypes.SteerTurnParams) (agenttypes.SteerTurnResult, error) {
+	return agenttypes.SteerTurnResult{
+		TurnID:   params.TurnID,
+		ThreadID: params.ThreadID,
+		Deltas: []agenttypes.TurnDelta{
+			{Sequence: 3, Delta: "assistant: adjusted"},
+		},
+	}, nil
+}
+
+func (s *stubRuntime) InterruptTurn(params agenttypes.InterruptTurnParams) (domain.Turn, error) {
+	return domain.Turn{
+		TurnID:   params.TurnID,
+		ThreadID: params.ThreadID,
+		Status:   domain.TurnStatusInterrupted,
 	}, nil
 }

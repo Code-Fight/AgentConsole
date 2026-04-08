@@ -273,6 +273,206 @@ func TestServerStartsTurnOnResolvedMachine(t *testing.T) {
 	}
 }
 
+func TestServerReadsThreadFromResolvedMachine(t *testing.T) {
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01")
+
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("machineID = %q", machineID)
+			}
+			if name != "thread.read" {
+				t.Fatalf("name = %q", name)
+			}
+
+			commandPayload, ok := payload.(protocol.ThreadReadCommandPayload)
+			if !ok {
+				t.Fatalf("payload type = %T", payload)
+			}
+			if commandPayload.ThreadID != "thread-01" {
+				t.Fatalf("threadID = %q", commandPayload.ThreadID)
+			}
+
+			return protocol.CommandCompletedPayload{
+				CommandName: "thread.read",
+				Result: mustMarshalJSON(t, protocol.ThreadReadCommandResult{
+					Thread: domain.Thread{
+						ThreadID:  "thread-01",
+						MachineID: "machine-01",
+						Status:    domain.ThreadStatusIdle,
+						Title:     "Investigate flaky test",
+					},
+				}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Thread domain.Thread `json:"thread"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Thread.ThreadID != "thread-01" || body.Thread.MachineID != "machine-01" {
+		t.Fatalf("unexpected thread: %+v", body.Thread)
+	}
+}
+
+func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01")
+
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{
+				machineID: machineID,
+				name:      name,
+				payload:   payload,
+			})
+
+			switch name {
+			case "thread.resume":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.ThreadResumeCommandResult{
+						Thread: domain.Thread{
+							ThreadID:  "thread-01",
+							MachineID: "machine-01",
+							Status:    domain.ThreadStatusIdle,
+							Title:     "Investigate flaky test",
+						},
+					}),
+				}, nil
+			case "thread.archive":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.ThreadArchiveCommandResult{
+						ThreadID: "thread-01",
+					}),
+				}, nil
+			case "turn.steer":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.TurnSteerCommandResult{
+						ThreadID: "thread-01",
+						TurnID:   "turn-01",
+					}),
+				}, nil
+			case "turn.interrupt":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.TurnInterruptCommandResult{
+						Turn: domain.Turn{
+							ThreadID: "thread-01",
+							TurnID:   "turn-01",
+							Status:   domain.TurnStatusInterrupted,
+						},
+					}),
+				}, nil
+			default:
+				t.Fatalf("unexpected command %q", name)
+				return protocol.CommandCompletedPayload{}, nil
+			}
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPost, "/threads/thread-01/resume", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resume returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/threads/thread-01/archive", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("archive returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/threads/thread-01/turns/turn-01/steer", bytes.NewBufferString(`{"input":"try a smaller patch"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("steer returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/threads/thread-01/turns/turn-01/interrupt", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("interrupt returned %d", rec.Code)
+	}
+
+	if len(calls) != 4 {
+		t.Fatalf("expected 4 calls, got %d", len(calls))
+	}
+
+	if calls[0].machineID != "machine-01" || calls[0].name != "thread.resume" {
+		t.Fatalf("unexpected resume call: %+v", calls[0])
+	}
+	resumePayload, ok := calls[0].payload.(protocol.ThreadResumeCommandPayload)
+	if !ok {
+		t.Fatalf("resume payload type = %T", calls[0].payload)
+	}
+	if resumePayload.ThreadID != "thread-01" {
+		t.Fatalf("unexpected resume payload: %+v", resumePayload)
+	}
+
+	if calls[1].machineID != "machine-01" || calls[1].name != "thread.archive" {
+		t.Fatalf("unexpected archive call: %+v", calls[1])
+	}
+	archivePayload, ok := calls[1].payload.(protocol.ThreadArchiveCommandPayload)
+	if !ok {
+		t.Fatalf("archive payload type = %T", calls[1].payload)
+	}
+	if archivePayload.ThreadID != "thread-01" {
+		t.Fatalf("unexpected archive payload: %+v", archivePayload)
+	}
+
+	if calls[2].machineID != "machine-01" || calls[2].name != "turn.steer" {
+		t.Fatalf("unexpected steer call: %+v", calls[2])
+	}
+	steerPayload, ok := calls[2].payload.(protocol.TurnSteerCommandPayload)
+	if !ok {
+		t.Fatalf("steer payload type = %T", calls[2].payload)
+	}
+	if steerPayload.ThreadID != "thread-01" || steerPayload.TurnID != "turn-01" || steerPayload.Input != "try a smaller patch" {
+		t.Fatalf("unexpected steer payload: %+v", steerPayload)
+	}
+
+	if calls[3].machineID != "machine-01" || calls[3].name != "turn.interrupt" {
+		t.Fatalf("unexpected interrupt call: %+v", calls[3])
+	}
+	interruptPayload, ok := calls[3].payload.(protocol.TurnInterruptCommandPayload)
+	if !ok {
+		t.Fatalf("interrupt payload type = %T", calls[3].payload)
+	}
+	if interruptPayload.ThreadID != "thread-01" || interruptPayload.TurnID != "turn-01" {
+		t.Fatalf("unexpected interrupt payload: %+v", interruptPayload)
+	}
+}
+
 type fakeCommandSender struct {
 	send func(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error)
 }

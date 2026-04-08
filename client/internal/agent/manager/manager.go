@@ -41,12 +41,52 @@ func (m *Manager) CreateThread(runtimeName string, params types.CreateThreadPara
 	return runtime.CreateThread(params)
 }
 
+func (m *Manager) ReadThread(runtimeName string, threadID string) (domain.Thread, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return domain.Thread{}, err
+	}
+	return runtime.ReadThread(threadID)
+}
+
+func (m *Manager) ResumeThread(runtimeName string, threadID string) (domain.Thread, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return domain.Thread{}, err
+	}
+	return runtime.ResumeThread(threadID)
+}
+
+func (m *Manager) ArchiveThread(runtimeName string, threadID string) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+	return runtime.ArchiveThread(threadID)
+}
+
 func (m *Manager) StartTurn(runtimeName string, params types.StartTurnParams) (types.StartTurnResult, error) {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {
 		return types.StartTurnResult{}, err
 	}
 	return runtime.StartTurn(params)
+}
+
+func (m *Manager) SteerTurn(runtimeName string, params types.SteerTurnParams) (types.SteerTurnResult, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return types.SteerTurnResult{}, err
+	}
+	return runtime.SteerTurn(params)
+}
+
+func (m *Manager) InterruptTurn(runtimeName string, params types.InterruptTurnParams) (domain.Turn, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return domain.Turn{}, err
+	}
+	return runtime.InterruptTurn(params)
 }
 
 func (m *Manager) Snapshot(runtimeName string) (snapshot.Snapshot, error) {

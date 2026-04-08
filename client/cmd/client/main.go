@@ -273,12 +273,56 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 			return err
 		}
 
-		threads, err := mgr.Threads(runtimeName)
+		return refreshThreadSnapshot(session, mgr, runtimeName)
+	case "thread.read":
+		var payload protocol.ThreadReadCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		thread, err := mgr.ReadThread(runtimeName, payload.ThreadID)
 		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		return session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadReadCommandResult{
+			Thread: thread,
+		})
+	case "thread.resume":
+		var payload protocol.ThreadResumeCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		thread, err := mgr.ResumeThread(runtimeName, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadResumeCommandResult{
+			Thread: thread,
+		}); err != nil {
 			return err
 		}
 
-		return session.ThreadSnapshot(threads)
+		return refreshThreadSnapshot(session, mgr, runtimeName)
+	case "thread.archive":
+		var payload protocol.ThreadArchiveCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		if err := mgr.ArchiveThread(runtimeName, payload.ThreadID); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadArchiveCommandResult{
+			ThreadID: payload.ThreadID,
+		}); err != nil {
+			return err
+		}
+
+		return refreshThreadSnapshot(session, mgr, runtimeName)
 	case "turn.start":
 		var payload protocol.TurnStartCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -318,9 +362,81 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 				Status:   domain.TurnStatusCompleted,
 			},
 		})
+	case "turn.steer":
+		var payload protocol.TurnSteerCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		result, err := mgr.SteerTurn(runtimeName, agenttypes.SteerTurnParams{
+			ThreadID: payload.ThreadID,
+			TurnID:   payload.TurnID,
+			Input:    payload.Input,
+		})
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.TurnSteerCommandResult{
+			TurnID:   result.TurnID,
+			ThreadID: result.ThreadID,
+		}); err != nil {
+			return err
+		}
+
+		for _, delta := range result.Deltas {
+			if err := session.TurnDelta(envelope.RequestID, protocol.TurnDeltaPayload{
+				ThreadID: result.ThreadID,
+				TurnID:   result.TurnID,
+				Sequence: delta.Sequence,
+				Delta:    delta.Delta,
+			}); err != nil {
+				return err
+			}
+		}
+
+		return session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
+			Turn: domain.Turn{
+				TurnID:   result.TurnID,
+				ThreadID: result.ThreadID,
+				Status:   domain.TurnStatusCompleted,
+			},
+		})
+	case "turn.interrupt":
+		var payload protocol.TurnInterruptCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		turn, err := mgr.InterruptTurn(runtimeName, agenttypes.InterruptTurnParams{
+			ThreadID: payload.ThreadID,
+			TurnID:   payload.TurnID,
+		})
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.TurnInterruptCommandResult{
+			Turn: turn,
+		}); err != nil {
+			return err
+		}
+
+		return session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
+			Turn: turn,
+		})
 	default:
 		return session.CommandRejected(envelope.RequestID, envelope.Name, "unsupported command", "")
 	}
+}
+
+func refreshThreadSnapshot(session *gateway.Session, mgr *manager.Manager, runtimeName string) error {
+	threads, err := mgr.Threads(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	return session.ThreadSnapshot(threads)
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) bool {
