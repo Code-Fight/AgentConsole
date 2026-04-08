@@ -2,6 +2,13 @@ export type MachineStatus = "online" | "offline" | "reconnecting" | "unknown";
 export type ThreadStatus = "notLoaded" | "idle" | "active" | "systemError";
 export type TurnStatus = "completed" | "interrupted" | "failed";
 export type EventCategory = "system" | "command" | "event" | "snapshot";
+export type EnvironmentKind = "skill" | "mcp" | "plugin";
+export type EnvironmentResourceStatus =
+  | "unknown"
+  | "enabled"
+  | "disabled"
+  | "auth_required"
+  | "error";
 
 export interface MachineSummary {
   id: string;
@@ -9,14 +16,22 @@ export interface MachineSummary {
   status: MachineStatus;
 }
 
-export interface OverviewSummary {
-  totalMachines: number;
-  onlineMachines: number;
+export interface MachineListResponse {
+  items: MachineSummary[];
 }
 
-export interface EnvironmentVariable {
-  key: string;
-  value: string;
+export interface EnvironmentResource {
+  resourceId: string;
+  machineId: string;
+  kind: EnvironmentKind;
+  displayName: string;
+  status: EnvironmentResourceStatus;
+  restartRequired: boolean;
+  lastObservedAt: string;
+}
+
+export interface EnvironmentListResponse {
+  items: EnvironmentResource[];
 }
 
 export interface ThreadSummary {
