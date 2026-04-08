@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+
+	"code-agent-gateway/common/domain"
 )
 
 type Category string
@@ -14,6 +16,18 @@ const (
 	CategoryEvent    Category = "event"
 	CategorySnapshot Category = "snapshot"
 )
+
+type MachineSnapshotPayload struct {
+	Machine domain.Machine `json:"machine"`
+}
+
+type ThreadSnapshotPayload struct {
+	Threads []domain.Thread `json:"threads"`
+}
+
+type EnvironmentSnapshotPayload struct {
+	Environment []domain.EnvironmentResource `json:"environment"`
+}
 
 type Envelope struct {
 	Version   string          `json:"version"`

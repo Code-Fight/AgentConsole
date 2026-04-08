@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
@@ -12,6 +11,7 @@ import (
 	"code-agent-gateway/client/internal/config"
 	"code-agent-gateway/client/internal/gateway"
 	"code-agent-gateway/client/internal/snapshot"
+	"code-agent-gateway/common/domain"
 	cws "github.com/coder/websocket"
 )
 
@@ -22,12 +22,39 @@ func main() {
 
 	cfg := config.Read()
 
-	snap, err := snapshot.Build(codex.NewFakeAdapter())
+	adapter := codex.NewFakeAdapter()
+	adapter.SeedSnapshot(
+		[]domain.Thread{
+			{
+				ThreadID:  "thread-01",
+				MachineID: cfg.MachineID,
+				Status:    domain.ThreadStatusIdle,
+				Title:     "Gateway bootstrap thread",
+			},
+		},
+		[]domain.EnvironmentResource{
+			{
+				ResourceID:      "skill-01",
+				MachineID:       cfg.MachineID,
+				Kind:            domain.EnvironmentKindSkill,
+				DisplayName:     "Bootstrap Skill",
+				Status:          domain.EnvironmentResourceStatusEnabled,
+				RestartRequired: false,
+				LastObservedAt:  time.Now().UTC().Format(time.RFC3339),
+			},
+		},
+	)
+
+	snap, err := snapshot.Build(adapter)
 	if err != nil {
 		panic(err)
 	}
 
-	fmt.Println(cfg.GatewayURL, len(snap.Threads))
+	machine := domain.Machine{
+		ID:     cfg.MachineID,
+		Name:   cfg.MachineID,
+		Status: domain.MachineStatusOnline,
+	}
 
 	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -60,6 +87,14 @@ func main() {
 			}
 			continue
 		}
+		if err := sendInitialSnapshot(session, machine, snap); err != nil {
+			_ = conn.Close(cws.StatusNormalClosure, "snapshot-failed")
+			backoff = nextBackoff(backoff, reconnectMaxBackoff)
+			if !sleepWithContext(shutdownCtx, backoff) {
+				return
+			}
+			continue
+		}
 
 		backoff = 0
 		if err := runHeartbeatLoop(shutdownCtx, session, heartbeatInterval); err != nil {
@@ -74,6 +109,16 @@ func main() {
 		_ = conn.Close(cws.StatusNormalClosure, "done")
 		return
 	}
+}
+
+func sendInitialSnapshot(session *gateway.Session, machine domain.Machine, snap snapshot.Snapshot) error {
+	if err := session.MachineSnapshot(machine); err != nil {
+		return err
+	}
+	if err := session.ThreadSnapshot(snap.Threads); err != nil {
+		return err
+	}
+	return session.EnvironmentSnapshot(snap.Environment)
 }
 
 func runHeartbeatLoop(ctx context.Context, session *gateway.Session, interval time.Duration) error {

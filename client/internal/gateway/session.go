@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
 	"code-agent-gateway/common/transport"
 	"code-agent-gateway/common/version"
@@ -30,21 +31,69 @@ func NewSession(machineID string, send Sender, now func() time.Time) *Session {
 }
 
 func (s *Session) Register() error {
-	return s.sendSystem(protocol.CategorySystem, "client.register")
+	return s.sendEnvelope(protocol.CategorySystem, "client.register", struct{}{})
 }
 
 func (s *Session) Heartbeat() error {
-	return s.sendSystem(protocol.CategorySystem, "client.heartbeat")
+	return s.sendEnvelope(protocol.CategorySystem, "client.heartbeat", struct{}{})
 }
 
-func (s *Session) sendSystem(category protocol.Category, name string) error {
+func (s *Session) MachineSnapshot(machine domain.Machine) error {
+	if machine.ID == "" {
+		machine.ID = s.machineID
+	}
+	if machine.Status == "" {
+		machine.Status = domain.MachineStatusOnline
+	}
+
+	return s.sendEnvelope(protocol.CategorySnapshot, "machine.snapshot", protocol.MachineSnapshotPayload{
+		Machine: machine,
+	})
+}
+
+func (s *Session) ThreadSnapshot(threads []domain.Thread) error {
+	normalized := make([]domain.Thread, 0, len(threads))
+	for _, item := range threads {
+		thread := item
+		if thread.MachineID == "" {
+			thread.MachineID = s.machineID
+		}
+		normalized = append(normalized, thread)
+	}
+
+	return s.sendEnvelope(protocol.CategorySnapshot, "thread.snapshot", protocol.ThreadSnapshotPayload{
+		Threads: normalized,
+	})
+}
+
+func (s *Session) EnvironmentSnapshot(environment []domain.EnvironmentResource) error {
+	normalized := make([]domain.EnvironmentResource, 0, len(environment))
+	for _, item := range environment {
+		resource := item
+		if resource.MachineID == "" {
+			resource.MachineID = s.machineID
+		}
+		normalized = append(normalized, resource)
+	}
+
+	return s.sendEnvelope(protocol.CategorySnapshot, "environment.snapshot", protocol.EnvironmentSnapshotPayload{
+		Environment: normalized,
+	})
+}
+
+func (s *Session) sendEnvelope(category protocol.Category, name string, payload any) error {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
 	frame := protocol.Envelope{
 		Version:   version.CurrentProtocolVersion,
 		Category:  category,
 		Name:      name,
 		MachineID: s.machineID,
 		Timestamp: s.now().Format(time.RFC3339),
-		Payload:   json.RawMessage(`{}`),
+		Payload:   payloadJSON,
 	}
 
 	encoded, err := transport.Encode(frame)
