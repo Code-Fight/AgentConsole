@@ -241,9 +241,13 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 		if requestID == "" || envelope.MachineID == "" {
 			return
 		}
+		payload.RequestID = requestID
 		h.mu.Lock()
 		h.approvalRequests[requestID] = envelope.MachineID
 		h.mu.Unlock()
+		if h.registry != nil {
+			h.registry.UpsertPendingApproval(envelope.MachineID, payload)
+		}
 	case "approval.resolved":
 		requestID := envelope.RequestID
 		var payload protocol.ApprovalResolvedPayload
@@ -256,6 +260,9 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 		h.mu.Lock()
 		delete(h.approvalRequests, requestID)
 		h.mu.Unlock()
+		if h.registry != nil {
+			h.registry.RemovePendingApproval(requestID)
+		}
 	}
 }
 
@@ -378,12 +385,6 @@ func (h *ClientHub) cleanupMachineLocked(machineID string, markOffline bool) []p
 		state.threads = markThreadsUnknown(state.threads)
 		h.snapshotByMachine[machineID] = state
 	}
-	for requestID, requestMachineID := range h.approvalRequests {
-		if requestMachineID == machineID {
-			delete(h.approvalRequests, requestID)
-		}
-	}
-
 	waiters := make([]pendingCommandWaiter, 0)
 	for requestID, waiter := range h.pendingCommands {
 		if waiter.machineID != machineID {

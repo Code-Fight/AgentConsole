@@ -323,6 +323,60 @@ func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 	}
 }
 
+func TestClientHubKeepsPendingApprovalRoutingAndRegistryStateAcrossDisconnect(t *testing.T) {
+	reg := registry.NewStore()
+	hub := NewClientHubWithStores(reg, runtimeindex.NewStore(), routing.NewRouter())
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "approval.required",
+		RequestID: "approval-1",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T10:00:01Z",
+		Payload:   []byte(`{"requestId":"approval-1","threadId":"thread-01","kind":"command","command":"go test ./..."}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := conn.Close(websocket.StatusNormalClosure, "offline"); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		_, ok := hub.ResolveApprovalMachine("approval-1")
+		return ok
+	})
+
+	machineID, ok := hub.ResolveApprovalMachine("approval-1")
+	if !ok || machineID != "machine-01" {
+		t.Fatalf("unexpected approval route: machineID=%q ok=%v", machineID, ok)
+	}
+
+	approvals := reg.PendingApprovalsForThread("thread-01")
+	if len(approvals) != 1 || approvals[0].RequestID != "approval-1" {
+		t.Fatalf("unexpected stored approvals: %+v", approvals)
+	}
+}
+
 func TestClientHubDisconnectPreservesUnknownThreadsAndClearsRoutes(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()

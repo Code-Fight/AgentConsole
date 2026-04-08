@@ -6,6 +6,7 @@ import type {
   ApprovalRequiredPayload,
   ApprovalResolvedPayload,
   EventEnvelope,
+  ThreadDetailResponse,
   StartTurnResponse,
   TurnCompletedPayload,
   TurnDeltaPayload
@@ -61,6 +62,49 @@ export function ThreadWorkspacePage() {
     setMessages([]);
     setPendingApprovals([]);
     setError(null);
+  }, [threadId]);
+
+  useEffect(() => {
+    if (!threadId) {
+      return undefined;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const detail = await http<ThreadDetailResponse>(buildThreadApiPath(threadId));
+        if (cancelled) {
+          return;
+        }
+
+        const approvals = Array.isArray(detail?.pendingApprovals)
+          ? detail.pendingApprovals
+              .filter((approval): approval is PendingApproval => Boolean(approval?.requestId))
+              .map((approval) => ({ ...approval, requestId: approval.requestId }))
+          : [];
+        setPendingApprovals((current) => {
+          const next = current.filter(
+            (item) => !approvals.some((approval) => approval.requestId === item.requestId),
+          );
+          next.push(...approvals);
+          return next;
+        });
+      } catch (detailError) {
+        if (cancelled) {
+          return;
+        }
+        setError(
+          detailError instanceof Error
+            ? detailError.message
+            : "Unable to load thread.",
+        );
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [threadId]);
 
   useEffect(() => {

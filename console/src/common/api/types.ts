@@ -21,6 +21,10 @@ export interface MachineListResponse {
   items: MachineSummary[];
 }
 
+export interface MachineDetailResponse {
+  machine: MachineSummary;
+}
+
 export interface EnvironmentResource {
   resourceId: string;
   machineId: string;
@@ -50,6 +54,11 @@ export interface TurnSummary {
 
 export interface ThreadListResponse {
   items: ThreadSummary[];
+}
+
+export interface ThreadDetailResponse {
+  thread: ThreadSummary;
+  pendingApprovals: ApprovalRequiredPayload[];
 }
 
 export interface StartTurnResponse {

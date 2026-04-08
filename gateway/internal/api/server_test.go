@@ -7,12 +7,17 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
+	"code-agent-gateway/common/transport"
+	"code-agent-gateway/common/version"
 	"code-agent-gateway/gateway/internal/registry"
 	"code-agent-gateway/gateway/internal/routing"
 	"code-agent-gateway/gateway/internal/runtimeindex"
+	gatewayws "code-agent-gateway/gateway/internal/websocket"
+	"github.com/coder/websocket"
 )
 
 func TestServerServesEmptyControlPlaneViews(t *testing.T) {
@@ -529,6 +534,206 @@ func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 	}
 }
 
+func TestServerThreadDetailIncludesPendingApprovalsWhenThreadIsOffline(t *testing.T) {
+	reg := registry.NewStore()
+	idx := runtimeindex.NewStore()
+	router := routing.NewRouter()
+	clientHub := gatewayws.NewClientHubWithStores(reg, idx, router)
+
+	thread := domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Investigate flaky test",
+	}
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
+	router.TrackThread(thread.ThreadID, thread.MachineID)
+
+	handler := NewServer(reg, idx, router, &fakeCommandSender{
+		send: func(_ context.Context, _ string, _ string, _ any) (protocol.CommandCompletedPayload, error) {
+			t.Fatal("thread detail fallback should not call the runtime for an offline thread")
+			return protocol.CommandCompletedPayload{}, nil
+		},
+	}, clientHub.Handler(), http.NotFoundHandler())
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeClientEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeClientEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "approval.required",
+		RequestID: "approval-1",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T10:00:01Z",
+		Payload: mustMarshalJSON(t, protocol.ApprovalRequiredPayload{
+			RequestID: "approval-1",
+			ThreadID:  "thread-01",
+			TurnID:    "turn-01",
+			ItemID:    "item-01",
+			Kind:      "command",
+			Command:   "go test ./...",
+		}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := conn.Close(websocket.StatusNormalClosure, "offline"); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		machines := reg.List()
+		return len(machines) == 1 && machines[0].Status == domain.MachineStatusOffline
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Thread           domain.Thread                      `json:"thread"`
+		PendingApprovals []protocol.ApprovalRequiredPayload `json:"pendingApprovals"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Thread.ThreadID != "thread-01" || body.Thread.Status != domain.ThreadStatusUnknown {
+		t.Fatalf("unexpected thread: %+v", body.Thread)
+	}
+	if len(body.PendingApprovals) != 1 {
+		t.Fatalf("expected 1 pending approval, got %+v", body.PendingApprovals)
+	}
+	if body.PendingApprovals[0].RequestID != "approval-1" || body.PendingApprovals[0].Command != "go test ./..." {
+		t.Fatalf("unexpected pending approval: %+v", body.PendingApprovals[0])
+	}
+}
+
+func TestServerGetsMachineByIDAndDeletesThreadThroughArchiveShim(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:     "machine-01",
+		Name:   "Dev Mac",
+		Status: domain.MachineStatusOnline,
+	})
+
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{
+		{
+			ThreadID:  "thread-01",
+			MachineID: "machine-01",
+			Status:    domain.ThreadStatusIdle,
+			Title:     "Investigate flaky test",
+		},
+	}, nil)
+
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01")
+
+	handler := NewServer(reg, idx, router, &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("machineID = %q", machineID)
+			}
+			if name != "thread.archive" {
+				t.Fatalf("name = %q", name)
+			}
+			commandPayload, ok := payload.(protocol.ThreadArchiveCommandPayload)
+			if !ok {
+				t.Fatalf("payload type = %T", payload)
+			}
+			if commandPayload.ThreadID != "thread-01" {
+				t.Fatalf("threadID = %q", commandPayload.ThreadID)
+			}
+			return protocol.CommandCompletedPayload{
+				CommandName: "thread.archive",
+				Result: mustMarshalJSON(t, protocol.ThreadArchiveCommandResult{
+					ThreadID: "thread-01",
+				}),
+			}, nil
+		},
+	}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/machines/machine-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("machine detail returned %d", rec.Code)
+	}
+
+	var machineBody struct {
+		Machine domain.Machine `json:"machine"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &machineBody); err != nil {
+		t.Fatalf("invalid machine json: %v", err)
+	}
+	if machineBody.Machine.ID != "machine-01" || machineBody.Machine.Name != "Dev Mac" {
+		t.Fatalf("unexpected machine: %+v", machineBody.Machine)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/threads/thread-01", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("delete returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var deleteBody struct {
+		ThreadID string `json:"threadId"`
+		Deleted  bool   `json:"deleted"`
+		Archived bool   `json:"archived"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &deleteBody); err != nil {
+		t.Fatalf("invalid delete json: %v", err)
+	}
+	if deleteBody.ThreadID != "thread-01" || !deleteBody.Deleted || !deleteBody.Archived {
+		t.Fatalf("unexpected delete body: %+v", deleteBody)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/threads", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var threadsBody struct {
+		Items []domain.Thread `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &threadsBody); err != nil {
+		t.Fatalf("invalid threads json: %v", err)
+	}
+	if len(threadsBody.Items) != 0 {
+		t.Fatalf("expected deleted thread to be hidden from listing, got %+v", threadsBody.Items)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected deleted thread detail to return 404, got %d", rec.Code)
+	}
+}
+
 type fakeCommandSender struct {
 	send                   func(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error)
 	resolveApprovalMachine func(requestID string) (string, bool)
@@ -557,4 +762,27 @@ func mustMarshalJSON(t *testing.T, value any) []byte {
 		t.Fatalf("marshal failed: %v", err)
 	}
 	return raw
+}
+
+func writeClientEnvelope(t *testing.T, conn *websocket.Conn, envelope protocol.Envelope) error {
+	t.Helper()
+
+	raw, err := transport.Encode(envelope)
+	if err != nil {
+		t.Fatalf("encode envelope failed: %v", err)
+	}
+	return conn.Write(context.Background(), websocket.MessageText, raw)
+}
+
+func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool) {
+	t.Helper()
+
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("condition not met before timeout")
 }

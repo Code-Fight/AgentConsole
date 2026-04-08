@@ -7,13 +7,15 @@ import (
 )
 
 type ApprovalRequest struct {
-	RequestID string
-	ThreadID  string
-	TurnID    string
-	ItemID    string
-	Kind      string
-	Reason    string
-	Command   string
+	RequestID   string
+	ThreadID    string
+	TurnID      string
+	ItemID      string
+	Kind        string
+	Reason      string
+	Command     string
+	Session     string
+	Permissions map[string]any
 }
 
 type pendingApprovalRequest struct {
@@ -38,7 +40,8 @@ func (c *AppServerClient) RespondApproval(requestID string, decision string) err
 		return fmt.Errorf("approval request %q not found", requestID)
 	}
 
-	if err := responder.Respond(pending.id, map[string]any{"decision": decision}, nil); err != nil {
+	response := approvalResponsePayload(pending.request, decision)
+	if err := responder.Respond(pending.id, response, nil); err != nil {
 		return err
 	}
 
@@ -53,7 +56,7 @@ func approvalKindFromMethod(method string) (string, bool) {
 	case "item/fileChange/requestApproval":
 		return "file_change", true
 	case "item/permissions/requestApproval":
-		return "permissions", false
+		return "permissions", true
 	default:
 		return "unknown", false
 	}
@@ -66,4 +69,34 @@ func isSupportedApprovalDecision(decision string) bool {
 	default:
 		return false
 	}
+}
+
+func approvalResponsePayload(request ApprovalRequest, decision string) any {
+	if request.Kind != "permissions" {
+		return map[string]any{"decision": decision}
+	}
+
+	if strings.TrimSpace(decision) == "accept" {
+		return map[string]any{
+			"permissions": cloneApprovalPermissions(request.Permissions),
+			"scope":       "session",
+		}
+	}
+
+	return map[string]any{
+		"permissions": map[string]any{},
+		"scope":       "turn",
+	}
+}
+
+func cloneApprovalPermissions(permissions map[string]any) map[string]any {
+	if len(permissions) == 0 {
+		return map[string]any{}
+	}
+
+	cloned := make(map[string]any, len(permissions))
+	for key, value := range permissions {
+		cloned[key] = value
+	}
+	return cloned
 }

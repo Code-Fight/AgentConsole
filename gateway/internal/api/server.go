@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"strings"
+	"sync"
 
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
@@ -19,6 +20,17 @@ type CommandSender interface {
 
 type approvalRequestResolver interface {
 	ResolveApprovalMachine(requestID string) (string, bool)
+}
+
+type threadDetailResponse struct {
+	Thread           domain.Thread                      `json:"thread"`
+	PendingApprovals []protocol.ApprovalRequiredPayload `json:"pendingApprovals"`
+}
+
+type threadDeleteResponse struct {
+	ThreadID string `json:"threadId"`
+	Deleted  bool   `json:"deleted"`
+	Archived bool   `json:"archived"`
 }
 
 type createThreadRequest struct {
@@ -47,8 +59,45 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	_ = json.NewEncoder(w).Encode(body)
 }
 
+func findThread(idx *runtimeindex.Store, threadID string) (domain.Thread, bool) {
+	if idx == nil || strings.TrimSpace(threadID) == "" {
+		return domain.Thread{}, false
+	}
+	for _, thread := range idx.Threads() {
+		if thread.ThreadID == threadID {
+			return thread, true
+		}
+	}
+	return domain.Thread{}, false
+}
+
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
 	mux := http.NewServeMux()
+	var deletedThreadsMu sync.RWMutex
+	deletedThreads := map[string]struct{}{}
+
+	isDeleted := func(threadID string) bool {
+		deletedThreadsMu.RLock()
+		defer deletedThreadsMu.RUnlock()
+		_, ok := deletedThreads[threadID]
+		return ok
+	}
+	markDeleted := func(threadID string) {
+		if strings.TrimSpace(threadID) == "" {
+			return
+		}
+		deletedThreadsMu.Lock()
+		deletedThreads[threadID] = struct{}{}
+		deletedThreadsMu.Unlock()
+	}
+	clearDeleted := func(threadID string) {
+		if strings.TrimSpace(threadID) == "" {
+			return
+		}
+		deletedThreadsMu.Lock()
+		delete(deletedThreads, threadID)
+		deletedThreadsMu.Unlock()
+	}
 
 	if clientWS != nil {
 		mux.Handle("/ws/client", clientWS)
@@ -65,49 +114,81 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		writeJSON(w, http.StatusOK, map[string]any{"items": reg.List()})
 	})
 
+	mux.HandleFunc("GET /machines/{machineId}", func(w http.ResponseWriter, r *http.Request) {
+		machineID := r.PathValue("machineId")
+		if strings.TrimSpace(machineID) == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		machine, ok := reg.Get(machineID)
+		if !ok {
+			http.Error(w, "machine not found", http.StatusNotFound)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"machine": machine})
+	})
+
 	mux.HandleFunc("GET /threads", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"items": idx.Threads()})
+		threads := make([]domain.Thread, 0)
+		for _, thread := range idx.Threads() {
+			if isDeleted(thread.ThreadID) {
+				continue
+			}
+			threads = append(threads, thread)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"items": threads})
 	})
 
 	mux.HandleFunc("GET /threads/{threadId}", func(w http.ResponseWriter, r *http.Request) {
-		if sender == nil {
-			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
-			return
-		}
-
 		threadID := r.PathValue("threadId")
 		if strings.TrimSpace(threadID) == "" {
 			http.Error(w, "threadId is required", http.StatusBadRequest)
 			return
 		}
+		if isDeleted(threadID) {
+			http.Error(w, "thread not found", http.StatusNotFound)
+			return
+		}
 
-		machineID, ok := resolveThreadMachineID(router, threadID)
+		pendingApprovals := []protocol.ApprovalRequiredPayload{}
+		if reg != nil {
+			pendingApprovals = reg.PendingApprovalsForThread(threadID)
+		}
+
+		if sender != nil {
+			if machineID, ok := resolveThreadMachineID(router, threadID); ok {
+				completed, err := sender.SendCommand(r.Context(), machineID, "thread.read", protocol.ThreadReadCommandPayload{
+					ThreadID: threadID,
+				})
+				if err == nil {
+					var result protocol.ThreadReadCommandResult
+					if err := json.Unmarshal(completed.Result, &result); err == nil {
+						if result.Thread.MachineID == "" {
+							result.Thread.MachineID = machineID
+						}
+						if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
+							router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+						}
+						clearDeleted(result.Thread.ThreadID)
+						writeJSON(w, http.StatusOK, threadDetailResponse{
+							Thread:           result.Thread,
+							PendingApprovals: pendingApprovals,
+						})
+						return
+					}
+				}
+			}
+		}
+
+		thread, ok := findThread(idx, threadID)
 		if !ok {
-			http.Error(w, "thread route not found", http.StatusNotFound)
+			http.Error(w, "thread not found", http.StatusNotFound)
 			return
 		}
-
-		completed, err := sender.SendCommand(r.Context(), machineID, "thread.read", protocol.ThreadReadCommandPayload{
-			ThreadID: threadID,
+		writeJSON(w, http.StatusOK, threadDetailResponse{
+			Thread:           thread,
+			PendingApprovals: pendingApprovals,
 		})
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadGateway)
-			return
-		}
-
-		var result protocol.ThreadReadCommandResult
-		if err := json.Unmarshal(completed.Result, &result); err != nil {
-			http.Error(w, "invalid thread.read result", http.StatusBadGateway)
-			return
-		}
-		if result.Thread.MachineID == "" {
-			result.Thread.MachineID = machineID
-		}
-		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
-			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
-		}
-
-		writeJSON(w, http.StatusOK, map[string]any{"thread": result.Thread})
 	})
 
 	mux.HandleFunc("POST /threads", func(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +226,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
 		}
+		clearDeleted(result.Thread.ThreadID)
 
 		writeJSON(w, http.StatusCreated, map[string]any{"thread": result.Thread})
 	})
@@ -186,6 +268,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
 		}
+		clearDeleted(result.Thread.ThreadID)
 
 		writeJSON(w, http.StatusOK, map[string]any{"thread": result.Thread})
 	})
@@ -226,6 +309,48 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		}
 
 		writeJSON(w, http.StatusAccepted, map[string]any{"threadId": result.ThreadID})
+	})
+
+	mux.HandleFunc("DELETE /threads/{threadId}", func(w http.ResponseWriter, r *http.Request) {
+		threadID := r.PathValue("threadId")
+		if strings.TrimSpace(threadID) == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return
+		}
+		if isDeleted(threadID) {
+			writeJSON(w, http.StatusOK, threadDeleteResponse{
+				ThreadID: threadID,
+				Deleted:  true,
+				Archived: false,
+			})
+			return
+		}
+		if _, ok := findThread(idx, threadID); !ok {
+			http.Error(w, "thread not found", http.StatusNotFound)
+			return
+		}
+
+		archived := false
+		if sender != nil {
+			if machineID, ok := resolveThreadMachineID(router, threadID); ok {
+				completed, err := sender.SendCommand(r.Context(), machineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
+					ThreadID: threadID,
+				})
+				if err == nil {
+					var result protocol.ThreadArchiveCommandResult
+					if err := json.Unmarshal(completed.Result, &result); err == nil {
+						archived = true
+					}
+				}
+			}
+		}
+
+		markDeleted(threadID)
+		writeJSON(w, http.StatusOK, threadDeleteResponse{
+			ThreadID: threadID,
+			Deleted:  true,
+			Archived: archived,
+		})
 	})
 
 	mux.HandleFunc("POST /threads/{threadId}/turns", func(w http.ResponseWriter, r *http.Request) {

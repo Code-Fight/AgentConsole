@@ -1,18 +1,29 @@
 package registry
 
 import (
+	"sort"
 	"sync"
 
 	"code-agent-gateway/common/domain"
+	"code-agent-gateway/common/protocol"
 )
 
 type Store struct {
-	mu       sync.RWMutex
-	machines map[string]domain.Machine
+	mu               sync.RWMutex
+	machines         map[string]domain.Machine
+	pendingApprovals map[string]storedApprovalRequest
+}
+
+type storedApprovalRequest struct {
+	machineID string
+	payload   protocol.ApprovalRequiredPayload
 }
 
 func NewStore() *Store {
-	return &Store{machines: map[string]domain.Machine{}}
+	return &Store{
+		machines:         map[string]domain.Machine{},
+		pendingApprovals: map[string]storedApprovalRequest{},
+	}
 }
 
 func (s *Store) List() []domain.Machine {
@@ -24,6 +35,14 @@ func (s *Store) List() []domain.Machine {
 		items = append(items, item)
 	}
 	return items
+}
+
+func (s *Store) Get(machineID string) (domain.Machine, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	machine, ok := s.machines[machineID]
+	return machine, ok
 }
 
 func (s *Store) Upsert(machine domain.Machine) {
@@ -51,4 +70,48 @@ func (s *Store) MarkOffline(machineID string) {
 
 	machine.Status = domain.MachineStatusOffline
 	s.machines[machineID] = machine
+}
+
+func (s *Store) UpsertPendingApproval(machineID string, payload protocol.ApprovalRequiredPayload) {
+	if payload.RequestID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.pendingApprovals[payload.RequestID] = storedApprovalRequest{
+		machineID: machineID,
+		payload:   payload,
+	}
+}
+
+func (s *Store) RemovePendingApproval(requestID string) {
+	if requestID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.pendingApprovals, requestID)
+}
+
+func (s *Store) PendingApprovalsForThread(threadID string) []protocol.ApprovalRequiredPayload {
+	if threadID == "" {
+		return nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	items := make([]protocol.ApprovalRequiredPayload, 0)
+	for _, approval := range s.pendingApprovals {
+		if approval.payload.ThreadID == threadID {
+			items = append(items, approval.payload)
+		}
+	}
+	sort.Slice(items, func(i int, j int) bool {
+		return items[i].RequestID < items[j].RequestID
+	})
+	return items
 }

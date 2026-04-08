@@ -169,6 +169,11 @@ func TestClientListEnvironment(t *testing.T) {
 								},
 							},
 						}
+					case "mcpServerStatus/list":
+						response := out.(*mcpServerStatusListResponse)
+						response.Data = []mcpServerStatusRecord{
+							{Name: "github", Enabled: true},
+						}
 					case "plugin/list":
 						response := out.(*pluginListResponse)
 						response.Marketplaces = []pluginMarketplaceEntry{
@@ -197,16 +202,19 @@ func TestClientListEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(calls) != 2 || calls[0] != "skills/list" || calls[1] != "plugin/list" {
+			if len(calls) != 3 || calls[0] != "skills/list" || calls[1] != "mcpServerStatus/list" || calls[2] != "plugin/list" {
 				t.Fatalf("unexpected calls: %#v", calls)
 			}
-			if len(environment) != 2 {
+			if len(environment) != 3 {
 				t.Fatalf("unexpected environment count: %d", len(environment))
 			}
 			if environment[0].ResourceID != "skill-a" || environment[0].Kind != domain.EnvironmentKindSkill {
 				t.Fatalf("unexpected skill environment: %+v", environment[0])
 			}
-			if environment[1].ResourceID != "plugin-a" || environment[1].Kind != domain.EnvironmentKindPlugin {
+			if environment[1].ResourceID != "github" || environment[1].Kind != domain.EnvironmentKindMCP {
+				t.Fatalf("unexpected mcp environment: %+v", environment[1])
+			}
+			if environment[2].ResourceID != "plugin-a" || environment[2].Kind != domain.EnvironmentKindPlugin {
 				t.Fatalf("unexpected environment: %+v", environment)
 			}
 		})
@@ -452,6 +460,141 @@ func TestAppServerClientRespondApprovalWritesStoredServerRequestResponse(t *test
 	}
 	if gotResult["decision"] != "accept" {
 		t.Fatalf("unexpected response payload: %#v", gotResult)
+	}
+}
+
+func TestAppServerClientRespondApprovalMapsPermissionsRequests(t *testing.T) {
+	tests := []struct {
+		name            string
+		decision        string
+		wantScope       string
+		wantPermissions map[string]any
+	}{
+		{
+			name:      "accept grants requested permissions for the session",
+			decision:  "accept",
+			wantScope: "session",
+			wantPermissions: map[string]any{
+				"fs.read": true,
+				"net":     true,
+			},
+		},
+		{
+			name:            "decline returns an empty grant",
+			decision:        "decline",
+			wantScope:       "turn",
+			wantPermissions: map[string]any{},
+		},
+		{
+			name:            "cancel returns an empty grant",
+			decision:        "cancel",
+			wantScope:       "turn",
+			wantPermissions: map[string]any{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotID string
+			var gotResult map[string]any
+
+			runner := &fakeRunner{
+				respond: func(id json.RawMessage, result any, rpcErr *jsonRPCError) error {
+					if rpcErr != nil {
+						t.Fatalf("unexpected rpc error: %+v", rpcErr)
+					}
+					if err := json.Unmarshal(id, &gotID); err != nil {
+						t.Fatalf("unmarshal id failed: %v", err)
+					}
+
+					raw, err := json.Marshal(result)
+					if err != nil {
+						t.Fatalf("marshal result failed: %v", err)
+					}
+					if err := json.Unmarshal(raw, &gotResult); err != nil {
+						t.Fatalf("unmarshal result failed: %v", err)
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			runner.emitServerRequest(t, "approval-1", "item/permissions/requestApproval", map[string]any{
+				"threadId":    "thread-1",
+				"turnId":      "turn-1",
+				"itemId":      "item-1",
+				"session":     "session-1",
+				"permissions": map[string]any{"fs.read": true, "net": true},
+			})
+
+			if err := client.RespondApproval("approval-1", tt.decision); err != nil {
+				t.Fatal(err)
+			}
+
+			if gotID != "approval-1" {
+				t.Fatalf("unexpected response id: %q", gotID)
+			}
+			if gotResult["scope"] != tt.wantScope {
+				t.Fatalf("unexpected scope: %#v", gotResult)
+			}
+			gotPermissions, ok := gotResult["permissions"].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected permissions payload: %#v", gotResult)
+			}
+			if len(gotPermissions) != len(tt.wantPermissions) {
+				t.Fatalf("unexpected permissions length: %#v", gotResult)
+			}
+			for key, want := range tt.wantPermissions {
+				if gotPermissions[key] != want {
+					t.Fatalf("permissions[%q] = %#v, want %#v", key, gotPermissions[key], want)
+				}
+			}
+		})
+	}
+}
+
+func TestClientListEnvironmentMapsMcpInventory(t *testing.T) {
+	var calls []string
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			switch method {
+			case "skills/list":
+				response := out.(*skillsListResponse)
+				response.Data = nil
+			case "mcpServerStatus/list":
+				response := out.(*mcpServerStatusListResponse)
+				response.Data = []mcpServerStatusRecord{
+					{Name: "github", Enabled: true},
+					{Name: "postgres", Enabled: false},
+				}
+			case "plugin/list":
+				response := out.(*pluginListResponse)
+				response.Marketplaces = nil
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	environment, err := client.ListEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calls) != 3 || calls[0] != "skills/list" || calls[1] != "mcpServerStatus/list" || calls[2] != "plugin/list" {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+	if len(environment) != 2 {
+		t.Fatalf("unexpected environment count: %d", len(environment))
+	}
+	if environment[0].Kind != domain.EnvironmentKindMCP || environment[0].ResourceID != "github" || environment[0].Status != domain.EnvironmentResourceStatusEnabled {
+		t.Fatalf("unexpected first mcp entry: %+v", environment[0])
+	}
+	if environment[1].Kind != domain.EnvironmentKindMCP || environment[1].ResourceID != "postgres" || environment[1].Status != domain.EnvironmentResourceStatusDisabled {
+		t.Fatalf("unexpected second mcp entry: %+v", environment[1])
 	}
 }
 

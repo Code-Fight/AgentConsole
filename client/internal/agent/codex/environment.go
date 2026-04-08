@@ -1,10 +1,19 @@
 package codex
 
-import "code-agent-gateway/common/domain"
+import (
+	"strings"
+
+	"code-agent-gateway/common/domain"
+)
 
 func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error) {
 	var skills skillsListResponse
 	if err := c.runner.Call("skills/list", map[string]any{}, &skills); err != nil {
+		return nil, err
+	}
+
+	var mcps mcpServerStatusListResponse
+	if err := c.runner.Call("mcpServerStatus/list", map[string]any{}, &mcps); err != nil {
 		return nil, err
 	}
 
@@ -14,7 +23,7 @@ func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error
 	}
 
 	lastObservedAt := c.now().UTC().Format(timeLayoutRFC3339)
-	environment := make([]domain.EnvironmentResource, 0, len(skills.Data)+len(plugins.Marketplaces))
+	environment := make([]domain.EnvironmentResource, 0, len(skills.Data)+len(mcps.Data)+len(plugins.Marketplaces))
 	for _, entry := range skills.Data {
 		for _, skill := range entry.Skills {
 			environment = append(environment, domain.EnvironmentResource{
@@ -26,6 +35,27 @@ func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error
 				LastObservedAt:  lastObservedAt,
 			})
 		}
+	}
+	for _, mcp := range mcps.Data {
+		resourceID := strings.TrimSpace(mcp.ID)
+		if resourceID == "" {
+			resourceID = strings.TrimSpace(mcp.Name)
+		}
+		displayName := strings.TrimSpace(mcp.DisplayName)
+		if displayName == "" {
+			displayName = strings.TrimSpace(mcp.Name)
+		}
+		if displayName == "" {
+			displayName = resourceID
+		}
+		environment = append(environment, domain.EnvironmentResource{
+			ResourceID:      resourceID,
+			Kind:            domain.EnvironmentKindMCP,
+			DisplayName:     displayName,
+			Status:          mcpStatus(mcp),
+			RestartRequired: false,
+			LastObservedAt:  lastObservedAt,
+		})
 	}
 	for _, marketplace := range plugins.Marketplaces {
 		for _, plugin := range marketplace.Plugins {
@@ -57,4 +87,25 @@ func pluginStatus(plugin pluginSummary) domain.EnvironmentResourceStatus {
 		return domain.EnvironmentResourceStatusUnknown
 	}
 	return enabledStatus(plugin.Enabled)
+}
+
+func mcpStatus(server mcpServerStatusRecord) domain.EnvironmentResourceStatus {
+	switch strings.ToLower(strings.TrimSpace(server.Status)) {
+	case "auth_required", "needs_auth":
+		return domain.EnvironmentResourceStatusAuthRequired
+	case "error", "failed":
+		return domain.EnvironmentResourceStatusError
+	case "disabled":
+		return domain.EnvironmentResourceStatusDisabled
+	case "enabled", "connected", "running":
+		return domain.EnvironmentResourceStatusEnabled
+	}
+
+	if server.NeedsAuth {
+		return domain.EnvironmentResourceStatusAuthRequired
+	}
+	if strings.TrimSpace(server.Error) != "" {
+		return domain.EnvironmentResourceStatusError
+	}
+	return enabledStatus(server.Enabled)
 }

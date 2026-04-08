@@ -96,6 +96,20 @@ type pluginListResponse struct {
 	Marketplaces []pluginMarketplaceEntry `json:"marketplaces"`
 }
 
+type mcpServerStatusRecord struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	Status      string `json:"status"`
+	Enabled     bool   `json:"enabled"`
+	NeedsAuth   bool   `json:"needsAuth"`
+	Error       string `json:"error"`
+}
+
+type mcpServerStatusListResponse struct {
+	Data []mcpServerStatusRecord `json:"data"`
+}
+
 type AppServerClient struct {
 	runner           Runner
 	now              func() time.Time
@@ -324,6 +338,14 @@ func (c *AppServerClient) handleServerRequest(request jsonRPCServerRequest) {
 			[]string{"command"},
 			[]string{"item", "command"},
 		),
+		Session: extractNotificationString(request.Params,
+			[]string{"session"},
+			[]string{"item", "session"},
+		),
+		Permissions: extractNotificationMap(request.Params,
+			[]string{"permissions"},
+			[]string{"item", "permissions"},
+		),
 	}
 
 	c.approvalMu.Lock()
@@ -458,6 +480,34 @@ func extractNotificationText(params json.RawMessage, paths ...[]string) string {
 	}
 
 	return ""
+}
+
+func extractNotificationMap(params json.RawMessage, paths ...[]string) map[string]any {
+	if len(params) == 0 {
+		return nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return nil
+	}
+
+	for _, path := range paths {
+		if value, ok := nestedValue(payload, path...); ok {
+			typed, ok := value.(map[string]any)
+			if !ok || len(typed) == 0 {
+				continue
+			}
+
+			cloned := make(map[string]any, len(typed))
+			for key, item := range typed {
+				cloned[key] = item
+			}
+			return cloned
+		}
+	}
+
+	return nil
 }
 
 func nestedValue(payload map[string]any, path ...string) (any, bool) {

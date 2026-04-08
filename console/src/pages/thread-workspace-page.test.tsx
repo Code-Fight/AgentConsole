@@ -40,22 +40,42 @@ afterEach(() => {
 });
 
 test("submits a prompt and renders turn deltas for the current thread", async () => {
-  const fetchMock = vi.fn(async () =>
-    new Response(
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      return new Response(
+        JSON.stringify({
+          turn: {
+            turnId: "turn-1",
+            threadId: "thread-1"
+          }
+        }),
+        {
+          status: 202,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    return new Response(
       JSON.stringify({
-        turn: {
-          turnId: "turn-1",
-          threadId: "thread-1"
-        }
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "idle",
+          title: "Investigate flaky test"
+        },
+        pendingApprovals: []
       }),
       {
-        status: 202,
+        status: 200,
         headers: {
           "Content-Type": "application/json"
         }
       },
-    ),
-  );
+    );
+  });
 
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
@@ -104,7 +124,25 @@ test("submits a prompt and renders turn deltas for the current thread", async ()
 });
 
 test("renders approval controls for approval.required events on the current thread", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  vi.stubGlobal("fetch", vi.fn(async () =>
+    new Response(
+      JSON.stringify({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "idle",
+          title: "Investigate flaky test"
+        },
+        pendingApprovals: []
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      },
+    ),
+  ));
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
   render(
@@ -144,7 +182,29 @@ test("renders approval controls for approval.required events on the current thre
 });
 
 test("clicking accept posts the approval decision to the approval endpoint", async () => {
-  const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+  const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      return new Response(null, { status: 204 });
+    }
+
+    return new Response(
+      JSON.stringify({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "idle",
+          title: "Investigate flaky test"
+        },
+        pendingApprovals: []
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      },
+    );
+  });
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
@@ -191,7 +251,25 @@ test("clicking accept posts the approval decision to the approval endpoint", asy
 });
 
 test("removes a pending approval when approval.resolved arrives for the current thread", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  vi.stubGlobal("fetch", vi.fn(async () =>
+    new Response(
+      JSON.stringify({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "idle",
+          title: "Investigate flaky test"
+        },
+        pendingApprovals: []
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      },
+    ),
+  ));
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
   render(
@@ -245,4 +323,55 @@ test("removes a pending approval when approval.resolved arrives for the current 
   await waitFor(() => {
     expect(screen.queryByText("Approval required")).not.toBeInTheDocument();
   });
+});
+
+test("hydrates pending approvals from the initial thread detail fetch", async () => {
+  const fetchMock = vi.fn(async () =>
+    new Response(
+      JSON.stringify({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "unknown",
+          title: "Investigate flaky test"
+        },
+        pendingApprovals: [
+          {
+            requestId: "approval-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "item-1",
+            kind: "command",
+            command: "go test ./..."
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      },
+    ),
+  );
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("Approval required")).toBeInTheDocument();
+  expect(screen.getByText("go test ./...")).toBeInTheDocument();
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/threads/thread-1",
+    expect.objectContaining({
+      headers: expect.any(Headers)
+    }),
+  );
 });
