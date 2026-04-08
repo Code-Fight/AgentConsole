@@ -9,11 +9,16 @@ type Store struct {
 
 func NewStore() *Store { return &Store{} }
 
+func (s *Store) ReplaceSnapshot(threads []domain.Thread, environment []domain.EnvironmentResource) {
+	s.threads = append([]domain.Thread(nil), threads...)
+	s.environment = append([]domain.EnvironmentResource(nil), environment...)
+}
+
 func (s *Store) Threads() []domain.Thread {
 	if s.threads == nil {
 		return []domain.Thread{}
 	}
-	return s.threads
+	return append([]domain.Thread(nil), s.threads...)
 }
 
 func (s *Store) Environment(kind domain.EnvironmentKind) []domain.EnvironmentResource {

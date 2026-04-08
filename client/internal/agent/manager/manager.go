@@ -1,18 +1,53 @@
 package manager
 
 import (
+	"fmt"
+
+	agentregistry "code-agent-gateway/client/internal/agent/registry"
 	"code-agent-gateway/client/internal/agent/types"
 	"code-agent-gateway/client/internal/snapshot"
+	"code-agent-gateway/common/domain"
 )
 
 type Manager struct {
-	runtime types.Runtime
+	registry *agentregistry.Registry
 }
 
-func New(runtime types.Runtime) *Manager {
-	return &Manager{runtime: runtime}
+func New(registry *agentregistry.Registry) *Manager {
+	return &Manager{registry: registry}
 }
 
-func (m *Manager) Snapshot() (snapshot.Snapshot, error) {
-	return snapshot.Build(m.runtime)
+func (m *Manager) Threads(runtimeName string) ([]domain.Thread, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return nil, err
+	}
+	return runtime.ListThreads()
+}
+
+func (m *Manager) Environment(runtimeName string) ([]domain.EnvironmentResource, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return nil, err
+	}
+	return runtime.ListEnvironment()
+}
+
+func (m *Manager) Snapshot(runtimeName string) (snapshot.Snapshot, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return snapshot.Snapshot{}, err
+	}
+	return snapshot.Build(runtime)
+}
+
+func (m *Manager) resolveRuntime(runtimeName string) (types.Runtime, error) {
+	if m.registry == nil {
+		return nil, fmt.Errorf("agent runtime registry is not configured")
+	}
+	runtime, ok := m.registry.Get(runtimeName)
+	if !ok {
+		return nil, fmt.Errorf("runtime %q is not registered", runtimeName)
+	}
+	return runtime, nil
 }

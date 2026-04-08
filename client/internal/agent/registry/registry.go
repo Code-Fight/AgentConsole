@@ -17,6 +17,6 @@ func (r *Registry) Register(name string, runtime types.Runtime) {
 }
 
 func (r *Registry) Get(name string) (types.Runtime, bool) {
-	runtime, ok := r.runtimes[name]
-	return runtime, ok
+	rt, ok := r.runtimes[name]
+	return rt, ok
 }
