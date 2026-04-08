@@ -19,8 +19,14 @@ func main() {
 		log.Fatal(err)
 	}
 
-	clientHub := ws.NewClientHub()
-	handler := api.NewServer(registry.NewStore(), runtimeindex.NewStore(), clientHub.Handler())
+	handler := buildServerHandler()
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	log.Fatal(http.ListenAndServe(addr, handler))
+}
+
+func buildServerHandler() http.Handler {
+	reg := registry.NewStore()
+	idx := runtimeindex.NewStore()
+	clientHub := ws.NewClientHubWithStores(reg, idx)
+	return api.NewServer(reg, idx, clientHub.Handler())
 }
