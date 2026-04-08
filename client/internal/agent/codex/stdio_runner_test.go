@@ -115,6 +115,83 @@ func TestStdioRunnerCallReturnsServerError(t *testing.T) {
 	}
 }
 
+func TestStdioRunnerDispatchesNotificationsWithoutConsumingResponses(t *testing.T) {
+	serverReader, runnerWriter := io.Pipe()
+	runnerReader, serverWriter := io.Pipe()
+
+	runner := newStdioRunnerFromStreams(runnerReader, runnerWriter, nil)
+	defer runner.Close()
+
+	notifications := make(chan jsonRPCNotification, 1)
+	runner.SetNotificationHandler(func(notification jsonRPCNotification) {
+		notifications <- notification
+	})
+
+	go func() {
+		defer serverReader.Close()
+
+		var request struct {
+			ID int64 `json:"id"`
+		}
+		if err := json.NewDecoder(serverReader).Decode(&request); err != nil {
+			t.Errorf("decode request failed: %v", err)
+			return
+		}
+
+		if err := json.NewEncoder(serverWriter).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"method":  "turn/started",
+			"params": map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+			},
+		}); err != nil {
+			t.Errorf("encode notification failed: %v", err)
+			return
+		}
+
+		if err := json.NewEncoder(serverWriter).Encode(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      request.ID,
+			"result": map[string]any{
+				"turn": map[string]any{
+					"id": "turn-1",
+				},
+			},
+		}); err != nil {
+			t.Errorf("encode response failed: %v", err)
+		}
+	}()
+
+	var out turnStartResponse
+	if err := runner.Call("turn/start", map[string]any{"threadId": "thread-1"}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if out.Turn.ID != "turn-1" {
+		t.Fatalf("unexpected response: %+v", out)
+	}
+
+	select {
+	case notification := <-notifications:
+		if notification.Method != "turn/started" {
+			t.Fatalf("unexpected notification method: %q", notification.Method)
+		}
+
+		var payload struct {
+			ThreadID string `json:"threadId"`
+			TurnID   string `json:"turnId"`
+		}
+		if err := json.Unmarshal(notification.Params, &payload); err != nil {
+			t.Fatalf("unmarshal notification failed: %v", err)
+		}
+		if payload.ThreadID != "thread-1" || payload.TurnID != "turn-1" {
+			t.Fatalf("unexpected notification payload: %+v", payload)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected notification")
+	}
+}
+
 func TestNewStdioRunnerStartsConfiguredCommand(t *testing.T) {
 	ctx := context.Background()
 	var gotName string

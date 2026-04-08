@@ -21,16 +21,18 @@ type stdioProcess interface {
 type execCommandFunc func(ctx context.Context, name string, args ...string) (stdioProcess, error)
 
 type StdioRunner struct {
-	writer     io.WriteCloser
-	writeMu    sync.Mutex
-	pendingMu  sync.Mutex
-	pending    map[int64]chan rpcCallResult
-	nextID     int64
-	closeOnce  sync.Once
-	closed     chan struct{}
-	terminalMu sync.Mutex
-	terminal   error
-	wait       func() error
+	writer              io.WriteCloser
+	writeMu             sync.Mutex
+	pendingMu           sync.Mutex
+	pending             map[int64]chan rpcCallResult
+	nextID              int64
+	closeOnce           sync.Once
+	closed              chan struct{}
+	terminalMu          sync.Mutex
+	terminal            error
+	notificationMu      sync.RWMutex
+	notificationHandler func(jsonRPCNotification)
+	wait                func() error
 }
 
 type rpcCallResult struct {
@@ -49,6 +51,11 @@ type jsonRPCResponse struct {
 	ID     *int64          `json:"id"`
 	Result json.RawMessage `json:"result"`
 	Error  *jsonRPCError   `json:"error"`
+}
+
+type jsonRPCNotification struct {
+	Method string          `json:"method"`
+	Params json.RawMessage `json:"params"`
 }
 
 type jsonRPCError struct {
@@ -141,6 +148,12 @@ func (r *StdioRunner) Close() error {
 	return nil
 }
 
+func (r *StdioRunner) SetNotificationHandler(handler func(jsonRPCNotification)) {
+	r.notificationMu.Lock()
+	r.notificationHandler = handler
+	r.notificationMu.Unlock()
+}
+
 func (r *StdioRunner) readLoop(stdout io.Reader) {
 	reader := bufio.NewReader(stdout)
 	for {
@@ -154,27 +167,47 @@ func (r *StdioRunner) readLoop(stdout io.Reader) {
 			return
 		}
 
-		var response jsonRPCResponse
-		if err := json.Unmarshal(line, &response); err != nil {
+		var message struct {
+			ID     *json.RawMessage `json:"id"`
+			Method string           `json:"method"`
+			Params json.RawMessage  `json:"params"`
+			Result json.RawMessage  `json:"result"`
+			Error  *jsonRPCError    `json:"error"`
+		}
+		if err := json.Unmarshal(line, &message); err != nil {
 			continue
 		}
-		if response.ID == nil {
+
+		if message.Method != "" && message.ID == nil {
+			r.dispatchNotification(jsonRPCNotification{
+				Method: message.Method,
+				Params: message.Params,
+			})
+			continue
+		}
+
+		if message.ID == nil {
+			continue
+		}
+
+		var responseID int64
+		if err := json.Unmarshal(*message.ID, &responseID); err != nil {
 			continue
 		}
 
 		r.pendingMu.Lock()
-		responseCh := r.pending[*response.ID]
-		delete(r.pending, *response.ID)
+		responseCh := r.pending[responseID]
+		delete(r.pending, responseID)
 		r.pendingMu.Unlock()
 		if responseCh == nil {
 			continue
 		}
 
-		if response.Error != nil {
-			responseCh <- rpcCallResult{err: fmt.Errorf("%s", response.Error.Message)}
+		if message.Error != nil {
+			responseCh <- rpcCallResult{err: fmt.Errorf("%s", message.Error.Message)}
 			continue
 		}
-		responseCh <- rpcCallResult{result: response.Result}
+		responseCh <- rpcCallResult{result: message.Result}
 	}
 }
 
@@ -203,6 +236,15 @@ func (r *StdioRunner) setTerminal(err error) {
 	defer r.terminalMu.Unlock()
 	if r.terminal == nil {
 		r.terminal = err
+	}
+}
+
+func (r *StdioRunner) dispatchNotification(notification jsonRPCNotification) {
+	r.notificationMu.RLock()
+	handler := r.notificationHandler
+	r.notificationMu.RUnlock()
+	if handler != nil {
+		handler(notification)
 	}
 }
 

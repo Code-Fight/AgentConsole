@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
 	"code-agent-gateway/common/transport"
+	"code-agent-gateway/common/version"
 	cws "github.com/coder/websocket"
 )
 
@@ -68,9 +70,10 @@ func main() {
 			continue
 		}
 
-		session := gateway.NewSession(cfg.MachineID, func(msg []byte) error {
+		session := newClientSession(cfg.MachineID, func(msg []byte) error {
 			return conn.Write(shutdownCtx, cws.MessageText, msg)
 		}, time.Now)
+		runtimeStreamsTurnEvents := bindRuntimeTurnEvents(runtime, session)
 		if err := session.Register(); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "register-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
@@ -89,7 +92,7 @@ func main() {
 		}
 
 		backoff = 0
-		if err := runConnection(shutdownCtx, conn, session, agentManager, runtimeName, heartbeatInterval); err != nil {
+		if err := runConnection(shutdownCtx, conn, session, agentManager, runtimeName, runtimeStreamsTurnEvents, heartbeatInterval); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "reconnect")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
@@ -106,6 +109,96 @@ func main() {
 type runtimeFactories struct {
 	newFake      func(cfg config.Config, now func() time.Time) agenttypes.Runtime
 	newAppServer func(ctx context.Context, cfg config.Config) (agenttypes.Runtime, func() error, error)
+}
+
+type clientSession struct {
+	delegate  *gateway.Session
+	machineID string
+	send      gateway.Sender
+	now       func() time.Time
+	sendMu    sync.Mutex
+}
+
+func newClientSession(machineID string, send gateway.Sender, now func() time.Time) *clientSession {
+	if now == nil {
+		now = time.Now
+	}
+
+	session := &clientSession{
+		machineID: machineID,
+		now:       now,
+	}
+	session.send = func(msg []byte) error {
+		session.sendMu.Lock()
+		defer session.sendMu.Unlock()
+		return send(msg)
+	}
+	session.delegate = gateway.NewSession(machineID, session.send, now)
+	return session
+}
+
+func (s *clientSession) Register() error {
+	return s.delegate.Register()
+}
+
+func (s *clientSession) Heartbeat() error {
+	return s.delegate.Heartbeat()
+}
+
+func (s *clientSession) MachineSnapshot(machine domain.Machine) error {
+	return s.delegate.MachineSnapshot(machine)
+}
+
+func (s *clientSession) ThreadSnapshot(threads []domain.Thread) error {
+	return s.delegate.ThreadSnapshot(threads)
+}
+
+func (s *clientSession) EnvironmentSnapshot(environment []domain.EnvironmentResource) error {
+	return s.delegate.EnvironmentSnapshot(environment)
+}
+
+func (s *clientSession) CommandCompleted(requestID string, commandName string, result any) error {
+	return s.delegate.CommandCompleted(requestID, commandName, result)
+}
+
+func (s *clientSession) CommandRejected(requestID string, commandName string, reason string, threadID string) error {
+	return s.delegate.CommandRejected(requestID, commandName, reason, threadID)
+}
+
+func (s *clientSession) TurnDelta(requestID string, payload protocol.TurnDeltaPayload) error {
+	return s.delegate.TurnDelta(requestID, payload)
+}
+
+func (s *clientSession) TurnCompleted(requestID string, payload protocol.TurnCompletedPayload) error {
+	return s.delegate.TurnCompleted(requestID, payload)
+}
+
+func (s *clientSession) TurnStarted(requestID string, payload protocol.TurnStartedPayload) error {
+	return s.sendEnvelope(protocol.CategoryEvent, "turn.started", requestID, payload)
+}
+
+func (s *clientSession) sendEnvelope(category protocol.Category, name string, requestID string, payload any) error {
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+
+	frame := protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  category,
+		Name:      name,
+		RequestID: requestID,
+		MachineID: s.machineID,
+		Timestamp: s.now().Format(time.RFC3339),
+		Payload:   payloadJSON,
+	}
+
+	encoded, err := transport.Encode(frame)
+	if err != nil {
+		return err
+	}
+
+	return s.send(encoded)
 }
 
 func defaultRuntimeFactories() runtimeFactories {
@@ -169,7 +262,42 @@ func newFakeRuntime(cfg config.Config, now func() time.Time) agenttypes.Runtime 
 	return adapter
 }
 
-func runConnection(ctx context.Context, conn *cws.Conn, session *gateway.Session, mgr *manager.Manager, runtimeName string, heartbeatInterval time.Duration) error {
+func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession) bool {
+	source, ok := runtime.(agenttypes.RuntimeTurnEventSource)
+	if !ok {
+		return false
+	}
+
+	source.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		_ = emitRuntimeTurnEvent(session, event)
+	})
+	return true
+}
+
+func emitRuntimeTurnEvent(session *clientSession, event agenttypes.RuntimeTurnEvent) error {
+	switch event.Type {
+	case agenttypes.RuntimeTurnEventTypeStarted:
+		return session.TurnStarted(event.RequestID, protocol.TurnStartedPayload{
+			ThreadID: event.ThreadID,
+			TurnID:   event.TurnID,
+		})
+	case agenttypes.RuntimeTurnEventTypeDelta:
+		return session.TurnDelta(event.RequestID, protocol.TurnDeltaPayload{
+			ThreadID: event.ThreadID,
+			TurnID:   event.TurnID,
+			Sequence: event.Sequence,
+			Delta:    event.Delta,
+		})
+	case agenttypes.RuntimeTurnEventTypeCompleted:
+		return session.TurnCompleted(event.RequestID, protocol.TurnCompletedPayload{
+			Turn: event.Turn,
+		})
+	default:
+		return nil
+	}
+}
+
+func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, heartbeatInterval time.Duration) error {
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -180,7 +308,7 @@ func runConnection(ctx context.Context, conn *cws.Conn, session *gateway.Session
 	}()
 
 	go func() {
-		errCh <- runCommandLoop(loopCtx, conn, session, mgr, runtimeName)
+		errCh <- runCommandLoop(loopCtx, conn, session, mgr, runtimeName, runtimeStreamsTurnEvents)
 	}()
 
 	err := <-errCh
@@ -192,7 +320,7 @@ func runConnection(ctx context.Context, conn *cws.Conn, session *gateway.Session
 	return nil
 }
 
-func sendLiveSnapshot(session *gateway.Session, machine domain.Machine, mgr *manager.Manager, runtimeName string) error {
+func sendLiveSnapshot(session *clientSession, machine domain.Machine, mgr *manager.Manager, runtimeName string) error {
 	snap, err := mgr.Snapshot(runtimeName)
 	if err != nil {
 		return err
@@ -201,7 +329,7 @@ func sendLiveSnapshot(session *gateway.Session, machine domain.Machine, mgr *man
 	return sendInitialSnapshot(session, machine, snap)
 }
 
-func sendInitialSnapshot(session *gateway.Session, machine domain.Machine, snap snapshot.Snapshot) error {
+func sendInitialSnapshot(session *clientSession, machine domain.Machine, snap snapshot.Snapshot) error {
 	if err := session.MachineSnapshot(machine); err != nil {
 		return err
 	}
@@ -211,7 +339,7 @@ func sendInitialSnapshot(session *gateway.Session, machine domain.Machine, snap 
 	return session.EnvironmentSnapshot(snap.Environment)
 }
 
-func runHeartbeatLoop(ctx context.Context, session *gateway.Session, interval time.Duration) error {
+func runHeartbeatLoop(ctx context.Context, session *clientSession, interval time.Duration) error {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -227,7 +355,7 @@ func runHeartbeatLoop(ctx context.Context, session *gateway.Session, interval ti
 	}
 }
 
-func runCommandLoop(ctx context.Context, conn *cws.Conn, session *gateway.Session, mgr *manager.Manager, runtimeName string) error {
+func runCommandLoop(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -246,13 +374,13 @@ func runCommandLoop(ctx context.Context, conn *cws.Conn, session *gateway.Sessio
 			continue
 		}
 
-		if err := handleCommandEnvelope(session, mgr, runtimeName, envelope); err != nil {
+		if err := handleCommandEnvelope(session, mgr, runtimeName, runtimeStreamsTurnEvents, envelope); err != nil {
 			return err
 		}
 	}
 }
 
-func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runtimeName string, envelope protocol.Envelope) error {
+func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, envelope protocol.Envelope) error {
 	switch envelope.Name {
 	case "thread.create":
 		var payload protocol.ThreadCreateCommandPayload
@@ -343,6 +471,9 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 		}); err != nil {
 			return err
 		}
+		if runtimeStreamsTurnEvents {
+			return nil
+		}
 
 		for _, delta := range result.Deltas {
 			if err := session.TurnDelta(envelope.RequestID, protocol.TurnDeltaPayload{
@@ -382,6 +513,9 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 			ThreadID: result.ThreadID,
 		}); err != nil {
 			return err
+		}
+		if runtimeStreamsTurnEvents {
+			return nil
 		}
 
 		for _, delta := range result.Deltas {
@@ -430,7 +564,7 @@ func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runti
 	}
 }
 
-func refreshThreadSnapshot(session *gateway.Session, mgr *manager.Manager, runtimeName string) error {
+func refreshThreadSnapshot(session *clientSession, mgr *manager.Manager, runtimeName string) error {
 	threads, err := mgr.Threads(runtimeName)
 	if err != nil {
 		return err

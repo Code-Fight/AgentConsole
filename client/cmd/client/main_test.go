@@ -11,7 +11,6 @@ import (
 	agentregistry "code-agent-gateway/client/internal/agent/registry"
 	agenttypes "code-agent-gateway/client/internal/agent/types"
 	"code-agent-gateway/client/internal/config"
-	"code-agent-gateway/client/internal/gateway"
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
 	"code-agent-gateway/common/transport"
@@ -55,7 +54,7 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 	mgr := manager.New(registry)
 
 	var sent [][]byte
-	session := gateway.NewSession("machine-01", func(msg []byte) error {
+	session := newClientSession("machine-01", func(msg []byte) error {
 		sent = append(sent, append([]byte(nil), msg...))
 		return nil
 	}, func() time.Time {
@@ -89,7 +88,7 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 func TestHandleCommandEnvelopeRejectsUnsupportedCommands(t *testing.T) {
 	session, sent := newRecordingSession()
 
-	err := handleCommandEnvelope(session, nil, "codex", protocol.Envelope{
+	err := handleCommandEnvelope(session, nil, "codex", false, protocol.Envelope{
 		Name:      "unknown.command",
 		RequestID: "req-1",
 		Payload:   []byte(`{}`),
@@ -111,7 +110,7 @@ func TestHandleCommandEnvelopeRejectsFailedTurnStartWithoutDisconnecting(t *test
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	err := handleCommandEnvelope(session, mgr, "codex", protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, "codex", false, protocol.Envelope{
 		Name:      "turn.start",
 		RequestID: "req-2",
 		Payload:   []byte(`{"threadId":"thread-99","input":"run tests"}`),
@@ -129,6 +128,74 @@ func TestHandleCommandEnvelopeRejectsFailedTurnStartWithoutDisconnecting(t *test
 	}
 	if rejection.Reason == "" {
 		t.Fatal("expected rejection reason")
+	}
+}
+
+func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) {
+	runtime := &notifyingRuntime{
+		startTurnResult: agenttypes.StartTurnResult{
+			TurnID:   "turn-async-1",
+			ThreadID: "thread-01",
+		},
+	}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	if !bindRuntimeTurnEvents(runtime, session) {
+		t.Fatal("expected runtime turn event binding")
+	}
+
+	err := handleCommandEnvelope(session, mgr, "codex", true, protocol.Envelope{
+		Name:      "turn.start",
+		RequestID: "req-async-1",
+		Payload:   []byte(`{"threadId":"thread-01","input":"run tests"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*sent) != 1 {
+		t.Fatalf("expected command ack only, got %d frames", len(*sent))
+	}
+
+	if decodeEnvelope(t, (*sent)[0]).Name != "command.completed" {
+		t.Fatalf("unexpected ack envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	}
+
+	runtime.emit(agenttypes.RuntimeTurnEvent{
+		Type:     agenttypes.RuntimeTurnEventTypeStarted,
+		ThreadID: "thread-01",
+		TurnID:   "turn-async-1",
+	})
+	runtime.emit(agenttypes.RuntimeTurnEvent{
+		Type:     agenttypes.RuntimeTurnEventTypeDelta,
+		ThreadID: "thread-01",
+		TurnID:   "turn-async-1",
+		Sequence: 1,
+		Delta:    "hello",
+	})
+	runtime.emit(agenttypes.RuntimeTurnEvent{
+		Type: agenttypes.RuntimeTurnEventTypeCompleted,
+		Turn: domain.Turn{
+			TurnID:   "turn-async-1",
+			ThreadID: "thread-01",
+			Status:   domain.TurnStatusCompleted,
+		},
+	})
+
+	if len(*sent) != 4 {
+		t.Fatalf("expected ack plus 3 runtime events, got %d frames", len(*sent))
+	}
+	if decodeEnvelope(t, (*sent)[1]).Name != "turn.started" {
+		t.Fatalf("unexpected started envelope: %+v", decodeEnvelope(t, (*sent)[1]))
+	}
+	if decodeEnvelope(t, (*sent)[2]).Name != "turn.delta" {
+		t.Fatalf("unexpected delta envelope: %+v", decodeEnvelope(t, (*sent)[2]))
+	}
+	if decodeEnvelope(t, (*sent)[3]).Name != "turn.completed" {
+		t.Fatalf("unexpected completed envelope: %+v", decodeEnvelope(t, (*sent)[3]))
 	}
 }
 
@@ -190,9 +257,9 @@ func TestBuildRuntimeUsesAppServerByDefault(t *testing.T) {
 	}
 }
 
-func newRecordingSession() (*gateway.Session, *[][]byte) {
+func newRecordingSession() (*clientSession, *[][]byte) {
 	sent := make([][]byte, 0, 1)
-	session := gateway.NewSession("machine-01", func(msg []byte) error {
+	session := newClientSession("machine-01", func(msg []byte) error {
 		sent = append(sent, append([]byte(nil), msg...))
 		return nil
 	}, func() time.Time {
@@ -200,6 +267,17 @@ func newRecordingSession() (*gateway.Session, *[][]byte) {
 	})
 
 	return session, &sent
+}
+
+func decodeEnvelope(t *testing.T, raw []byte) protocol.Envelope {
+	t.Helper()
+
+	var envelope protocol.Envelope
+	if err := transport.Decode(raw, &envelope); err != nil {
+		t.Fatalf("decode envelope failed: %v", err)
+	}
+
+	return envelope
 }
 
 func decodeThreadSnapshotPayload(t *testing.T, raw []byte) protocol.ThreadSnapshotPayload {
@@ -232,4 +310,55 @@ func decodeRejectedPayload(t *testing.T, raw []byte) protocol.CommandRejectedPay
 	}
 
 	return payload
+}
+
+type notifyingRuntime struct {
+	startTurnResult agenttypes.StartTurnResult
+	handler         func(agenttypes.RuntimeTurnEvent)
+}
+
+func (r *notifyingRuntime) ListThreads() ([]domain.Thread, error) {
+	return nil, nil
+}
+
+func (r *notifyingRuntime) ListEnvironment() ([]domain.EnvironmentResource, error) {
+	return nil, nil
+}
+
+func (r *notifyingRuntime) CreateThread(agenttypes.CreateThreadParams) (domain.Thread, error) {
+	return domain.Thread{}, nil
+}
+
+func (r *notifyingRuntime) ReadThread(string) (domain.Thread, error) {
+	return domain.Thread{}, nil
+}
+
+func (r *notifyingRuntime) ResumeThread(string) (domain.Thread, error) {
+	return domain.Thread{}, nil
+}
+
+func (r *notifyingRuntime) ArchiveThread(string) error {
+	return nil
+}
+
+func (r *notifyingRuntime) StartTurn(agenttypes.StartTurnParams) (agenttypes.StartTurnResult, error) {
+	return r.startTurnResult, nil
+}
+
+func (r *notifyingRuntime) SteerTurn(agenttypes.SteerTurnParams) (agenttypes.SteerTurnResult, error) {
+	return agenttypes.SteerTurnResult{}, nil
+}
+
+func (r *notifyingRuntime) InterruptTurn(agenttypes.InterruptTurnParams) (domain.Turn, error) {
+	return domain.Turn{}, nil
+}
+
+func (r *notifyingRuntime) SetTurnEventHandler(handler func(agenttypes.RuntimeTurnEvent)) {
+	r.handler = handler
+}
+
+func (r *notifyingRuntime) emit(event agenttypes.RuntimeTurnEvent) {
+	if r.handler != nil {
+		r.handler(event)
+	}
 }

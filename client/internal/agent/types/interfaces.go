@@ -27,6 +27,28 @@ type TurnDelta struct {
 	Delta    string
 }
 
+type RuntimeTurnEventType string
+
+const (
+	RuntimeTurnEventTypeStarted   RuntimeTurnEventType = "turn.started"
+	RuntimeTurnEventTypeDelta     RuntimeTurnEventType = "turn.delta"
+	RuntimeTurnEventTypeCompleted RuntimeTurnEventType = "turn.completed"
+)
+
+type RuntimeTurnEvent struct {
+	Type      RuntimeTurnEventType
+	RequestID string
+	ThreadID  string
+	TurnID    string
+	Sequence  int
+	Delta     string
+	Turn      domain.Turn
+}
+
+type RuntimeTurnEventSource interface {
+	SetTurnEventHandler(func(RuntimeTurnEvent))
+}
+
 type StartTurnResult struct {
 	TurnID   string
 	ThreadID string

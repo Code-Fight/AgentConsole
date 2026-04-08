@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -9,7 +10,8 @@ import (
 )
 
 type fakeRunner struct {
-	call func(method string, payload any, out any) error
+	call                func(method string, payload any, out any) error
+	notificationHandler func(jsonRPCNotification)
 }
 
 func (r *fakeRunner) Call(method string, payload any, out any) error {
@@ -17,6 +19,28 @@ func (r *fakeRunner) Call(method string, payload any, out any) error {
 		return r.call(method, payload, out)
 	}
 	return nil
+}
+
+func (r *fakeRunner) SetNotificationHandler(handler func(jsonRPCNotification)) {
+	r.notificationHandler = handler
+}
+
+func (r *fakeRunner) emitNotification(t *testing.T, method string, params any) {
+	t.Helper()
+
+	if r.notificationHandler == nil {
+		t.Fatal("notification handler not registered")
+	}
+
+	raw, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal notification params failed: %v", err)
+	}
+
+	r.notificationHandler(jsonRPCNotification{
+		Method: method,
+		Params: raw,
+	})
 }
 
 func TestClientListThreads(t *testing.T) {
@@ -299,6 +323,54 @@ func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 				t.Fatalf("unexpected result: %+v", result)
 			}
 		})
+	}
+}
+
+func TestAppServerClientTranslatesNotificationsIntoTurnEvents(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 4)
+	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		events = append(events, event)
+	})
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+	runner.emitNotification(t, "item/agentMessage/delta", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"delta":    "hello",
+	})
+	runner.emitNotification(t, "item/agentMessage/delta", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"delta":    " world",
+	})
+	runner.emitNotification(t, "turn/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+
+	if len(events) != 4 {
+		t.Fatalf("unexpected event count: %d", len(events))
+	}
+	if events[0].Type != agenttypes.RuntimeTurnEventTypeStarted || events[0].ThreadID != "thread-1" || events[0].TurnID != "turn-1" {
+		t.Fatalf("unexpected started event: %+v", events[0])
+	}
+	if events[1].Type != agenttypes.RuntimeTurnEventTypeDelta || events[1].Sequence != 1 || events[1].Delta != "hello" {
+		t.Fatalf("unexpected first delta event: %+v", events[1])
+	}
+	if events[2].Type != agenttypes.RuntimeTurnEventTypeDelta || events[2].Sequence != 2 || events[2].Delta != " world" {
+		t.Fatalf("unexpected second delta event: %+v", events[2])
+	}
+	if events[3].Type != agenttypes.RuntimeTurnEventTypeCompleted {
+		t.Fatalf("unexpected completed event: %+v", events[3])
+	}
+	if events[3].Turn.ThreadID != "thread-1" || events[3].Turn.TurnID != "turn-1" || events[3].Turn.Status != domain.TurnStatusCompleted {
+		t.Fatalf("unexpected completed turn: %+v", events[3].Turn)
 	}
 }
 

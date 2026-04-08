@@ -144,9 +144,9 @@ func (h *ClientHub) Handler() http.Handler {
 			case protocol.CategorySystem:
 				h.handleSystemEnvelope(conn, envelope, &registeredMachineID)
 			case protocol.CategoryEvent:
-				h.handleEventEnvelope(envelope)
+				h.handleEventEnvelope(conn, envelope)
 			case protocol.CategorySnapshot:
-				h.handleSnapshotEnvelope(envelope)
+				h.handleSnapshotEnvelope(conn, envelope)
 			}
 		}
 	})
@@ -186,7 +186,11 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 	}
 }
 
-func (h *ClientHub) handleEventEnvelope(envelope protocol.Envelope) {
+func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelope) {
+	if !h.isCurrentOwner(conn, envelope.MachineID) {
+		return
+	}
+
 	h.mu.RLock()
 	consoleHub := h.consoleHub
 	h.mu.RUnlock()
@@ -374,8 +378,8 @@ func (h *ClientHub) failPendingWaiters(waiters []pendingCommandWaiter) {
 	}
 }
 
-func (h *ClientHub) handleSnapshotEnvelope(envelope protocol.Envelope) {
-	if envelope.MachineID == "" {
+func (h *ClientHub) handleSnapshotEnvelope(conn *cws.Conn, envelope protocol.Envelope) {
+	if !h.isCurrentOwner(conn, envelope.MachineID) {
 		return
 	}
 
@@ -468,4 +472,15 @@ func normalizeEnvironment(items []domain.EnvironmentResource, machineID string) 
 		normalized = append(normalized, resource)
 	}
 	return normalized
+}
+
+func (h *ClientHub) isCurrentOwner(conn *cws.Conn, machineID string) bool {
+	if conn == nil || machineID == "" {
+		return false
+	}
+
+	h.mu.RLock()
+	current := h.clients[machineID]
+	h.mu.RUnlock()
+	return current != nil && current.conn == conn
 }

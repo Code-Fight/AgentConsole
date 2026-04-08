@@ -109,6 +109,11 @@ type TurnDeltaPayload struct {
 	Delta    string `json:"delta"`
 }
 
+type TurnStartedPayload struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+}
+
 type TurnCompletedPayload struct {
 	Turn domain.Turn `json:"turn"`
 }
