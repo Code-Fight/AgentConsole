@@ -9,6 +9,11 @@ function getDefaultWsUrl(): string {
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? getDefaultWsUrl();
 
+export function buildThreadSocketUrl(threadId: string): string {
+  const separator = WS_URL.includes("?") ? "&" : "?";
+  return `${WS_URL}${separator}threadId=${encodeURIComponent(threadId)}`;
+}
+
 export function connectConsoleSocket(
   onMessage: (event: MessageEvent<string>) => void,
 ): () => void {

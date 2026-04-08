@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { connectConsoleSocket } from "./ws";
+import { buildThreadSocketUrl, connectConsoleSocket } from "./ws";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -37,4 +37,11 @@ test("uses an origin-aware websocket default url", () => {
   expect(socket.addEventListener).toHaveBeenCalledWith("message", onMessage);
   expect(socket.removeEventListener).toHaveBeenCalledWith("message", onMessage);
   expect(socket.close).toHaveBeenCalledOnce();
+});
+
+test("builds thread websocket url for workspace placeholders", () => {
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+  const expectedUrl = `${protocol}://${window.location.host}/ws?threadId=thread%201`;
+
+  expect(buildThreadSocketUrl("thread 1")).toBe(expectedUrl);
 });

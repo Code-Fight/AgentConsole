@@ -1,5 +1,15 @@
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "/api";
 
+export function buildThreadApiPath(threadId: string, resource?: string): string {
+  const encodedThreadId = encodeURIComponent(threadId);
+  if (!resource) {
+    return `/threads/${encodedThreadId}`;
+  }
+
+  const normalizedResource = resource.replace(/^\/+/, "");
+  return `/threads/${encodedThreadId}/${normalizedResource}`;
+}
+
 export async function http<T>(
   path: string,
   init?: RequestInit,

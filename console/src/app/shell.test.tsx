@@ -12,7 +12,8 @@ test("renders the console shell", () => {
 
   expect(screen.getByText("Overview")).toBeInTheDocument();
   expect(screen.getByText("Machines")).toBeInTheDocument();
-  expect(screen.getByText("Threads")).toBeInTheDocument();
+  const threadsLink = screen.getByRole("link", { name: "Threads" });
   expect(screen.getByText("Environment")).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "Threads" })).toBeInTheDocument();
+  expect(threadsLink).toBeInTheDocument();
+  expect(threadsLink).toHaveAttribute("href", "/threads");
 });

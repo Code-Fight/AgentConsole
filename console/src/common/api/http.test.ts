@@ -1,5 +1,5 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { http } from "./http";
+import { buildThreadApiPath, http } from "./http";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -23,4 +23,11 @@ test("preserves default accept header when caller provides custom headers", asyn
 
   expect(headers.get("Accept")).toBe("application/json");
   expect(headers.get("Authorization")).toBe("Bearer token");
+});
+
+test("builds thread api path for workspace placeholders", () => {
+  expect(buildThreadApiPath("thread-1")).toBe("/threads/thread-1");
+  expect(buildThreadApiPath("thread 1", "messages")).toBe(
+    "/threads/thread%201/messages",
+  );
 });
