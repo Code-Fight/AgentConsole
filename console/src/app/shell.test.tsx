@@ -12,5 +12,6 @@ test("renders the console shell", () => {
 
   expect(screen.getByText("Overview")).toBeInTheDocument();
   expect(screen.getByText("Machines")).toBeInTheDocument();
+  expect(screen.getByText("Threads")).toBeInTheDocument();
   expect(screen.getByText("Environment")).toBeInTheDocument();
 });
