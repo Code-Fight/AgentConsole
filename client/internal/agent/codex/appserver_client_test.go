@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	agenttypes "code-agent-gateway/client/internal/agent/types"
 	"code-agent-gateway/common/domain"
 )
 
@@ -130,6 +131,71 @@ func TestClientListEnvironment(t *testing.T) {
 	}
 }
 
+func TestClientCreateThreadUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name    string
+		title   string
+		callErr error
+	}{
+		{
+			name:  "uses thread/start payload keys",
+			title: "Investigate flaky test",
+		},
+		{
+			name:    "propagates runner error",
+			title:   "Build failure",
+			callErr: errors.New("thread start failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					record := out.(*ThreadRecord)
+					*record = ThreadRecord{ID: "thread-1", Title: tt.title, Status: domain.ThreadStatusIdle}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			thread, err := client.CreateThread(agenttypes.CreateThreadParams{Title: tt.title})
+			if gotMethod != "thread/start" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			if payloadMap["title"] != tt.title {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if thread.ThreadID != "thread-1" || thread.Title != tt.title {
+				t.Fatalf("unexpected thread: %+v", thread)
+			}
+		})
+	}
+}
+
 func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -162,14 +228,19 @@ func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 					if tt.callErr != nil {
 						return tt.callErr
 					}
-					result := out.(*map[string]any)
-					*result = map[string]any{"turnId": "turn-1"}
+					result := out.(*struct {
+						TurnID string `json:"turnId"`
+					})
+					result.TurnID = "turn-1"
 					return nil
 				},
 			}
 
 			client := NewAppServerClient(runner)
-			_, err := client.StartTurn(tt.threadID, tt.prompt)
+			result, err := client.StartTurn(agenttypes.StartTurnParams{
+				ThreadID: tt.threadID,
+				Input:    tt.prompt,
+			})
 			if gotMethod != "turn/start" {
 				t.Fatalf("unexpected method: %s", gotMethod)
 			}
@@ -190,6 +261,9 @@ func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if result.TurnID != "turn-1" || result.ThreadID != tt.threadID {
+				t.Fatalf("unexpected result: %+v", result)
 			}
 		})
 	}

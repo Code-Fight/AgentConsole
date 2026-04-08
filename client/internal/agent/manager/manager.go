@@ -33,6 +33,22 @@ func (m *Manager) Environment(runtimeName string) ([]domain.EnvironmentResource,
 	return runtime.ListEnvironment()
 }
 
+func (m *Manager) CreateThread(runtimeName string, params types.CreateThreadParams) (domain.Thread, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return domain.Thread{}, err
+	}
+	return runtime.CreateThread(params)
+}
+
+func (m *Manager) StartTurn(runtimeName string, params types.StartTurnParams) (types.StartTurnResult, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return types.StartTurnResult{}, err
+	}
+	return runtime.StartTurn(params)
+}
+
 func (m *Manager) Snapshot(runtimeName string) (snapshot.Snapshot, error) {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {

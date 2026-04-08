@@ -1,6 +1,10 @@
 package routing
 
-import "sync"
+import (
+	"sync"
+
+	"code-agent-gateway/common/domain"
+)
 
 type Router struct {
 	mu      sync.RWMutex
@@ -15,6 +19,29 @@ func (r *Router) TrackThread(threadID string, machineID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.threads[threadID] = machineID
+}
+
+func (r *Router) ReplaceSnapshot(machineID string, threads []domain.Thread) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for threadID, ownerMachineID := range r.threads {
+		if ownerMachineID == machineID {
+			delete(r.threads, threadID)
+		}
+	}
+
+	for _, thread := range threads {
+		if thread.ThreadID == "" {
+			continue
+		}
+
+		ownerMachineID := thread.MachineID
+		if ownerMachineID == "" {
+			ownerMachineID = machineID
+		}
+		r.threads[thread.ThreadID] = ownerMachineID
+	}
 }
 
 func (r *Router) ResolveThread(threadID string) (string, bool) {

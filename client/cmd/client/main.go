@@ -2,16 +2,23 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
 	"code-agent-gateway/client/internal/agent/codex"
+	"code-agent-gateway/client/internal/agent/manager"
+	agentregistry "code-agent-gateway/client/internal/agent/registry"
+	agenttypes "code-agent-gateway/client/internal/agent/types"
 	"code-agent-gateway/client/internal/config"
 	"code-agent-gateway/client/internal/gateway"
 	"code-agent-gateway/client/internal/snapshot"
 	"code-agent-gateway/common/domain"
+	"code-agent-gateway/common/protocol"
+	"code-agent-gateway/common/transport"
 	cws "github.com/coder/websocket"
 )
 
@@ -19,6 +26,7 @@ func main() {
 	const heartbeatInterval = 30 * time.Second
 	const connectTimeout = 5 * time.Second
 	const reconnectMaxBackoff = 5 * time.Second
+	const runtimeName = "codex"
 
 	cfg := config.Read()
 
@@ -45,7 +53,11 @@ func main() {
 		},
 	)
 
-	snap, err := snapshot.Build(adapter)
+	runtimeRegistry := agentregistry.New()
+	runtimeRegistry.Register(runtimeName, adapter)
+	agentManager := manager.New(runtimeRegistry)
+
+	snap, err := agentManager.Snapshot(runtimeName)
 	if err != nil {
 		panic(err)
 	}
@@ -97,7 +109,7 @@ func main() {
 		}
 
 		backoff = 0
-		if err := runHeartbeatLoop(shutdownCtx, session, heartbeatInterval); err != nil {
+		if err := runConnection(shutdownCtx, conn, session, agentManager, runtimeName, heartbeatInterval); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "reconnect")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
@@ -109,6 +121,29 @@ func main() {
 		_ = conn.Close(cws.StatusNormalClosure, "done")
 		return
 	}
+}
+
+func runConnection(ctx context.Context, conn *cws.Conn, session *gateway.Session, mgr *manager.Manager, runtimeName string, heartbeatInterval time.Duration) error {
+	loopCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	errCh := make(chan error, 2)
+
+	go func() {
+		errCh <- runHeartbeatLoop(loopCtx, session, heartbeatInterval)
+	}()
+
+	go func() {
+		errCh <- runCommandLoop(loopCtx, conn, session, mgr, runtimeName)
+	}()
+
+	err := <-errCh
+	cancel()
+	if err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+
+	return nil
 }
 
 func sendInitialSnapshot(session *gateway.Session, machine domain.Machine, snap snapshot.Snapshot) error {
@@ -134,6 +169,102 @@ func runHeartbeatLoop(ctx context.Context, session *gateway.Session, interval ti
 				return err
 			}
 		}
+	}
+}
+
+func runCommandLoop(ctx context.Context, conn *cws.Conn, session *gateway.Session, mgr *manager.Manager, runtimeName string) error {
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+
+		var envelope protocol.Envelope
+		if err := transport.Decode(data, &envelope); err != nil {
+			continue
+		}
+
+		if envelope.Category != protocol.CategoryCommand {
+			continue
+		}
+
+		if err := handleCommandEnvelope(session, mgr, runtimeName, envelope); err != nil {
+			return err
+		}
+	}
+}
+
+func handleCommandEnvelope(session *gateway.Session, mgr *manager.Manager, runtimeName string, envelope protocol.Envelope) error {
+	switch envelope.Name {
+	case "thread.create":
+		var payload protocol.ThreadCreateCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return err
+		}
+
+		thread, err := mgr.CreateThread(runtimeName, agenttypes.CreateThreadParams{
+			Title: payload.Title,
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadCreateCommandResult{
+			Thread: thread,
+		}); err != nil {
+			return err
+		}
+
+		threads, err := mgr.Threads(runtimeName)
+		if err != nil {
+			return err
+		}
+
+		return session.ThreadSnapshot(threads)
+	case "turn.start":
+		var payload protocol.TurnStartCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return err
+		}
+
+		result, err := mgr.StartTurn(runtimeName, agenttypes.StartTurnParams{
+			ThreadID: payload.ThreadID,
+			Input:    payload.Input,
+		})
+		if err != nil {
+			return err
+		}
+
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.TurnStartCommandResult{
+			TurnID:   result.TurnID,
+			ThreadID: result.ThreadID,
+		}); err != nil {
+			return err
+		}
+
+		for _, delta := range result.Deltas {
+			if err := session.TurnDelta(envelope.RequestID, protocol.TurnDeltaPayload{
+				ThreadID: result.ThreadID,
+				TurnID:   result.TurnID,
+				Sequence: delta.Sequence,
+				Delta:    delta.Delta,
+			}); err != nil {
+				return err
+			}
+		}
+
+		return session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
+			Turn: domain.Turn{
+				TurnID:   result.TurnID,
+				ThreadID: result.ThreadID,
+				Status:   domain.TurnStatusCompleted,
+			},
+		})
+	default:
+		return nil
 	}
 }
 

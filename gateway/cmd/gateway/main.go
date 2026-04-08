@@ -9,6 +9,7 @@ import (
 	"code-agent-gateway/gateway/internal/api"
 	"code-agent-gateway/gateway/internal/config"
 	"code-agent-gateway/gateway/internal/registry"
+	"code-agent-gateway/gateway/internal/routing"
 	"code-agent-gateway/gateway/internal/runtimeindex"
 	ws "code-agent-gateway/gateway/internal/websocket"
 )
@@ -27,6 +28,7 @@ func main() {
 func buildServerHandler() http.Handler {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()
-	clientHub := ws.NewClientHubWithStores(reg, idx)
-	return api.NewServer(reg, idx, clientHub.Handler())
+	router := routing.NewRouter()
+	clientHub := ws.NewClientHubWithStores(reg, idx, router)
+	return api.NewServer(reg, idx, router, clientHub, clientHub.Handler())
 }

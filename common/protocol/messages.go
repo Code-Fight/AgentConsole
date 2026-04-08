@@ -29,6 +29,40 @@ type EnvironmentSnapshotPayload struct {
 	Environment []domain.EnvironmentResource `json:"environment"`
 }
 
+type ThreadCreateCommandPayload struct {
+	Title string `json:"title,omitempty"`
+}
+
+type TurnStartCommandPayload struct {
+	ThreadID string `json:"threadId"`
+	Input    string `json:"input"`
+}
+
+type CommandCompletedPayload struct {
+	CommandName string          `json:"commandName"`
+	Result      json.RawMessage `json:"result,omitempty"`
+}
+
+type ThreadCreateCommandResult struct {
+	Thread domain.Thread `json:"thread"`
+}
+
+type TurnStartCommandResult struct {
+	TurnID   string `json:"turnId"`
+	ThreadID string `json:"threadId"`
+}
+
+type TurnDeltaPayload struct {
+	ThreadID string `json:"threadId"`
+	TurnID   string `json:"turnId"`
+	Sequence int    `json:"sequence"`
+	Delta    string `json:"delta"`
+}
+
+type TurnCompletedPayload struct {
+	Turn domain.Turn `json:"turn"`
+}
+
 type Envelope struct {
 	Version   string          `json:"version"`
 	Category  Category        `json:"category"`

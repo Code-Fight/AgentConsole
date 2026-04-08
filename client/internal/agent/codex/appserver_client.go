@@ -50,6 +50,29 @@ func (c *AppServerClient) ListThreads() ([]domain.Thread, error) {
 	return threads, nil
 }
 
+func (c *AppServerClient) CreateThread(params agenttypes.CreateThreadParams) (domain.Thread, error) {
+	var record ThreadRecord
+	if err := c.runner.Call("thread/start", map[string]any{"title": params.Title}, &record); err != nil {
+		return domain.Thread{}, err
+	}
+
+	return record.toDomain(), nil
+}
+
+func (c *AppServerClient) StartTurn(params agenttypes.StartTurnParams) (agenttypes.StartTurnResult, error) {
+	var out struct {
+		TurnID string `json:"turnId"`
+	}
+	if err := c.runner.Call("turn/start", map[string]any{"threadId": params.ThreadID, "input": params.Input}, &out); err != nil {
+		return agenttypes.StartTurnResult{}, err
+	}
+
+	return agenttypes.StartTurnResult{
+		TurnID:   out.TurnID,
+		ThreadID: params.ThreadID,
+	}, nil
+}
+
 func (r ThreadRecord) toDomain() domain.Thread {
 	threadID := r.ThreadID
 	if threadID == "" {

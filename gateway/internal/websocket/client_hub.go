@@ -2,23 +2,32 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
 	"code-agent-gateway/common/transport"
+	"code-agent-gateway/common/version"
 	"code-agent-gateway/gateway/internal/registry"
+	"code-agent-gateway/gateway/internal/routing"
 	"code-agent-gateway/gateway/internal/runtimeindex"
 	cws "github.com/coder/websocket"
 )
 
 type ClientHub struct {
 	mu                sync.RWMutex
-	clients           map[string]*cws.Conn
+	clients           map[string]*clientConn
 	registry          *registry.Store
 	runtimeIndex      *runtimeindex.Store
+	router            *routing.Router
 	snapshotByMachine map[string]machineSnapshotState
+	pendingCommands   map[string]chan protocol.CommandCompletedPayload
+	nextRequestID     atomic.Uint64
 }
 
 type machineSnapshotState struct {
@@ -26,16 +35,28 @@ type machineSnapshotState struct {
 	environment []domain.EnvironmentResource
 }
 
+type clientConn struct {
+	conn    *cws.Conn
+	writeMu sync.Mutex
+}
+
 func NewClientHub() *ClientHub {
 	return NewClientHubWithStores(nil, nil)
 }
 
-func NewClientHubWithStores(reg *registry.Store, idx *runtimeindex.Store) *ClientHub {
+func NewClientHubWithStores(reg *registry.Store, idx *runtimeindex.Store, routers ...*routing.Router) *ClientHub {
+	var routerStore *routing.Router
+	if len(routers) > 0 {
+		routerStore = routers[0]
+	}
+
 	return &ClientHub{
-		clients:           map[string]*cws.Conn{},
+		clients:           map[string]*clientConn{},
 		registry:          reg,
 		runtimeIndex:      idx,
+		router:            routerStore,
 		snapshotByMachine: map[string]machineSnapshotState{},
+		pendingCommands:   map[string]chan protocol.CommandCompletedPayload{},
 	}
 }
 
@@ -63,7 +84,7 @@ func (h *ClientHub) Handler() http.Handler {
 
 			markOffline := false
 			h.mu.Lock()
-			if h.clients[registeredMachineID] == conn {
+			if existing := h.clients[registeredMachineID]; existing != nil && existing.conn == conn {
 				delete(h.clients, registeredMachineID)
 				markOffline = true
 			}
@@ -88,6 +109,8 @@ func (h *ClientHub) Handler() http.Handler {
 			switch envelope.Category {
 			case protocol.CategorySystem:
 				h.handleSystemEnvelope(conn, envelope, &registeredMachineID)
+			case protocol.CategoryEvent:
+				h.handleEventEnvelope(envelope)
 			case protocol.CategorySnapshot:
 				h.handleSnapshotEnvelope(envelope)
 			}
@@ -106,11 +129,13 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 
 		previousMachineID := ""
 		h.mu.Lock()
-		if *registeredMachineID != "" && *registeredMachineID != envelope.MachineID && h.clients[*registeredMachineID] == conn {
-			delete(h.clients, *registeredMachineID)
-			previousMachineID = *registeredMachineID
+		if *registeredMachineID != "" && *registeredMachineID != envelope.MachineID {
+			if existing := h.clients[*registeredMachineID]; existing != nil && existing.conn == conn {
+				delete(h.clients, *registeredMachineID)
+				previousMachineID = *registeredMachineID
+			}
 		}
-		h.clients[envelope.MachineID] = conn
+		h.clients[envelope.MachineID] = &clientConn{conn: conn}
 		*registeredMachineID = envelope.MachineID
 		h.mu.Unlock()
 
@@ -127,6 +152,87 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 		}
 	case "client.heartbeat":
 		return
+	}
+}
+
+func (h *ClientHub) handleEventEnvelope(envelope protocol.Envelope) {
+	if envelope.Name != "command.completed" || envelope.RequestID == "" {
+		return
+	}
+
+	var payload protocol.CommandCompletedPayload
+	if err := transport.Decode(envelope.Payload, &payload); err != nil {
+		return
+	}
+
+	h.mu.Lock()
+	waiter := h.pendingCommands[envelope.RequestID]
+	delete(h.pendingCommands, envelope.RequestID)
+	h.mu.Unlock()
+
+	if waiter == nil {
+		return
+	}
+
+	select {
+	case waiter <- payload:
+	default:
+	}
+}
+
+func (h *ClientHub) SendCommand(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+	requestID := fmt.Sprintf("req-%d", h.nextRequestID.Add(1))
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return protocol.CommandCompletedPayload{}, err
+	}
+
+	h.mu.RLock()
+	client := h.clients[machineID]
+	h.mu.RUnlock()
+	if client == nil {
+		return protocol.CommandCompletedPayload{}, fmt.Errorf("machine %q is not connected", machineID)
+	}
+
+	envelope := protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryCommand,
+		Name:      name,
+		RequestID: requestID,
+		MachineID: machineID,
+		Timestamp: time.Now().UTC().Format(time.RFC3339),
+		Payload:   payloadJSON,
+	}
+
+	encoded, err := transport.Encode(envelope)
+	if err != nil {
+		return protocol.CommandCompletedPayload{}, err
+	}
+
+	responseCh := make(chan protocol.CommandCompletedPayload, 1)
+
+	h.mu.Lock()
+	h.pendingCommands[requestID] = responseCh
+	h.mu.Unlock()
+
+	client.writeMu.Lock()
+	err = client.conn.Write(ctx, cws.MessageText, encoded)
+	client.writeMu.Unlock()
+	if err != nil {
+		h.mu.Lock()
+		delete(h.pendingCommands, requestID)
+		h.mu.Unlock()
+		return protocol.CommandCompletedPayload{}, err
+	}
+
+	select {
+	case <-ctx.Done():
+		h.mu.Lock()
+		delete(h.pendingCommands, requestID)
+		h.mu.Unlock()
+		return protocol.CommandCompletedPayload{}, ctx.Err()
+	case response := <-responseCh:
+		return response, nil
 	}
 }
 
@@ -158,17 +264,18 @@ func (h *ClientHub) handleSnapshotEnvelope(envelope protocol.Envelope) {
 		}
 		h.registry.Upsert(machine)
 	case "thread.snapshot":
-		if h.runtimeIndex == nil {
-			return
-		}
-
 		var payload protocol.ThreadSnapshotPayload
 		if err := transport.Decode(envelope.Payload, &payload); err != nil {
 			return
 		}
 
 		threads := normalizeThreads(payload.Threads, envelope.MachineID)
-		h.replaceMachineSnapshot(envelope.MachineID, threads, nil, true, false)
+		if h.runtimeIndex != nil {
+			h.replaceMachineSnapshot(envelope.MachineID, threads, nil, true, false)
+		}
+		if h.router != nil {
+			h.router.ReplaceSnapshot(envelope.MachineID, threads)
+		}
 	case "environment.snapshot":
 		if h.runtimeIndex == nil {
 			return

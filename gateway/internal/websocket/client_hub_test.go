@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/json"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"code-agent-gateway/common/transport"
 	"code-agent-gateway/common/version"
 	"code-agent-gateway/gateway/internal/registry"
+	"code-agent-gateway/gateway/internal/routing"
 	"code-agent-gateway/gateway/internal/runtimeindex"
 	"github.com/coder/websocket"
 )
@@ -82,7 +84,8 @@ func TestClientHubReconnectKeepsLatestConnectionOwner(t *testing.T) {
 func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()
-	hub := NewClientHubWithStores(reg, idx)
+	router := routing.NewRouter()
+	hub := NewClientHubWithStores(reg, idx, router)
 	server := httptest.NewServer(hub.Handler())
 	defer server.Close()
 
@@ -168,6 +171,105 @@ func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 
 		return environment[0].ResourceID == "skill-01" && environment[0].MachineID == "machine-01"
 	})
+
+	machineID, ok := router.ResolveThread("thread-01")
+	if !ok || machineID != "machine-01" {
+		t.Fatalf("router resolved (%q, %v)", machineID, ok)
+	}
+}
+
+func TestClientHubSendCommandRoundTripsCompletedResponse(t *testing.T) {
+	hub := NewClientHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCount(t, hub, 1, 1*time.Second)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+
+		_, data, err := conn.Read(context.Background())
+		if err != nil {
+			t.Errorf("read command failed: %v", err)
+			return
+		}
+
+		var envelope protocol.Envelope
+		if err := transport.Decode(data, &envelope); err != nil {
+			t.Errorf("decode command failed: %v", err)
+			return
+		}
+
+		if envelope.Category != protocol.CategoryCommand || envelope.Name != "thread.create" {
+			t.Errorf("unexpected command envelope: %+v", envelope)
+			return
+		}
+
+		payload, err := json.Marshal(protocol.CommandCompletedPayload{
+			CommandName: "thread.create",
+			Result: mustMarshalJSON(t, protocol.ThreadCreateCommandResult{
+				Thread: domain.Thread{
+					ThreadID:  "thread-01",
+					MachineID: "machine-01",
+					Status:    domain.ThreadStatusIdle,
+					Title:     "One",
+				},
+			}),
+		})
+		if err != nil {
+			t.Errorf("marshal response failed: %v", err)
+			return
+		}
+
+		if err := writeEnvelope(t, conn, protocol.Envelope{
+			Version:   version.CurrentProtocolVersion,
+			Category:  protocol.CategoryEvent,
+			Name:      "command.completed",
+			RequestID: envelope.RequestID,
+			MachineID: "machine-01",
+			Timestamp: "2026-04-08T10:00:01Z",
+			Payload:   payload,
+		}); err != nil {
+			t.Errorf("write response failed: %v", err)
+		}
+	}()
+
+	response, err := hub.SendCommand(context.Background(), "machine-01", "thread.create", protocol.ThreadCreateCommandPayload{Title: "One"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if response.CommandName != "thread.create" {
+		t.Fatalf("commandName = %q", response.CommandName)
+	}
+
+	var result protocol.ThreadCreateCommandResult
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatalf("decode result failed: %v", err)
+	}
+	if result.Thread.ThreadID != "thread-01" {
+		t.Fatalf("unexpected result: %+v", result)
+	}
+
+	<-done
 }
 
 func waitForCount(t *testing.T, hub *ClientHub, expected int, timeout time.Duration) {
@@ -207,4 +309,15 @@ func writeEnvelope(t *testing.T, conn *websocket.Conn, envelope protocol.Envelop
 	}
 
 	return conn.Write(context.Background(), websocket.MessageText, encoded)
+}
+
+func mustMarshalJSON(t *testing.T, value any) []byte {
+	t.Helper()
+
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal failed: %v", err)
+	}
+
+	return raw
 }

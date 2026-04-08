@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"encoding/json"
+	"sync"
 	"time"
 
 	"code-agent-gateway/common/domain"
@@ -16,6 +17,7 @@ type Session struct {
 	machineID string
 	send      Sender
 	now       func() time.Time
+	sendMu    sync.Mutex
 }
 
 func NewSession(machineID string, send Sender, now func() time.Time) *Session {
@@ -31,11 +33,11 @@ func NewSession(machineID string, send Sender, now func() time.Time) *Session {
 }
 
 func (s *Session) Register() error {
-	return s.sendEnvelope(protocol.CategorySystem, "client.register", struct{}{})
+	return s.sendEnvelope(protocol.CategorySystem, "client.register", "", struct{}{})
 }
 
 func (s *Session) Heartbeat() error {
-	return s.sendEnvelope(protocol.CategorySystem, "client.heartbeat", struct{}{})
+	return s.sendEnvelope(protocol.CategorySystem, "client.heartbeat", "", struct{}{})
 }
 
 func (s *Session) MachineSnapshot(machine domain.Machine) error {
@@ -46,7 +48,7 @@ func (s *Session) MachineSnapshot(machine domain.Machine) error {
 		machine.Status = domain.MachineStatusOnline
 	}
 
-	return s.sendEnvelope(protocol.CategorySnapshot, "machine.snapshot", protocol.MachineSnapshotPayload{
+	return s.sendEnvelope(protocol.CategorySnapshot, "machine.snapshot", "", protocol.MachineSnapshotPayload{
 		Machine: machine,
 	})
 }
@@ -61,7 +63,7 @@ func (s *Session) ThreadSnapshot(threads []domain.Thread) error {
 		normalized = append(normalized, thread)
 	}
 
-	return s.sendEnvelope(protocol.CategorySnapshot, "thread.snapshot", protocol.ThreadSnapshotPayload{
+	return s.sendEnvelope(protocol.CategorySnapshot, "thread.snapshot", "", protocol.ThreadSnapshotPayload{
 		Threads: normalized,
 	})
 }
@@ -76,12 +78,32 @@ func (s *Session) EnvironmentSnapshot(environment []domain.EnvironmentResource) 
 		normalized = append(normalized, resource)
 	}
 
-	return s.sendEnvelope(protocol.CategorySnapshot, "environment.snapshot", protocol.EnvironmentSnapshotPayload{
+	return s.sendEnvelope(protocol.CategorySnapshot, "environment.snapshot", "", protocol.EnvironmentSnapshotPayload{
 		Environment: normalized,
 	})
 }
 
-func (s *Session) sendEnvelope(category protocol.Category, name string, payload any) error {
+func (s *Session) CommandCompleted(requestID string, commandName string, result any) error {
+	resultJSON, err := json.Marshal(result)
+	if err != nil {
+		return err
+	}
+
+	return s.sendEnvelope(protocol.CategoryEvent, "command.completed", requestID, protocol.CommandCompletedPayload{
+		CommandName: commandName,
+		Result:      resultJSON,
+	})
+}
+
+func (s *Session) TurnDelta(requestID string, payload protocol.TurnDeltaPayload) error {
+	return s.sendEnvelope(protocol.CategoryEvent, "turn.delta", requestID, payload)
+}
+
+func (s *Session) TurnCompleted(requestID string, payload protocol.TurnCompletedPayload) error {
+	return s.sendEnvelope(protocol.CategoryEvent, "turn.completed", requestID, payload)
+}
+
+func (s *Session) sendEnvelope(category protocol.Category, name string, requestID string, payload any) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -91,6 +113,7 @@ func (s *Session) sendEnvelope(category protocol.Category, name string, payload 
 		Version:   version.CurrentProtocolVersion,
 		Category:  category,
 		Name:      name,
+		RequestID: requestID,
 		MachineID: s.machineID,
 		Timestamp: s.now().Format(time.RFC3339),
 		Payload:   payloadJSON,
@@ -100,6 +123,9 @@ func (s *Session) sendEnvelope(category protocol.Category, name string, payload 
 	if err != nil {
 		return err
 	}
+
+	s.sendMu.Lock()
+	defer s.sendMu.Unlock()
 
 	return s.send(encoded)
 }
