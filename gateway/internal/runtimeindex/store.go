@@ -19,22 +19,12 @@ func NewStore() *Store {
 	}
 }
 
-func (s *Store) ReplaceSnapshot(threads []domain.Thread, environment []domain.EnvironmentResource) {
-	threadsByMachine := groupThreadsByMachine(threads)
-	environmentByMachine := groupEnvironmentByMachine(environment)
-	machineIDs := collectMachineIDs(threadsByMachine, environmentByMachine)
-
-	if len(machineIDs) == 0 {
-		return
-	}
-
+func (s *Store) ReplaceSnapshot(machineID string, threads []domain.Thread, environment []domain.EnvironmentResource) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	for _, machineID := range machineIDs {
-		s.threadsByMachine[machineID] = cloneThreads(threadsByMachine[machineID])
-		s.environmentByMachine[machineID] = cloneEnvironment(environmentByMachine[machineID])
-	}
+	s.threadsByMachine[machineID] = cloneThreads(threads)
+	s.environmentByMachine[machineID] = cloneEnvironment(environment)
 }
 
 func (s *Store) Threads() []domain.Thread {
@@ -64,48 +54,6 @@ func (s *Store) Environment(kind domain.EnvironmentKind) []domain.EnvironmentRes
 			}
 		}
 	}
-	return items
-}
-
-func groupThreadsByMachine(threads []domain.Thread) map[string][]domain.Thread {
-	items := make(map[string][]domain.Thread)
-	for _, item := range threads {
-		items[item.MachineID] = append(items[item.MachineID], item)
-	}
-	return items
-}
-
-func groupEnvironmentByMachine(environment []domain.EnvironmentResource) map[string][]domain.EnvironmentResource {
-	items := make(map[string][]domain.EnvironmentResource)
-	for _, item := range environment {
-		items[item.MachineID] = append(items[item.MachineID], item)
-	}
-	return items
-}
-
-func collectMachineIDs(
-	threadsByMachine map[string][]domain.Thread,
-	environmentByMachine map[string][]domain.EnvironmentResource,
-) []string {
-	items := make([]string, 0, len(threadsByMachine)+len(environmentByMachine))
-	seen := map[string]bool{}
-
-	for machineID := range threadsByMachine {
-		if seen[machineID] {
-			continue
-		}
-		seen[machineID] = true
-		items = append(items, machineID)
-	}
-
-	for machineID := range environmentByMachine {
-		if seen[machineID] {
-			continue
-		}
-		seen[machineID] = true
-		items = append(items, machineID)
-	}
-
 	return items
 }
 

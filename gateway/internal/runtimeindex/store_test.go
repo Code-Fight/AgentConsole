@@ -10,6 +10,7 @@ func TestStoreKeepsMachineSnapshotsIsolated(t *testing.T) {
 	store := NewStore()
 
 	store.ReplaceSnapshot(
+		"machine-a",
 		[]domain.Thread{
 			{ThreadID: "thread-a-1", MachineID: "machine-a"},
 		},
@@ -19,6 +20,7 @@ func TestStoreKeepsMachineSnapshotsIsolated(t *testing.T) {
 	)
 
 	store.ReplaceSnapshot(
+		"machine-b",
 		[]domain.Thread{
 			{ThreadID: "thread-b-1", MachineID: "machine-b"},
 		},
@@ -54,6 +56,7 @@ func TestStoreKeepsMachineSnapshotsIsolated(t *testing.T) {
 	}
 
 	store.ReplaceSnapshot(
+		"machine-a",
 		[]domain.Thread{
 			{ThreadID: "thread-a-2", MachineID: "machine-a"},
 		},
@@ -84,5 +87,35 @@ func TestStoreKeepsMachineSnapshotsIsolated(t *testing.T) {
 	}
 	if !skillIDs["skill-a-2"] || !skillIDs["skill-b-1"] || skillIDs["skill-a-1"] {
 		t.Fatalf("expected machine-a replacement without deleting machine-b skills, got %+v", skills)
+	}
+}
+
+func TestStoreReplaceSnapshotClearsMachineOnEmptySnapshot(t *testing.T) {
+	store := NewStore()
+
+	store.ReplaceSnapshot(
+		"machine-a",
+		[]domain.Thread{
+			{ThreadID: "thread-a-1", MachineID: "machine-a"},
+		},
+		[]domain.EnvironmentResource{
+			{ResourceID: "skill-a-1", MachineID: "machine-a", Kind: domain.EnvironmentKindSkill},
+		},
+	)
+
+	if got := len(store.Threads()); got != 1 {
+		t.Fatalf("expected 1 thread before clearing snapshot, got %d", got)
+	}
+	if got := len(store.Environment(domain.EnvironmentKindSkill)); got != 1 {
+		t.Fatalf("expected 1 skill before clearing snapshot, got %d", got)
+	}
+
+	store.ReplaceSnapshot("machine-a", []domain.Thread{}, []domain.EnvironmentResource{})
+
+	if got := len(store.Threads()); got != 0 {
+		t.Fatalf("expected cleared threads after empty snapshot, got %d", got)
+	}
+	if got := len(store.Environment(domain.EnvironmentKindSkill)); got != 0 {
+		t.Fatalf("expected cleared skills after empty snapshot, got %d", got)
 	}
 }
