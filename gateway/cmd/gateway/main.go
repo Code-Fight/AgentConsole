@@ -2,6 +2,7 @@ package main
 
 import (
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 
@@ -18,8 +19,6 @@ func main() {
 	}
 
 	handler := api.NewServer(registry.NewStore(), runtimeindex.NewStore())
-	log.Fatal(http.ListenAndServe(
-		cfg.Host+":"+strconv.Itoa(cfg.Port),
-		handler,
-	))
+	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
+	log.Fatal(http.ListenAndServe(addr, handler))
 }

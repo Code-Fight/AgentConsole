@@ -9,7 +9,12 @@ type Store struct {
 
 func NewStore() *Store { return &Store{} }
 
-func (s *Store) Threads() []domain.Thread { return s.threads }
+func (s *Store) Threads() []domain.Thread {
+	if s.threads == nil {
+		return []domain.Thread{}
+	}
+	return s.threads
+}
 
 func (s *Store) Environment(kind domain.EnvironmentKind) []domain.EnvironmentResource {
 	items := make([]domain.EnvironmentResource, 0)
