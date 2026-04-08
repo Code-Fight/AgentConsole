@@ -2,6 +2,9 @@ import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { buildThreadApiPath, http } from "../common/api/http";
 import type {
+  ApprovalDecision,
+  ApprovalRequiredPayload,
+  ApprovalResolvedPayload,
   EventEnvelope,
   StartTurnResponse,
   TurnCompletedPayload,
@@ -12,6 +15,10 @@ import { connectConsoleSocket } from "../common/api/ws";
 interface WorkspaceMessage {
   id: string;
   text: string;
+}
+
+interface PendingApproval extends ApprovalRequiredPayload {
+  requestId: string;
 }
 
 function parseEnvelope(raw: string): EventEnvelope | null {
@@ -31,6 +38,14 @@ function getEnvelopeThreadId(envelope: EventEnvelope): string | null {
     return (envelope.payload as TurnCompletedPayload).turn.threadId;
   }
 
+  if (envelope.name === "approval.required") {
+    return (envelope.payload as ApprovalRequiredPayload).threadId ?? null;
+  }
+
+  if (envelope.name === "approval.resolved") {
+    return (envelope.payload as ApprovalResolvedPayload).threadId ?? null;
+  }
+
   return null;
 }
 
@@ -38,11 +53,13 @@ export function ThreadWorkspacePage() {
   const { threadId = "" } = useParams();
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<WorkspaceMessage[]>([]);
+  const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setMessages([]);
+    setPendingApprovals([]);
     setError(null);
   }, [threadId]);
 
@@ -54,6 +71,32 @@ export function ThreadWorkspacePage() {
     return connectConsoleSocket(threadId, (event) => {
       const envelope = parseEnvelope(event.data);
       if (!envelope || getEnvelopeThreadId(envelope) !== threadId) {
+        return;
+      }
+
+      if (envelope.name === "approval.required") {
+        const payload = envelope.payload as ApprovalRequiredPayload;
+        if (!payload.requestId) {
+          return;
+        }
+
+        setPendingApprovals((current) => {
+          const next = current.filter((item) => item.requestId !== payload.requestId);
+          next.push({ ...payload, requestId: payload.requestId });
+          return next;
+        });
+        return;
+      }
+
+      if (envelope.name === "approval.resolved") {
+        const payload = envelope.payload as ApprovalResolvedPayload;
+        if (!payload.requestId) {
+          return;
+        }
+
+        setPendingApprovals((current) =>
+          current.filter((item) => item.requestId !== payload.requestId),
+        );
         return;
       }
 
@@ -81,6 +124,26 @@ export function ThreadWorkspacePage() {
       }
     });
   }, [threadId]);
+
+  async function handleApprovalDecision(requestId: string, decision: ApprovalDecision) {
+    setError(null);
+
+    try {
+      await http<void>(`/approvals/${encodeURIComponent(requestId)}/respond`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ decision })
+      });
+    } catch (approvalError) {
+      setError(
+        approvalError instanceof Error
+          ? approvalError.message
+          : "Unable to respond to approval.",
+      );
+    }
+  }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -131,6 +194,27 @@ export function ThreadWorkspacePage() {
           Send prompt
         </button>
       </form>
+      {pendingApprovals.length > 0 ? (
+        <section>
+          <h2>Approval required</h2>
+          <ul>
+            {pendingApprovals.map((approval) => (
+              <li key={approval.requestId}>
+                <div>{approval.command || approval.reason || approval.kind}</div>
+                <button type="button" onClick={() => void handleApprovalDecision(approval.requestId, "accept")}>
+                  Accept
+                </button>
+                <button type="button" onClick={() => void handleApprovalDecision(approval.requestId, "decline")}>
+                  Decline
+                </button>
+                <button type="button" onClick={() => void handleApprovalDecision(approval.requestId, "cancel")}>
+                  Cancel
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
       <div>Realtime messages</div>
       <ul>
         {messages.map((message) => (

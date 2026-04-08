@@ -102,3 +102,147 @@ test("submits a prompt and renders turn deltas for the current thread", async ()
 
   expect(await screen.findByText("hello from gateway")).toBeInTheDocument();
 });
+
+test("renders approval controls for approval.required events on the current thread", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  const socket = FakeWebSocket.instances[0];
+  await act(async () => {
+    socket.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "approval.required",
+        requestId: "approval-1",
+        timestamp: "2026-04-08T14:00:01Z",
+        payload: {
+          requestId: "approval-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          kind: "command",
+          command: "go test ./..."
+        }
+      }),
+    );
+  });
+
+  expect(await screen.findByText("Approval required")).toBeInTheDocument();
+  expect(screen.getByText("go test ./...")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+});
+
+test("clicking accept posts the approval decision to the approval endpoint", async () => {
+  const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  const socket = FakeWebSocket.instances[0];
+  await act(async () => {
+    socket.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "approval.required",
+        requestId: "approval-1",
+        timestamp: "2026-04-08T14:00:01Z",
+        payload: {
+          requestId: "approval-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          kind: "command",
+          command: "go test ./..."
+        }
+      }),
+    );
+  });
+
+  fireEvent.click(await screen.findByRole("button", { name: "Accept" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/approvals/approval-1/respond",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ decision: "accept" })
+      }),
+    );
+  });
+});
+
+test("removes a pending approval when approval.resolved arrives for the current thread", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  const socket = FakeWebSocket.instances[0];
+  await act(async () => {
+    socket.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "approval.required",
+        requestId: "approval-1",
+        timestamp: "2026-04-08T14:00:01Z",
+        payload: {
+          requestId: "approval-1",
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          kind: "command",
+          command: "go test ./..."
+        }
+      }),
+    );
+  });
+
+  expect(await screen.findByText("Approval required")).toBeInTheDocument();
+
+  await act(async () => {
+    socket.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "approval.resolved",
+        requestId: "approval-1",
+        timestamp: "2026-04-08T14:00:02Z",
+        payload: {
+          requestId: "approval-1",
+          threadId: "thread-1",
+          decision: "accept"
+        }
+      }),
+    );
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByText("Approval required")).not.toBeInTheDocument();
+  });
+});

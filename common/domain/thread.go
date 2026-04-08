@@ -8,6 +8,7 @@ const (
 	ThreadStatusNotLoaded ThreadStatus = "notLoaded"
 	ThreadStatusIdle      ThreadStatus = "idle"
 	ThreadStatusActive    ThreadStatus = "active"
+	ThreadStatusUnknown   ThreadStatus = "unknown"
 	ThreadStatusError     ThreadStatus = "systemError"
 
 	TurnStatusCompleted   TurnStatus = "completed"

@@ -30,3 +30,38 @@ test("shows the live load error without inventing a fallback thread", async () =
 
   expect(screen.getByText("No threads available.")).toBeInTheDocument();
 });
+
+test("renders the thread status so stale threads remain explicit in the list", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          items: [
+            {
+              threadId: "thread-1",
+              machineId: "machine-1",
+              status: "unknown",
+              title: "Investigate flaky test"
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      ),
+    ),
+  );
+
+  render(
+    <MemoryRouter>
+      <ThreadsPage />
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByRole("link", { name: "Investigate flaky test" })).toBeInTheDocument();
+  expect(screen.getByText("unknown")).toBeInTheDocument();
+});

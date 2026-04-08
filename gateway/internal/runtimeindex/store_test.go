@@ -160,3 +160,41 @@ func TestStoreClearMachineRemovesOnlyTargetMachineData(t *testing.T) {
 		t.Fatalf("expected skill-b-1 to remain, got %+v", skills)
 	}
 }
+
+func TestStoreMarkMachineUnknownPreservesThreads(t *testing.T) {
+	store := NewStore()
+
+	store.ReplaceSnapshot(
+		"machine-a",
+		[]domain.Thread{
+			{ThreadID: "thread-a-1", MachineID: "machine-a", Status: domain.ThreadStatusIdle, Title: "One"},
+		},
+		nil,
+	)
+	store.ReplaceSnapshot(
+		"machine-b",
+		[]domain.Thread{
+			{ThreadID: "thread-b-1", MachineID: "machine-b", Status: domain.ThreadStatusActive, Title: "Two"},
+		},
+		nil,
+	)
+
+	store.MarkMachineUnknown("machine-a")
+
+	threads := store.Threads()
+	if len(threads) != 2 {
+		t.Fatalf("expected 2 threads after marking machine-a unknown, got %d", len(threads))
+	}
+
+	statusByThreadID := map[string]domain.ThreadStatus{}
+	for _, item := range threads {
+		statusByThreadID[item.ThreadID] = item.Status
+	}
+
+	if statusByThreadID["thread-a-1"] != domain.ThreadStatusUnknown {
+		t.Fatalf("expected machine-a thread to become unknown, got %+v", threads)
+	}
+	if statusByThreadID["thread-b-1"] != domain.ThreadStatusActive {
+		t.Fatalf("expected machine-b thread to remain active, got %+v", threads)
+	}
+}

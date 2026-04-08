@@ -140,6 +140,7 @@ type ApprovalRequiredPayload struct {
 
 type ApprovalResolvedPayload struct {
 	RequestID string `json:"requestId"`
+	ThreadID  string `json:"threadId,omitempty"`
 	Decision  string `json:"decision"`
 }
 

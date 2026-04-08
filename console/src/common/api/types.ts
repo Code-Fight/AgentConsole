@@ -1,8 +1,9 @@
 export type MachineStatus = "online" | "offline" | "reconnecting" | "unknown";
-export type ThreadStatus = "notLoaded" | "idle" | "active" | "systemError";
+export type ThreadStatus = "notLoaded" | "idle" | "active" | "unknown" | "systemError";
 export type TurnStatus = "completed" | "interrupted" | "failed";
 export type EventCategory = "system" | "command" | "event" | "snapshot";
 export type EnvironmentKind = "skill" | "mcp" | "plugin";
+export type ApprovalDecision = "accept" | "decline" | "cancel";
 export type EnvironmentResourceStatus =
   | "unknown"
   | "enabled"
@@ -67,6 +68,22 @@ export interface TurnDeltaPayload {
 
 export interface TurnCompletedPayload {
   turn: TurnSummary;
+}
+
+export interface ApprovalRequiredPayload {
+  requestId: string;
+  threadId?: string;
+  turnId?: string;
+  itemId?: string;
+  kind: string;
+  reason?: string;
+  command?: string;
+}
+
+export interface ApprovalResolvedPayload {
+  requestId: string;
+  threadId?: string;
+  decision: ApprovalDecision;
 }
 
 export interface EventEnvelope<TPayload = unknown> {

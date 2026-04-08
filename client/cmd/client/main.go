@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -26,18 +28,35 @@ import (
 )
 
 func main() {
+	exitCode := runClient(context.Background(), os.Stderr, config.Read(), time.Now, defaultRuntimeFactories())
+	if exitCode != 0 {
+		os.Exit(exitCode)
+	}
+}
+
+func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, now func() time.Time, factories runtimeFactories) int {
 	const heartbeatInterval = 30 * time.Second
 	const connectTimeout = 5 * time.Second
 	const reconnectMaxBackoff = 5 * time.Second
 	const runtimeName = "codex"
 
-	shutdownCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	if now == nil {
+		now = time.Now
+	}
+	if parentCtx == nil {
+		parentCtx = context.Background()
+	}
+
+	shutdownCtx, stop := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg := config.Read()
-	runtime, cleanupRuntime, err := buildRuntime(shutdownCtx, cfg, time.Now, defaultRuntimeFactories())
+	runtime, cleanupRuntime, err := buildRuntime(shutdownCtx, cfg, now, factories)
 	if err != nil {
-		return
+		_, _ = fmt.Fprintf(stderr, "runtime bootstrap failed: %v\n", err)
+		return 1
 	}
 	defer func() {
 		_ = cleanupRuntime()
@@ -56,7 +75,7 @@ func main() {
 	backoff := time.Duration(0)
 	for {
 		if shutdownCtx.Err() != nil {
-			return
+			return 0
 		}
 
 		dialCtx, cancelDial := context.WithTimeout(shutdownCtx, connectTimeout)
@@ -65,21 +84,21 @@ func main() {
 		if err != nil {
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
-				return
+				return 0
 			}
 			continue
 		}
 
 		session := newClientSession(cfg.MachineID, func(msg []byte) error {
 			return conn.Write(shutdownCtx, cws.MessageText, msg)
-		}, time.Now)
-		runtimeStreamsTurnEvents := bindRuntimeTurnEvents(runtime, session)
+		}, now)
+		runtimeStreamsTurnEvents := bindRuntimeTurnEvents(runtime, session, agentManager, runtimeName)
 		bindRuntimeApprovalEvents(runtime, session)
 		if err := session.Register(); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "register-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
-				return
+				return 0
 			}
 			continue
 		}
@@ -87,7 +106,7 @@ func main() {
 			_ = conn.Close(cws.StatusNormalClosure, "snapshot-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
-				return
+				return 0
 			}
 			continue
 		}
@@ -97,13 +116,13 @@ func main() {
 			_ = conn.Close(cws.StatusNormalClosure, "reconnect")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
-				return
+				return 0
 			}
 			continue
 		}
 
 		_ = conn.Close(cws.StatusNormalClosure, "done")
-		return
+		return 0
 	}
 }
 
@@ -113,11 +132,13 @@ type runtimeFactories struct {
 }
 
 type clientSession struct {
-	delegate  *gateway.Session
-	machineID string
-	send      gateway.Sender
-	now       func() time.Time
-	sendMu    sync.Mutex
+	delegate     *gateway.Session
+	machineID    string
+	send         gateway.Sender
+	now          func() time.Time
+	sendMu       sync.Mutex
+	approvalMu   sync.Mutex
+	approvalByID map[string]string
 }
 
 func newClientSession(machineID string, send gateway.Sender, now func() time.Time) *clientSession {
@@ -126,8 +147,9 @@ func newClientSession(machineID string, send gateway.Sender, now func() time.Tim
 	}
 
 	session := &clientSession{
-		machineID: machineID,
-		now:       now,
+		machineID:    machineID,
+		now:          now,
+		approvalByID: map[string]string{},
 	}
 	session.send = func(msg []byte) error {
 		session.sendMu.Lock()
@@ -179,11 +201,49 @@ func (s *clientSession) TurnStarted(requestID string, payload protocol.TurnStart
 }
 
 func (s *clientSession) ApprovalRequired(payload protocol.ApprovalRequiredPayload) error {
+	s.rememberApprovalThread(payload.RequestID, payload.ThreadID)
 	return s.sendEnvelope(protocol.CategoryEvent, "approval.required", payload.RequestID, payload)
 }
 
 func (s *clientSession) ApprovalResolved(payload protocol.ApprovalResolvedPayload) error {
-	return s.sendEnvelope(protocol.CategoryEvent, "approval.resolved", payload.RequestID, payload)
+	if payload.ThreadID == "" {
+		payload.ThreadID = s.approvalThreadID(payload.RequestID)
+	}
+	if err := s.sendEnvelope(protocol.CategoryEvent, "approval.resolved", payload.RequestID, payload); err != nil {
+		return err
+	}
+	s.clearApprovalThread(payload.RequestID)
+	return nil
+}
+
+func (s *clientSession) rememberApprovalThread(requestID string, threadID string) {
+	if strings.TrimSpace(requestID) == "" || strings.TrimSpace(threadID) == "" {
+		return
+	}
+
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	s.approvalByID[requestID] = threadID
+}
+
+func (s *clientSession) approvalThreadID(requestID string) string {
+	if strings.TrimSpace(requestID) == "" {
+		return ""
+	}
+
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	return s.approvalByID[requestID]
+}
+
+func (s *clientSession) clearApprovalThread(requestID string) {
+	if strings.TrimSpace(requestID) == "" {
+		return
+	}
+
+	s.approvalMu.Lock()
+	defer s.approvalMu.Unlock()
+	delete(s.approvalByID, requestID)
 }
 
 func (s *clientSession) sendEnvelope(category protocol.Category, name string, requestID string, payload any) error {
@@ -271,16 +331,35 @@ func newFakeRuntime(cfg config.Config, now func() time.Time) agenttypes.Runtime 
 	return adapter
 }
 
-func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession) bool {
+func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession, mgr *manager.Manager, runtimeName string) bool {
 	source, ok := runtime.(agenttypes.RuntimeTurnEventSource)
 	if !ok {
 		return false
 	}
 
 	source.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
-		_ = emitRuntimeTurnEvent(session, event)
+		_ = handleRuntimeTurnEvent(session, mgr, runtimeName, event)
 	})
 	return true
+}
+
+func handleRuntimeTurnEvent(session *clientSession, mgr *manager.Manager, runtimeName string, event agenttypes.RuntimeTurnEvent) error {
+	if err := emitRuntimeTurnEvent(session, event); err != nil {
+		return err
+	}
+	if !shouldRefreshThreadSnapshotForTurnEvent(event) || mgr == nil || runtimeName == "" {
+		return nil
+	}
+	return refreshThreadSnapshot(session, mgr, runtimeName)
+}
+
+func shouldRefreshThreadSnapshotForTurnEvent(event agenttypes.RuntimeTurnEvent) bool {
+	switch event.Type {
+	case agenttypes.RuntimeTurnEventTypeStarted, agenttypes.RuntimeTurnEventTypeCompleted:
+		return true
+	default:
+		return false
+	}
 }
 
 func emitRuntimeTurnEvent(session *clientSession, event agenttypes.RuntimeTurnEvent) error {
@@ -519,13 +598,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			}
 		}
 
-		return session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
+		if err := session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
 			Turn: domain.Turn{
 				TurnID:   result.TurnID,
 				ThreadID: result.ThreadID,
 				Status:   domain.TurnStatusCompleted,
 			},
-		})
+		}); err != nil {
+			return err
+		}
+
+		return refreshThreadSnapshot(session, mgr, runtimeName)
 	case "turn.steer":
 		var payload protocol.TurnSteerCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -562,13 +645,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			}
 		}
 
-		return session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
+		if err := session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
 			Turn: domain.Turn{
 				TurnID:   result.TurnID,
 				ThreadID: result.ThreadID,
 				Status:   domain.TurnStatusCompleted,
 			},
-		})
+		}); err != nil {
+			return err
+		}
+
+		return refreshThreadSnapshot(session, mgr, runtimeName)
 	case "turn.interrupt":
 		var payload protocol.TurnInterruptCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -589,9 +676,13 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 
-		return session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
+		if err := session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
 			Turn: turn,
-		})
+		}); err != nil {
+			return err
+		}
+
+		return refreshThreadSnapshot(session, mgr, runtimeName)
 	case "approval.respond":
 		var payload protocol.ApprovalRespondCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {

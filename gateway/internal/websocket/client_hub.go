@@ -373,7 +373,11 @@ func (h *ClientHub) cleanupMachineLocked(machineID string, markOffline bool) []p
 		return nil
 	}
 
-	delete(h.snapshotByMachine, machineID)
+	state, hasSnapshot := h.snapshotByMachine[machineID]
+	if hasSnapshot {
+		state.threads = markThreadsUnknown(state.threads)
+		h.snapshotByMachine[machineID] = state
+	}
 	for requestID, requestMachineID := range h.approvalRequests {
 		if requestMachineID == machineID {
 			delete(h.approvalRequests, requestID)
@@ -393,7 +397,11 @@ func (h *ClientHub) cleanupMachineLocked(machineID string, markOffline bool) []p
 		h.registry.MarkOffline(machineID)
 	}
 	if h.runtimeIndex != nil {
-		h.runtimeIndex.ClearMachine(machineID)
+		if hasSnapshot {
+			h.runtimeIndex.ReplaceSnapshot(machineID, state.threads, state.environment)
+		} else {
+			h.runtimeIndex.MarkMachineUnknown(machineID)
+		}
 	}
 	if h.router != nil {
 		h.router.ClearMachine(machineID)
@@ -499,6 +507,18 @@ func normalizeThreads(items []domain.Thread, machineID string) []domain.Thread {
 		normalized = append(normalized, thread)
 	}
 	return normalized
+}
+
+func markThreadsUnknown(items []domain.Thread) []domain.Thread {
+	if len(items) == 0 {
+		return nil
+	}
+
+	updated := append([]domain.Thread(nil), items...)
+	for idx := range updated {
+		updated[idx].Status = domain.ThreadStatusUnknown
+	}
+	return updated
 }
 
 func normalizeEnvironment(items []domain.EnvironmentResource, machineID string) []domain.EnvironmentResource {

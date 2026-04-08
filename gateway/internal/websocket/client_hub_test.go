@@ -323,7 +323,7 @@ func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 	}
 }
 
-func TestClientHubDisconnectClearsMachineRuntimeAndRoutes(t *testing.T) {
+func TestClientHubDisconnectPreservesUnknownThreadsAndClearsRoutes(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()
 	router := routing.NewRouter()
@@ -384,10 +384,11 @@ func TestClientHubDisconnectClearsMachineRuntimeAndRoutes(t *testing.T) {
 		return len(machines) == 1 && machines[0].ID == "machine-01" && machines[0].Status == domain.MachineStatusOffline
 	})
 	waitForCondition(t, 2*time.Second, func() bool {
-		if len(idx.Threads()) != 0 {
+		threads := idx.Threads()
+		if len(threads) != 1 {
 			return false
 		}
-		if len(idx.Environment(domain.EnvironmentKindSkill)) != 0 {
+		if threads[0].ThreadID != "thread-01" || threads[0].Status != domain.ThreadStatusUnknown {
 			return false
 		}
 		_, ok := router.ResolveThread("thread-01")

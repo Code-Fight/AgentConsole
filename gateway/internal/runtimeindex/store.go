@@ -39,6 +39,26 @@ func (s *Store) ClearMachine(machineID string) {
 	delete(s.environmentByMachine, machineID)
 }
 
+func (s *Store) MarkMachineUnknown(machineID string) {
+	if machineID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	threads := s.threadsByMachine[machineID]
+	if len(threads) == 0 {
+		return
+	}
+
+	updated := cloneThreads(threads)
+	for idx := range updated {
+		updated[idx].Status = domain.ThreadStatusUnknown
+	}
+	s.threadsByMachine[machineID] = updated
+}
+
 func (s *Store) Threads() []domain.Thread {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

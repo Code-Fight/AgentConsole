@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -143,7 +145,7 @@ func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) 
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	if !bindRuntimeTurnEvents(runtime, session) {
+	if !bindRuntimeTurnEvents(runtime, session, mgr, "codex") {
 		t.Fatal("expected runtime turn event binding")
 	}
 
@@ -185,17 +187,88 @@ func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) 
 		},
 	})
 
-	if len(*sent) != 4 {
-		t.Fatalf("expected ack plus 3 runtime events, got %d frames", len(*sent))
+	if len(*sent) != 6 {
+		t.Fatalf("expected ack, 3 runtime events, and 2 thread snapshots, got %d frames", len(*sent))
 	}
 	if decodeEnvelope(t, (*sent)[1]).Name != "turn.started" {
 		t.Fatalf("unexpected started envelope: %+v", decodeEnvelope(t, (*sent)[1]))
 	}
-	if decodeEnvelope(t, (*sent)[2]).Name != "turn.delta" {
-		t.Fatalf("unexpected delta envelope: %+v", decodeEnvelope(t, (*sent)[2]))
+	if decodeEnvelope(t, (*sent)[2]).Name != "thread.snapshot" {
+		t.Fatalf("unexpected first snapshot envelope: %+v", decodeEnvelope(t, (*sent)[2]))
 	}
-	if decodeEnvelope(t, (*sent)[3]).Name != "turn.completed" {
-		t.Fatalf("unexpected completed envelope: %+v", decodeEnvelope(t, (*sent)[3]))
+	if decodeEnvelope(t, (*sent)[3]).Name != "turn.delta" {
+		t.Fatalf("unexpected delta envelope: %+v", decodeEnvelope(t, (*sent)[3]))
+	}
+	if decodeEnvelope(t, (*sent)[4]).Name != "turn.completed" {
+		t.Fatalf("unexpected completed envelope: %+v", decodeEnvelope(t, (*sent)[4]))
+	}
+	if decodeEnvelope(t, (*sent)[5]).Name != "thread.snapshot" {
+		t.Fatalf("unexpected second snapshot envelope: %+v", decodeEnvelope(t, (*sent)[5]))
+	}
+}
+
+func TestBindRuntimeTurnEventsRefreshesThreadSnapshotOnStartedAndCompleted(t *testing.T) {
+	runtime := &notifyingRuntime{
+		startTurnResult: agenttypes.StartTurnResult{
+			TurnID:   "turn-async-1",
+			ThreadID: "thread-01",
+		},
+		threadSnapshots: [][]domain.Thread{
+			{
+				{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusActive, Title: "One"},
+			},
+			{
+				{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusIdle, Title: "One"},
+			},
+		},
+	}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	if !bindRuntimeTurnEvents(runtime, session, mgr, "codex") {
+		t.Fatal("expected runtime turn event binding")
+	}
+
+	runtime.emit(agenttypes.RuntimeTurnEvent{
+		Type:     agenttypes.RuntimeTurnEventTypeStarted,
+		ThreadID: "thread-01",
+		TurnID:   "turn-async-1",
+	})
+	runtime.emit(agenttypes.RuntimeTurnEvent{
+		Type: agenttypes.RuntimeTurnEventTypeCompleted,
+		Turn: domain.Turn{
+			TurnID:   "turn-async-1",
+			ThreadID: "thread-01",
+			Status:   domain.TurnStatusCompleted,
+		},
+	})
+
+	if len(*sent) != 4 {
+		t.Fatalf("expected turn events plus 2 thread snapshots, got %d frames", len(*sent))
+	}
+	if decodeEnvelope(t, (*sent)[0]).Name != "turn.started" {
+		t.Fatalf("unexpected first envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	}
+	if decodeEnvelope(t, (*sent)[1]).Name != "thread.snapshot" {
+		t.Fatalf("unexpected second envelope: %+v", decodeEnvelope(t, (*sent)[1]))
+	}
+	if decodeEnvelope(t, (*sent)[2]).Name != "turn.completed" {
+		t.Fatalf("unexpected third envelope: %+v", decodeEnvelope(t, (*sent)[2]))
+	}
+	if decodeEnvelope(t, (*sent)[3]).Name != "thread.snapshot" {
+		t.Fatalf("unexpected fourth envelope: %+v", decodeEnvelope(t, (*sent)[3]))
+	}
+
+	firstSnapshot := decodeThreadSnapshotPayload(t, (*sent)[1])
+	if len(firstSnapshot.Threads) != 1 || firstSnapshot.Threads[0].Status != domain.ThreadStatusActive {
+		t.Fatalf("expected active thread snapshot after turn start, got %+v", firstSnapshot.Threads)
+	}
+
+	secondSnapshot := decodeThreadSnapshotPayload(t, (*sent)[3])
+	if len(secondSnapshot.Threads) != 1 || secondSnapshot.Threads[0].Status != domain.ThreadStatusIdle {
+		t.Fatalf("expected idle thread snapshot after turn completion, got %+v", secondSnapshot.Threads)
 	}
 }
 
@@ -241,6 +314,17 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
+	if err := session.ApprovalRequired(protocol.ApprovalRequiredPayload{
+		RequestID: "approval-1",
+		ThreadID:  "thread-01",
+		TurnID:    "turn-01",
+		ItemID:    "item-01",
+		Kind:      "command",
+		Command:   "go test ./...",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
 	err := handleCommandEnvelope(session, mgr, "codex", false, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-1",
@@ -254,14 +338,22 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 		t.Fatalf("unexpected approval response: %+v", runtime.lastApprovalDecision)
 	}
 
-	if len(*sent) != 2 {
-		t.Fatalf("expected command ack and approval event, got %d frames", len(*sent))
+	if len(*sent) != 3 {
+		t.Fatalf("expected approval required, command ack, and approval event, got %d frames", len(*sent))
 	}
-	if decodeEnvelope(t, (*sent)[0]).Name != "command.completed" {
-		t.Fatalf("unexpected ack envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	if decodeEnvelope(t, (*sent)[1]).Name != "command.completed" {
+		t.Fatalf("unexpected ack envelope: %+v", decodeEnvelope(t, (*sent)[1]))
 	}
-	if decodeEnvelope(t, (*sent)[1]).Name != "approval.resolved" {
-		t.Fatalf("unexpected resolved envelope: %+v", decodeEnvelope(t, (*sent)[1]))
+	if decodeEnvelope(t, (*sent)[2]).Name != "approval.resolved" {
+		t.Fatalf("unexpected resolved envelope: %+v", decodeEnvelope(t, (*sent)[2]))
+	}
+
+	var resolved protocol.ApprovalResolvedPayload
+	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[2]).Payload, &resolved); err != nil {
+		t.Fatalf("decode resolved payload failed: %v", err)
+	}
+	if resolved.RequestID != "approval-1" || resolved.ThreadID != "thread-01" || resolved.Decision != "accept" {
+		t.Fatalf("unexpected resolved payload: %+v", resolved)
 	}
 }
 
@@ -320,6 +412,26 @@ func TestBuildRuntimeUsesAppServerByDefault(t *testing.T) {
 	}
 	if calledFake || !calledAppServer {
 		t.Fatalf("unexpected selection fake=%v appserver=%v", calledFake, calledAppServer)
+	}
+}
+
+func TestRunClientReportsBootstrapFailureAndReturnsNonZero(t *testing.T) {
+	var stderr bytes.Buffer
+
+	exitCode := runClient(context.Background(), &stderr, config.Config{
+		MachineID:   "machine-01",
+		RuntimeMode: config.RuntimeModeAppServer,
+	}, time.Now, runtimeFactories{
+		newAppServer: func(context.Context, config.Config) (agenttypes.Runtime, func() error, error) {
+			return nil, nil, errors.New("bootstrap boom")
+		},
+	})
+
+	if exitCode == 0 {
+		t.Fatal("expected non-zero exit code on bootstrap failure")
+	}
+	if got := stderr.String(); got == "" || !bytes.Contains([]byte(got), []byte("bootstrap boom")) {
+		t.Fatalf("expected bootstrap failure to be written to stderr, got %q", got)
 	}
 }
 
@@ -382,6 +494,8 @@ type notifyingRuntime struct {
 	startTurnResult      agenttypes.StartTurnResult
 	handler              func(agenttypes.RuntimeTurnEvent)
 	approvalHandler      func(agenttypes.RuntimeApprovalRequest)
+	threadSnapshots      [][]domain.Thread
+	listThreadsCalls     int
 	lastApprovalDecision struct {
 		requestID string
 		decision  string
@@ -389,7 +503,16 @@ type notifyingRuntime struct {
 }
 
 func (r *notifyingRuntime) ListThreads() ([]domain.Thread, error) {
-	return nil, nil
+	if len(r.threadSnapshots) == 0 {
+		return nil, nil
+	}
+
+	idx := r.listThreadsCalls
+	if idx >= len(r.threadSnapshots) {
+		idx = len(r.threadSnapshots) - 1
+	}
+	r.listThreadsCalls++
+	return append([]domain.Thread(nil), r.threadSnapshots[idx]...), nil
 }
 
 func (r *notifyingRuntime) ListEnvironment() ([]domain.EnvironmentResource, error) {

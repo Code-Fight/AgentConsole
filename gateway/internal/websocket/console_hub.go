@@ -143,6 +143,16 @@ func shouldDeliverEnvelope(threadID string, envelope protocol.Envelope) bool {
 
 func envelopeThreadID(envelope protocol.Envelope) string {
 	switch envelope.Name {
+	case "approval.required":
+		var payload protocol.ApprovalRequiredPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.ThreadID
+		}
+	case "approval.resolved":
+		var payload protocol.ApprovalResolvedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.ThreadID
+		}
 	case "turn.delta":
 		var payload protocol.TurnDeltaPayload
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {

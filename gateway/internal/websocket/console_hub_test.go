@@ -127,6 +127,56 @@ func TestConsoleHubFiltersEventsBySubscribedThreadID(t *testing.T) {
 	}
 }
 
+func TestConsoleHubFiltersApprovalEventsBySubscribedThreadID(t *testing.T) {
+	hub := NewConsoleHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	thread1URL := "ws" + server.URL[4:] + "/ws?threadId=" + url.QueryEscape("thread-01")
+	thread2URL := "ws" + server.URL[4:] + "/ws?threadId=" + url.QueryEscape("thread-02")
+
+	thread1Conn, _, err := cws.Dial(context.Background(), thread1URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thread1Conn.Close(cws.StatusNormalClosure, "done")
+
+	thread2Conn, _, err := cws.Dial(context.Background(), thread2URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thread2Conn.Close(cws.StatusNormalClosure, "done")
+
+	if err := hub.Broadcast(protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "approval.required",
+		RequestID: "approval-1",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T14:00:00Z",
+		Payload:   []byte(`{"requestId":"approval-1","threadId":"thread-01","turnId":"turn-01","itemId":"item-01","kind":"command","command":"go test ./..."}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertConsoleEnvelopeName(t, thread1Conn, "approval.required")
+
+	if err := hub.Broadcast(protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "approval.resolved",
+		RequestID: "approval-2",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T14:00:01Z",
+		Payload:   []byte(`{"requestId":"approval-2","threadId":"thread-02","decision":"accept"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertConsoleEnvelopeName(t, thread2Conn, "approval.resolved")
+	assertConsoleReadTimeout(t, thread1Conn)
+}
+
 func TestConsoleHubBroadcastDoesNotBlockOnSlowClient(t *testing.T) {
 	hub := NewConsoleHub()
 
@@ -201,4 +251,43 @@ func readConsoleEnvelope(t *testing.T, conn *cws.Conn, out chan<- protocol.Envel
 
 func isTimeoutError(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded) || cws.CloseStatus(err) == -1
+}
+
+func assertConsoleEnvelopeName(t *testing.T, conn *cws.Conn, expectedName string) {
+	t.Helper()
+
+	readCtx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	_, data, err := conn.Read(readCtx)
+	if err != nil {
+		t.Fatalf("read broadcast failed: %v", err)
+	}
+
+	var envelope protocol.Envelope
+	if err := transport.Decode(data, &envelope); err != nil {
+		t.Fatalf("decode broadcast failed: %v", err)
+	}
+	if envelope.Name != expectedName {
+		t.Fatalf("expected %q, got %+v", expectedName, envelope)
+	}
+}
+
+func assertConsoleReadTimeout(t *testing.T, conn *cws.Conn) {
+	t.Helper()
+
+	readCtx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	_, data, err := conn.Read(readCtx)
+	if err == nil {
+		var envelope protocol.Envelope
+		if decodeErr := transport.Decode(data, &envelope); decodeErr != nil {
+			t.Fatalf("decode broadcast failed: %v", decodeErr)
+		}
+		t.Fatalf("unexpected event delivered: %+v", envelope)
+	}
+	if !isTimeoutError(err) {
+		t.Fatalf("expected timeout when reading non-matching event, got %v", err)
+	}
 }

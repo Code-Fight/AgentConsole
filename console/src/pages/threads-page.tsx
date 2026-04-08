@@ -41,6 +41,7 @@ export function ThreadsPage() {
         {threads.map((thread) => (
           <li key={thread.threadId}>
             <Link to={`/threads/${thread.threadId}`}>{thread.title || thread.threadId}</Link>
+            <span>{thread.status}</span>
           </li>
         ))}
       </ul>
