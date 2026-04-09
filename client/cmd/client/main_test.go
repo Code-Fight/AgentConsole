@@ -716,6 +716,34 @@ func TestHandleCommandEnvelopeEnvironmentCommandsRefreshEnvironmentSnapshot(t *t
 	}
 }
 
+func TestHandleCommandEnvelopeAppliesAgentConfig(t *testing.T) {
+	runtime := &notifyingRuntime{}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+		Name:      "agent.config.apply",
+		RequestID: "req-config-1",
+		Payload:   []byte(`{"agentType":"codex","source":"global","document":{"agentType":"codex","format":"toml","content":"model = \"gpt-5.4\"\n"}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if runtime.lastAppliedConfig.Document.Content != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("unexpected applied config: %+v", runtime.lastAppliedConfig)
+	}
+
+	if len(*sent) != 1 {
+		t.Fatalf("expected command ack only, got %d frames", len(*sent))
+	}
+	if decodeEnvelope(t, (*sent)[0]).Name != "command.completed" {
+		t.Fatalf("unexpected envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	}
+}
+
 func TestBuildRuntimeUsesFakeOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeFake}
 	calledFake := false
@@ -904,6 +932,11 @@ type notifyingRuntime struct {
 		pluginID string
 		enabled  bool
 	}
+	lastAppliedConfig struct {
+		Document domain.AgentConfigDocument
+		Source   string
+		FilePath string
+	}
 }
 
 func (r *notifyingRuntime) ListThreads() ([]domain.Thread, error) {
@@ -1002,6 +1035,15 @@ func (r *notifyingRuntime) SetPluginEnabled(pluginID string, enabled bool) error
 
 func (r *notifyingRuntime) UninstallPlugin(string) error {
 	return nil
+}
+
+func (r *notifyingRuntime) ApplyConfig(document domain.AgentConfigDocument) (agenttypes.ApplyConfigResult, error) {
+	r.lastAppliedConfig.Document = document
+	r.lastAppliedConfig.FilePath = "/tmp/codex/config.toml"
+	return agenttypes.ApplyConfigResult{
+		AgentType: document.AgentType,
+		FilePath:  "/tmp/codex/config.toml",
+	}, nil
 }
 
 func (r *notifyingRuntime) cleanup() error {

@@ -28,6 +28,11 @@ type InstallPluginParams struct {
 	PluginName      string
 }
 
+type ApplyConfigResult struct {
+	AgentType domain.AgentType
+	FilePath  string
+}
+
 type TurnDelta struct {
 	Sequence int
 	Delta    string
@@ -88,6 +93,10 @@ type RuntimePluginManager interface {
 	InstallPlugin(params InstallPluginParams) error
 	SetPluginEnabled(pluginID string, enabled bool) error
 	UninstallPlugin(pluginID string) error
+}
+
+type RuntimeConfigManager interface {
+	ApplyConfig(document domain.AgentConfigDocument) (ApplyConfigResult, error)
 }
 
 type StartTurnResult struct {

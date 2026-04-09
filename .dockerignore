@@ -1,13 +1,14 @@
+.git
+.gitignore
 .DS_Store
 node_modules
 dist
 coverage
 playwright-report
-.superpowers
 bin
 *.tsbuildinfo
 console/node_modules
 console/dist
-console/coverage
 console/playwright-report
-testenv/settings-e2e/.tmp
+test-results
+

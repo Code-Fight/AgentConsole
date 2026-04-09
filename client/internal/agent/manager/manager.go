@@ -187,6 +187,20 @@ func (m *Manager) SetPluginEnabled(runtimeName string, pluginID string, enabled 
 	return pluginManager.SetPluginEnabled(pluginID, enabled)
 }
 
+func (m *Manager) ApplyConfig(runtimeName string, document domain.AgentConfigDocument) (types.ApplyConfigResult, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return types.ApplyConfigResult{}, err
+	}
+
+	configManager, ok := runtime.(types.RuntimeConfigManager)
+	if !ok {
+		return types.ApplyConfigResult{}, fmt.Errorf("runtime %q does not support config apply", runtimeName)
+	}
+
+	return configManager.ApplyConfig(document)
+}
+
 func (m *Manager) UninstallPlugin(runtimeName string, pluginID string) error {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {

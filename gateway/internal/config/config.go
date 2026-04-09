@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	Host string
-	Port int
+	Host             string
+	Port             int
+	SettingsFilePath string
 }
 
 func Read() (Config, error) {
@@ -19,8 +20,12 @@ func Read() (Config, error) {
 	}
 
 	portRaw := strings.TrimSpace(os.Getenv("PORT"))
+	settingsFilePath := strings.TrimSpace(os.Getenv("SETTINGS_FILE"))
+	if settingsFilePath == "" {
+		settingsFilePath = "data/settings.json"
+	}
 	if portRaw == "" {
-		return Config{Host: host, Port: 8080}, nil
+		return Config{Host: host, Port: 8080, SettingsFilePath: settingsFilePath}, nil
 	}
 
 	port, err := strconv.Atoi(portRaw)
@@ -28,5 +33,5 @@ func Read() (Config, error) {
 		return Config{}, fmt.Errorf("invalid PORT value: %q", portRaw)
 	}
 
-	return Config{Host: host, Port: port}, nil
+	return Config{Host: host, Port: port, SettingsFilePath: settingsFilePath}, nil
 }

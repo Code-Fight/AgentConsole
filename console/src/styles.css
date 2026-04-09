@@ -241,6 +241,65 @@ body {
   min-height: 180px;
 }
 
+.config-form select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  font: inherit;
+  color: inherit;
+  background: #ffffff;
+}
+
+.settings-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr 1fr;
+  gap: 16px;
+}
+
+.settings-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.settings-machine-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 18px;
+  border: 1px solid #dbe4f0;
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.settings-machine-list h2 {
+  margin: 0 0 8px;
+}
+
+.settings-machine-list button,
+.settings-actions button {
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  background: #ffffff;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.machine-selected {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+
 .status-badge,
 .meta-pill {
   display: inline-flex;
@@ -321,5 +380,9 @@ body {
 
   .resource-card-meta {
     justify-content: flex-start;
+  }
+
+  .settings-layout {
+    grid-template-columns: 1fr;
   }
 }

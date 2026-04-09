@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"strconv"
 
+	"code-agent-gateway/common/domain"
 	"code-agent-gateway/gateway/internal/api"
 	"code-agent-gateway/gateway/internal/config"
 	"code-agent-gateway/gateway/internal/registry"
 	"code-agent-gateway/gateway/internal/routing"
 	"code-agent-gateway/gateway/internal/runtimeindex"
+	"code-agent-gateway/gateway/internal/settings"
 	ws "code-agent-gateway/gateway/internal/websocket"
 )
 
@@ -20,17 +22,26 @@ func main() {
 		log.Fatal(err)
 	}
 
-	handler := buildServerHandler()
+	handler, err := buildServerHandler(cfg)
+	if err != nil {
+		log.Fatal(err)
+	}
 	addr := net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port))
 	log.Fatal(http.ListenAndServe(addr, handler))
 }
 
-func buildServerHandler() http.Handler {
+func buildServerHandler(cfg config.Config) (http.Handler, error) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()
 	router := routing.NewRouter()
 	consoleHub := ws.NewConsoleHub()
 	clientHub := ws.NewClientHubWithStores(reg, idx, router)
 	clientHub.SetConsoleHub(consoleHub)
-	return api.NewServer(reg, idx, router, clientHub, clientHub.Handler(), consoleHub.Handler())
+	settingsStore, err := settings.NewFileStore(cfg.SettingsFilePath, []domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	if err != nil {
+		return nil, err
+	}
+	return api.NewServerWithSettings(reg, idx, router, clientHub, settingsStore, clientHub.Handler(), consoleHub.Handler()), nil
 }

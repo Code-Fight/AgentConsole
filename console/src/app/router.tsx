@@ -3,6 +3,7 @@ import { AppShell } from "./shell";
 import { EnvironmentPage } from "../pages/environment-page";
 import { MachinesPage } from "../pages/machines-page";
 import { OverviewPage } from "../pages/overview-page";
+import { SettingsPage } from "../pages/settings-page";
 import { ThreadWorkspacePage } from "../pages/thread-workspace-page";
 import { ThreadsPage } from "../pages/threads-page";
 
@@ -30,6 +31,10 @@ export const router = createBrowserRouter([
       {
         path: "environment",
         element: <EnvironmentPage />
+      },
+      {
+        path: "settings",
+        element: <SettingsPage />
       }
     ]
   }

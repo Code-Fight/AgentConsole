@@ -170,6 +170,7 @@ type AppServerClient struct {
 	deltaSequence           map[string]int
 	restartMu               sync.RWMutex
 	restartRequired         map[string]bool
+	homeDir                 func() (string, error)
 }
 
 type ApprovalResolvedEvent struct {
@@ -194,6 +195,7 @@ func NewAppServerClient(runner Runner) *AppServerClient {
 		pendingApprovals: make(map[string]pendingApprovalRequest),
 		deltaSequence:    make(map[string]int),
 		restartRequired:  make(map[string]bool),
+		homeDir:          resolveUserHomeDir,
 	}
 	if notifier, ok := runner.(notificationRunner); ok {
 		notifier.SetNotificationHandler(client.handleNotification)

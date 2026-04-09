@@ -8,6 +8,7 @@ export function AppShell() {
         <NavLink to="/machines">Machines</NavLink>
         <NavLink to="/threads">Threads</NavLink>
         <NavLink to="/environment">Environment</NavLink>
+        <NavLink to="/settings">Settings</NavLink>
       </aside>
       <main className="center-pane">
         <Outlet />

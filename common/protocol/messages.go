@@ -83,6 +83,12 @@ type RuntimeStartCommandPayload struct{}
 
 type RuntimeStopCommandPayload struct{}
 
+type AgentConfigApplyCommandPayload struct {
+	AgentType string                     `json:"agentType"`
+	Source    string                     `json:"source,omitempty"`
+	Document  domain.AgentConfigDocument `json:"document"`
+}
+
 type EnvironmentSkillSetEnabledCommandPayload struct {
 	SkillID string `json:"skillId"`
 	Enabled bool   `json:"enabled"`
@@ -176,6 +182,12 @@ type TurnInterruptCommandResult struct {
 type RuntimeStartCommandResult struct{}
 
 type RuntimeStopCommandResult struct{}
+
+type AgentConfigApplyCommandResult struct {
+	AgentType string `json:"agentType"`
+	FilePath  string `json:"filePath"`
+	Source    string `json:"source,omitempty"`
+}
 
 type EnvironmentSkillSetEnabledCommandResult struct {
 	SkillID string `json:"skillId"`

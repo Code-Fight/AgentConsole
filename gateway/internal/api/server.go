@@ -11,9 +11,12 @@ import (
 
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
+	"code-agent-gateway/common/transport"
 	"code-agent-gateway/gateway/internal/registry"
 	"code-agent-gateway/gateway/internal/routing"
 	"code-agent-gateway/gateway/internal/runtimeindex"
+	"code-agent-gateway/gateway/internal/settings"
+	toml "github.com/pelletier/go-toml/v2"
 )
 
 type CommandSender interface {
@@ -62,6 +65,17 @@ type environmentMCPUpsertRequest struct {
 	MachineID  string         `json:"machineId"`
 	ResourceID string         `json:"resourceId"`
 	Config     map[string]any `json:"config"`
+}
+
+type configDocumentRequest struct {
+	Content string `json:"content"`
+}
+
+type settingsApplyResponse struct {
+	MachineID string `json:"machineId"`
+	AgentType string `json:"agentType"`
+	Source    string `json:"source"`
+	FilePath  string `json:"filePath,omitempty"`
 }
 
 type activeTurnReader interface {
@@ -190,9 +204,55 @@ func resolveActiveTurnID(sender CommandSender, threadID string) string {
 }
 
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
+	return NewServerWithSettings(reg, idx, router, sender, nil, clientWS, consoleWS)
+}
+
+func defaultAgentDescriptors() []domain.AgentDescriptor {
+	return []domain.AgentDescriptor{
+		{
+			AgentType:   domain.AgentTypeCodex,
+			DisplayName: "Codex",
+		},
+	}
+}
+
+func resolveAgentType(raw string) (domain.AgentType, bool) {
+	switch domain.AgentType(strings.TrimSpace(raw)) {
+	case domain.AgentTypeCodex:
+		return domain.AgentTypeCodex, true
+	default:
+		return "", false
+	}
+}
+
+func decodeConfigDocumentRequest(r *http.Request) (configDocumentRequest, error) {
+	if r == nil || r.Body == nil {
+		return configDocumentRequest{}, nil
+	}
+
+	var req configDocumentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err == io.EOF {
+			return configDocumentRequest{}, nil
+		}
+		return configDocumentRequest{}, err
+	}
+	return req, nil
+}
+
+func validateTOMLContent(content string) error {
+	var document map[string]any
+	return toml.Unmarshal([]byte(content), &document)
+}
+
+func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, clientWS http.Handler, consoleWS http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	var deletedThreadsMu sync.RWMutex
 	deletedThreads := map[string]struct{}{}
+
+	if settingsStore == nil {
+		settingsStore = settings.NewMemoryStore(defaultAgentDescriptors())
+	}
 
 	isDeleted := func(threadID string) bool {
 		deletedThreadsMu.RLock()
@@ -226,6 +286,211 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+
+	mux.HandleFunc("GET /settings/agents", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, map[string]any{"items": settingsStore.ListAgentTypes()})
+	})
+
+	mux.HandleFunc("GET /settings/agents/{agentType}/global", func(w http.ResponseWriter, r *http.Request) {
+		agentType, ok := resolveAgentType(r.PathValue("agentType"))
+		if !ok {
+			http.Error(w, "agentType is not supported", http.StatusNotFound)
+			return
+		}
+		document, exists, err := settingsStore.GetGlobal(agentType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !exists {
+			writeJSON(w, http.StatusOK, map[string]any{"document": nil})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"document": document})
+	})
+
+	mux.HandleFunc("PUT /settings/agents/{agentType}/global", func(w http.ResponseWriter, r *http.Request) {
+		agentType, ok := resolveAgentType(r.PathValue("agentType"))
+		if !ok {
+			http.Error(w, "agentType is not supported", http.StatusNotFound)
+			return
+		}
+		req, err := decodeConfigDocumentRequest(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Content) == "" {
+			http.Error(w, "content is required", http.StatusBadRequest)
+			return
+		}
+		if err := validateTOMLContent(req.Content); err != nil {
+			http.Error(w, "content must be valid toml", http.StatusBadRequest)
+			return
+		}
+		document := domain.AgentConfigDocument{
+			AgentType: agentType,
+			Format:    domain.AgentConfigFormatTOML,
+			Content:   req.Content,
+		}
+		if err := settingsStore.PutGlobal(agentType, document); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		document, _, _ = settingsStore.GetGlobal(agentType)
+		writeJSON(w, http.StatusOK, map[string]any{"document": document})
+	})
+
+	mux.HandleFunc("GET /settings/machines/{machineId}/agents/{agentType}", func(w http.ResponseWriter, r *http.Request) {
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentType, ok := resolveAgentType(r.PathValue("agentType"))
+		if !ok {
+			http.Error(w, "agentType is not supported", http.StatusNotFound)
+			return
+		}
+
+		globalDocument, globalExists, err := settingsStore.GetGlobal(agentType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		machineDocument, machineExists, err := settingsStore.GetMachine(machineID, agentType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		response := domain.MachineAgentConfigAssignment{
+			MachineID:         machineID,
+			AgentType:         agentType,
+			UsesGlobalDefault: !machineExists,
+		}
+		if globalExists {
+			response.GlobalDefault = &globalDocument
+		}
+		if machineExists {
+			response.MachineOverride = &machineDocument
+		}
+		writeJSON(w, http.StatusOK, response)
+	})
+
+	mux.HandleFunc("PUT /settings/machines/{machineId}/agents/{agentType}", func(w http.ResponseWriter, r *http.Request) {
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentType, ok := resolveAgentType(r.PathValue("agentType"))
+		if !ok {
+			http.Error(w, "agentType is not supported", http.StatusNotFound)
+			return
+		}
+		req, err := decodeConfigDocumentRequest(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Content) == "" {
+			http.Error(w, "content is required", http.StatusBadRequest)
+			return
+		}
+		if err := validateTOMLContent(req.Content); err != nil {
+			http.Error(w, "content must be valid toml", http.StatusBadRequest)
+			return
+		}
+		document := domain.AgentConfigDocument{
+			AgentType: agentType,
+			Format:    domain.AgentConfigFormatTOML,
+			Content:   req.Content,
+		}
+		if err := settingsStore.PutMachine(machineID, agentType, document); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		document, _, _ = settingsStore.GetMachine(machineID, agentType)
+		writeJSON(w, http.StatusOK, map[string]any{"document": document})
+	})
+
+	mux.HandleFunc("DELETE /settings/machines/{machineId}/agents/{agentType}", func(w http.ResponseWriter, r *http.Request) {
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentType, ok := resolveAgentType(r.PathValue("agentType"))
+		if !ok {
+			http.Error(w, "agentType is not supported", http.StatusNotFound)
+			return
+		}
+		if err := settingsStore.DeleteMachine(machineID, agentType); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("POST /settings/machines/{machineId}/agents/{agentType}/apply", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentType, ok := resolveAgentType(r.PathValue("agentType"))
+		if !ok {
+			http.Error(w, "agentType is not supported", http.StatusNotFound)
+			return
+		}
+
+		document, machineExists, err := settingsStore.GetMachine(machineID, agentType)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		source := "machine"
+		if !machineExists {
+			document, machineExists, err = settingsStore.GetGlobal(agentType)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			source = "global"
+		}
+		if !machineExists {
+			http.Error(w, "no config document available to apply", http.StatusConflict)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "agent.config.apply", protocol.AgentConfigApplyCommandPayload{
+			AgentType: string(agentType),
+			Source:    source,
+			Document:  document,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.AgentConfigApplyCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			http.Error(w, "invalid agent.config.apply result", http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, settingsApplyResponse{
+			MachineID: machineID,
+			AgentType: string(agentType),
+			Source:    source,
+			FilePath:  result.FilePath,
+		})
 	})
 
 	mux.HandleFunc("GET /machines", func(w http.ResponseWriter, _ *http.Request) {

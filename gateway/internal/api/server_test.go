@@ -17,6 +17,7 @@ import (
 	"code-agent-gateway/gateway/internal/registry"
 	"code-agent-gateway/gateway/internal/routing"
 	"code-agent-gateway/gateway/internal/runtimeindex"
+	"code-agent-gateway/gateway/internal/settings"
 	gatewayws "code-agent-gateway/gateway/internal/websocket"
 	"github.com/coder/websocket"
 )
@@ -1311,4 +1312,171 @@ func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal("condition not met before timeout")
+}
+
+func TestServerSettingsEndpointsManageGlobalAndMachineDocuments(t *testing.T) {
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	handler := NewServerWithSettings(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), &fakeCommandSender{}, settingsStore, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPut, "/settings/agents/codex/global", bytes.NewBufferString(`{"content":"model = \"gpt-5.4\"\n"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("global put returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/settings/agents/codex/global", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("global get returned %d", rec.Code)
+	}
+	var globalBody struct {
+		Document *domain.AgentConfigDocument `json:"document"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &globalBody); err != nil {
+		t.Fatal(err)
+	}
+	if globalBody.Document == nil || globalBody.Document.Content != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("unexpected global response: %+v", globalBody)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/settings/machines/machine-01/agents/codex", bytes.NewBufferString(`{"content":"model = \"gpt-5.2\"\n"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("machine put returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/settings/machines/machine-01/agents/codex", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("machine get returned %d", rec.Code)
+	}
+	var assignment domain.MachineAgentConfigAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &assignment); err != nil {
+		t.Fatal(err)
+	}
+	if assignment.MachineOverride == nil || assignment.MachineOverride.Content != "model = \"gpt-5.2\"\n" || assignment.UsesGlobalDefault {
+		t.Fatalf("unexpected machine assignment: %+v", assignment)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/settings/machines/machine-01/agents/codex", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("machine delete returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/settings/machines/machine-01/agents/codex", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("machine get after delete returned %d", rec.Code)
+	}
+	var fallbackAssignment domain.MachineAgentConfigAssignment
+	if err := json.Unmarshal(rec.Body.Bytes(), &fallbackAssignment); err != nil {
+		t.Fatal(err)
+	}
+	if fallbackAssignment.MachineOverride != nil || !fallbackAssignment.UsesGlobalDefault || fallbackAssignment.GlobalDefault == nil {
+		t.Fatalf("expected fallback to global default, got %+v", fallbackAssignment)
+	}
+}
+
+func TestServerApplySettingsUsesMachineOverrideBeforeGlobalDefault(t *testing.T) {
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	if err := settingsStore.PutGlobal(domain.AgentTypeCodex, domain.AgentConfigDocument{
+		AgentType: domain.AgentTypeCodex,
+		Format:    domain.AgentConfigFormatTOML,
+		Content:   "model = \"gpt-5.4\"\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := settingsStore.PutMachine("machine-01", domain.AgentTypeCodex, domain.AgentConfigDocument{
+		AgentType: domain.AgentTypeCodex,
+		Format:    domain.AgentConfigFormatTOML,
+		Content:   "model = \"gpt-5.2\"\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var call struct {
+		machineID string
+		name      string
+		payload   protocol.AgentConfigApplyCommandPayload
+	}
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			call.machineID = machineID
+			call.name = name
+			commandPayload, ok := payload.(protocol.AgentConfigApplyCommandPayload)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", payload)
+			}
+			call.payload = commandPayload
+			return protocol.CommandCompletedPayload{
+				CommandName: name,
+				Result: mustMarshalJSON(t, protocol.AgentConfigApplyCommandResult{
+					AgentType: "codex",
+					FilePath:  "/tmp/.codex/config.toml",
+					Source:    commandPayload.Source,
+				}),
+			}, nil
+		},
+	}
+
+	handler := NewServerWithSettings(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, settingsStore, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodPost, "/settings/machines/machine-01/agents/codex/apply", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply returned %d with %s", rec.Code, rec.Body.String())
+	}
+	if call.machineID != "machine-01" || call.name != "agent.config.apply" {
+		t.Fatalf("unexpected command call: %+v", call)
+	}
+	if call.payload.Source != "machine" || call.payload.Document.Content != "model = \"gpt-5.2\"\n" {
+		t.Fatalf("expected machine override payload, got %+v", call.payload)
+	}
+
+	if err := settingsStore.DeleteMachine("machine-01", domain.AgentTypeCodex); err != nil {
+		t.Fatal(err)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/settings/machines/machine-01/agents/codex/apply", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("apply without override returned %d with %s", rec.Code, rec.Body.String())
+	}
+	if call.payload.Source != "global" || call.payload.Document.Content != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("expected global default payload, got %+v", call.payload)
+	}
+}
+
+func TestServerSettingsRejectInvalidTOML(t *testing.T) {
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	handler := NewServerWithSettings(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), &fakeCommandSender{}, settingsStore, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPut, "/settings/agents/codex/global", bytes.NewBufferString(`{"content":"model = ["}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d with %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); body != "content must be valid toml\n" {
+		t.Fatalf("unexpected body: %q", body)
+	}
 }

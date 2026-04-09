@@ -12,11 +12,20 @@ import (
 	"code-agent-gateway/common/protocol"
 	"code-agent-gateway/common/transport"
 	"code-agent-gateway/common/version"
+	"code-agent-gateway/gateway/internal/config"
 	cws "github.com/coder/websocket"
 )
 
 func TestBuildServerHandlerWiresClientSnapshotsIntoHTTPViews(t *testing.T) {
-	server := httptest.NewServer(buildServerHandler())
+	serverHandler, err := buildServerHandler(config.Config{
+		Host:             "0.0.0.0",
+		Port:             8080,
+		SettingsFilePath: t.TempDir() + "/settings.json",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(serverHandler)
 	defer server.Close()
 
 	conn, _, err := cws.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)

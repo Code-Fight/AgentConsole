@@ -1054,6 +1054,26 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			Status:        runtimeController.machineStatus(),
 			RuntimeStatus: runtimeController.runtimeStatus(),
 		}, mgr, runtimeName)
+	case "agent.config.apply":
+		var payload protocol.AgentConfigApplyCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if strings.TrimSpace(payload.AgentType) != "" && payload.AgentType != runtimeName {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, fmt.Sprintf("unsupported agentType %q", payload.AgentType), "")
+		}
+		result, err := mgr.ApplyConfig(runtimeName, payload.Document)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.AgentConfigApplyCommandResult{
+			AgentType: string(result.AgentType),
+			FilePath:  result.FilePath,
+			Source:    payload.Source,
+		}); err != nil {
+			return err
+		}
+		return nil
 	case "environment.skill.enable", "environment.skill.disable":
 		var payload protocol.EnvironmentSkillSetEnabledCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {

@@ -5,6 +5,8 @@ export type TurnStatus = "completed" | "interrupted" | "failed";
 export type EventCategory = "system" | "command" | "event" | "snapshot";
 export type EnvironmentKind = "skill" | "mcp" | "plugin";
 export type ApprovalDecision = "accept" | "decline" | "cancel";
+export type AgentType = "codex";
+export type AgentConfigFormat = "toml";
 export type EnvironmentResourceStatus =
   | "unknown"
   | "enabled"
@@ -29,6 +31,32 @@ export interface MachineUpdatedPayload {
 
 export interface MachineDetailResponse {
   machine: MachineSummary;
+}
+
+export interface AgentDescriptor {
+  agentType: AgentType;
+  displayName: string;
+}
+
+export interface AgentListResponse {
+  items: AgentDescriptor[];
+}
+
+export interface AgentConfigDocument {
+  agentType: AgentType;
+  format: AgentConfigFormat;
+  content: string;
+  updatedAt?: string;
+  updatedBy?: string;
+  version?: number;
+}
+
+export interface MachineAgentConfigAssignment {
+  machineId: string;
+  agentType: AgentType;
+  globalDefault?: AgentConfigDocument | null;
+  machineOverride?: AgentConfigDocument | null;
+  usesGlobalDefault: boolean;
 }
 
 export interface EnvironmentResource {
