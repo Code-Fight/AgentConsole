@@ -111,6 +111,10 @@ func (s *Session) TurnCompleted(requestID string, payload protocol.TurnCompleted
 	return s.sendEnvelope(protocol.CategoryEvent, "turn.completed", requestID, payload)
 }
 
+func (s *Session) TurnFailed(requestID string, payload protocol.TurnCompletedPayload) error {
+	return s.sendEnvelope(protocol.CategoryEvent, "turn.failed", requestID, payload)
+}
+
 func (s *Session) sendEnvelope(category protocol.Category, name string, requestID string, payload any) error {
 	payloadJSON, err := json.Marshal(payload)
 	if err != nil {

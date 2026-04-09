@@ -257,7 +257,7 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {
 			h.setActiveTurn(envelope.MachineID, payload.ThreadID, payload.TurnID)
 		}
-	case "turn.completed":
+	case "turn.completed", "turn.failed":
 		var payload protocol.TurnCompletedPayload
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {
 			h.clearActiveTurn(envelope.MachineID, payload.Turn.ThreadID, payload.Turn.TurnID)
@@ -1088,6 +1088,9 @@ func mergeEnvironmentResource(current domain.EnvironmentResource, next domain.En
 	}
 	if !next.RestartRequired {
 		next.RestartRequired = current.RestartRequired
+	}
+	if next.Details == nil {
+		next.Details = current.Details
 	}
 	return next
 }

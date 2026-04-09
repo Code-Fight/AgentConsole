@@ -88,6 +88,31 @@ type EnvironmentSkillSetEnabledCommandPayload struct {
 	Enabled bool   `json:"enabled"`
 }
 
+type EnvironmentMCPUpsertCommandPayload struct {
+	ServerID string         `json:"serverId"`
+	Config   map[string]any `json:"config"`
+}
+
+type EnvironmentMCPRemoveCommandPayload struct {
+	ServerID string `json:"serverId"`
+}
+
+type EnvironmentMCPSetEnabledCommandPayload struct {
+	ServerID string `json:"serverId"`
+	Enabled  bool   `json:"enabled"`
+}
+
+type EnvironmentPluginInstallCommandPayload struct {
+	PluginID        string `json:"pluginId"`
+	MarketplacePath string `json:"marketplacePath"`
+	PluginName      string `json:"pluginName"`
+}
+
+type EnvironmentPluginSetEnabledCommandPayload struct {
+	PluginID string `json:"pluginId"`
+	Enabled  bool   `json:"enabled"`
+}
+
 type EnvironmentPluginUninstallCommandPayload struct {
 	PluginID string `json:"pluginId"`
 }
@@ -155,6 +180,28 @@ type RuntimeStopCommandResult struct{}
 type EnvironmentSkillSetEnabledCommandResult struct {
 	SkillID string `json:"skillId"`
 	Enabled bool   `json:"enabled"`
+}
+
+type EnvironmentMCPUpsertCommandResult struct {
+	ServerID string `json:"serverId"`
+}
+
+type EnvironmentMCPRemoveCommandResult struct {
+	ServerID string `json:"serverId"`
+}
+
+type EnvironmentMCPSetEnabledCommandResult struct {
+	ServerID string `json:"serverId"`
+	Enabled  bool   `json:"enabled"`
+}
+
+type EnvironmentPluginInstallCommandResult struct {
+	PluginID string `json:"pluginId"`
+}
+
+type EnvironmentPluginSetEnabledCommandResult struct {
+	PluginID string `json:"pluginId"`
+	Enabled  bool   `json:"enabled"`
 }
 
 type EnvironmentPluginUninstallCommandResult struct {

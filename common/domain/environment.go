@@ -23,4 +23,5 @@ type EnvironmentResource struct {
 	Status          EnvironmentResourceStatus `json:"status"`
 	RestartRequired bool                      `json:"restartRequired"`
 	LastObservedAt  string                    `json:"lastObservedAt"`
+	Details         map[string]any            `json:"details,omitempty"`
 }

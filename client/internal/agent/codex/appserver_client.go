@@ -84,20 +84,53 @@ type skillsConfigWriteResponse struct {
 	Data []skillMetadata `json:"data"`
 }
 
+type skillSummary struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
+type appSummary struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	NeedsAuth   bool   `json:"needsAuth"`
+}
+
 type pluginSummary struct {
-	ID        string `json:"id"`
-	Name      string `json:"name"`
-	Installed bool   `json:"installed"`
-	Enabled   bool   `json:"enabled"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Installed     bool   `json:"installed"`
+	Enabled       bool   `json:"enabled"`
+	InstallPolicy string `json:"installPolicy"`
+	AuthPolicy    string `json:"authPolicy"`
 }
 
 type pluginMarketplaceEntry struct {
 	Name    string          `json:"name"`
+	Path    string          `json:"path"`
 	Plugins []pluginSummary `json:"plugins"`
 }
 
 type pluginListResponse struct {
 	Marketplaces []pluginMarketplaceEntry `json:"marketplaces"`
+}
+
+type pluginDetail struct {
+	MarketplaceName string         `json:"marketplaceName"`
+	MarketplacePath string         `json:"marketplacePath"`
+	Summary         pluginSummary  `json:"summary"`
+	Description     string         `json:"description"`
+	Skills          []skillSummary `json:"skills"`
+	Apps            []appSummary   `json:"apps"`
+	MCPServers      []string       `json:"mcpServers"`
+}
+
+type pluginReadResponse struct {
+	Plugin pluginDetail `json:"plugin"`
+}
+
+type pluginInstallResponse struct {
+	AuthPolicy string `json:"authPolicy"`
 }
 
 type mcpServerStatusRecord struct {
@@ -114,6 +147,16 @@ type mcpServerStatusListResponse struct {
 	Data []mcpServerStatusRecord `json:"data"`
 }
 
+type configReadResponse struct {
+	Config map[string]any `json:"config"`
+}
+
+type configWriteResponse struct {
+	Status   string `json:"status"`
+	Version  string `json:"version"`
+	FilePath string `json:"filePath"`
+}
+
 type AppServerClient struct {
 	runner                  Runner
 	now                     func() time.Time
@@ -125,6 +168,8 @@ type AppServerClient struct {
 	pendingApprovals        map[string]pendingApprovalRequest
 	deltaMu                 sync.Mutex
 	deltaSequence           map[string]int
+	restartMu               sync.RWMutex
+	restartRequired         map[string]bool
 }
 
 type ApprovalResolvedEvent struct {
@@ -139,6 +184,7 @@ var _ agenttypes.RuntimeTurnEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalResponder = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeSkillConfigurator = (*AppServerClient)(nil)
+var _ agenttypes.RuntimeMCPManager = (*AppServerClient)(nil)
 var _ agenttypes.RuntimePluginManager = (*AppServerClient)(nil)
 
 func NewAppServerClient(runner Runner) *AppServerClient {
@@ -147,6 +193,7 @@ func NewAppServerClient(runner Runner) *AppServerClient {
 		now:              time.Now,
 		pendingApprovals: make(map[string]pendingApprovalRequest),
 		deltaSequence:    make(map[string]int),
+		restartRequired:  make(map[string]bool),
 	}
 	if notifier, ok := runner.(notificationRunner); ok {
 		notifier.SetNotificationHandler(client.handleNotification)
@@ -297,11 +344,15 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 		if status == "" {
 			status = domain.TurnStatusCompleted
 		}
+		eventType := agenttypes.RuntimeTurnEventTypeCompleted
+		if status == domain.TurnStatusFailed {
+			eventType = agenttypes.RuntimeTurnEventTypeFailed
+		}
 		c.deltaMu.Lock()
 		delete(c.deltaSequence, turnID)
 		c.deltaMu.Unlock()
 		c.emitTurnEvent(agenttypes.RuntimeTurnEvent{
-			Type:      agenttypes.RuntimeTurnEventTypeCompleted,
+			Type:      eventType,
 			RequestID: requestID,
 			Turn: domain.Turn{
 				TurnID:   turnID,

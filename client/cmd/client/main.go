@@ -358,6 +358,10 @@ func (s *clientSession) TurnCompleted(requestID string, payload protocol.TurnCom
 	return s.delegate.TurnCompleted(requestID, payload)
 }
 
+func (s *clientSession) TurnFailed(requestID string, payload protocol.TurnCompletedPayload) error {
+	return s.delegate.TurnFailed(requestID, payload)
+}
+
 func (s *clientSession) TurnStarted(requestID string, payload protocol.TurnStartedPayload) error {
 	return s.sendEnvelope(protocol.CategoryEvent, "turn.started", requestID, payload)
 }
@@ -629,7 +633,7 @@ func handleRuntimeTurnEvent(session *clientSession, mgr *manager.Manager, runtim
 
 func shouldRefreshThreadSnapshotForTurnEvent(event agenttypes.RuntimeTurnEvent) bool {
 	switch event.Type {
-	case agenttypes.RuntimeTurnEventTypeStarted, agenttypes.RuntimeTurnEventTypeCompleted:
+	case agenttypes.RuntimeTurnEventTypeStarted, agenttypes.RuntimeTurnEventTypeCompleted, agenttypes.RuntimeTurnEventTypeFailed:
 		return true
 	default:
 		return false
@@ -652,6 +656,10 @@ func emitRuntimeTurnEvent(session *clientSession, event agenttypes.RuntimeTurnEv
 		})
 	case agenttypes.RuntimeTurnEventTypeCompleted:
 		return session.TurnCompleted(event.RequestID, protocol.TurnCompletedPayload{
+			Turn: event.Turn,
+		})
+	case agenttypes.RuntimeTurnEventTypeFailed:
+		return session.TurnFailed(event.RequestID, protocol.TurnCompletedPayload{
 			Turn: event.Turn,
 		})
 	default:
@@ -1057,6 +1065,82 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentSkillSetEnabledCommandResult{
 			SkillID: payload.SkillID,
 			Enabled: payload.Enabled,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.mcp.upsert":
+		var payload protocol.EnvironmentMCPUpsertCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.UpsertMCPServer(runtimeName, payload.ServerID, payload.Config); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentMCPUpsertCommandResult{
+			ServerID: payload.ServerID,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.mcp.enable", "environment.mcp.disable":
+		var payload protocol.EnvironmentMCPSetEnabledCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.SetMCPServerEnabled(runtimeName, payload.ServerID, payload.Enabled); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentMCPSetEnabledCommandResult{
+			ServerID: payload.ServerID,
+			Enabled:  payload.Enabled,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.mcp.remove":
+		var payload protocol.EnvironmentMCPRemoveCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.RemoveMCPServer(runtimeName, payload.ServerID); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentMCPRemoveCommandResult{
+			ServerID: payload.ServerID,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.plugin.install":
+		var payload protocol.EnvironmentPluginInstallCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.InstallPlugin(runtimeName, agenttypes.InstallPluginParams{
+			PluginID:        payload.PluginID,
+			MarketplacePath: payload.MarketplacePath,
+			PluginName:      payload.PluginName,
+		}); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentPluginInstallCommandResult{
+			PluginID: payload.PluginID,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.plugin.enable", "environment.plugin.disable":
+		var payload protocol.EnvironmentPluginSetEnabledCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.SetPluginEnabled(runtimeName, payload.PluginID, payload.Enabled); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentPluginSetEnabledCommandResult{
+			PluginID: payload.PluginID,
+			Enabled:  payload.Enabled,
 		}); err != nil {
 			return err
 		}

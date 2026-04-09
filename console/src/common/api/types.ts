@@ -39,6 +39,7 @@ export interface EnvironmentResource {
   status: EnvironmentResourceStatus;
   restartRequired: boolean;
   lastObservedAt: string;
+  details?: Record<string, unknown>;
 }
 
 export interface EnvironmentListResponse {

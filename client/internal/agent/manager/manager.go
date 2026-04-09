@@ -117,6 +117,76 @@ func (m *Manager) SetSkillEnabled(runtimeName string, nameOrPath string, enabled
 	return configurator.SetSkillEnabled(nameOrPath, enabled)
 }
 
+func (m *Manager) UpsertMCPServer(runtimeName string, serverID string, config map[string]any) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	mcpManager, ok := runtime.(types.RuntimeMCPManager)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support mcp configuration", runtimeName)
+	}
+
+	return mcpManager.UpsertMCPServer(serverID, config)
+}
+
+func (m *Manager) RemoveMCPServer(runtimeName string, serverID string) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	mcpManager, ok := runtime.(types.RuntimeMCPManager)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support mcp configuration", runtimeName)
+	}
+
+	return mcpManager.RemoveMCPServer(serverID)
+}
+
+func (m *Manager) SetMCPServerEnabled(runtimeName string, serverID string, enabled bool) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	mcpManager, ok := runtime.(types.RuntimeMCPManager)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support mcp configuration", runtimeName)
+	}
+
+	return mcpManager.SetMCPServerEnabled(serverID, enabled)
+}
+
+func (m *Manager) InstallPlugin(runtimeName string, params types.InstallPluginParams) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	pluginManager, ok := runtime.(types.RuntimePluginManager)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support plugin install", runtimeName)
+	}
+
+	return pluginManager.InstallPlugin(params)
+}
+
+func (m *Manager) SetPluginEnabled(runtimeName string, pluginID string, enabled bool) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	pluginManager, ok := runtime.(types.RuntimePluginManager)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support plugin enablement", runtimeName)
+	}
+
+	return pluginManager.SetPluginEnabled(pluginID, enabled)
+}
+
 func (m *Manager) UninstallPlugin(runtimeName string, pluginID string) error {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {

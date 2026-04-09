@@ -705,3 +705,69 @@ test("renders steer and interrupt controls for an active turn and posts to the e
     );
   });
 });
+
+test("turn.failed clears the active turn controls for the current thread", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+
+    if (url === "/threads/thread-1" && (!init?.method || init.method === "GET")) {
+      return new Response(
+        JSON.stringify({
+          thread: {
+            threadId: "thread-1",
+            machineId: "machine-1",
+            status: "active",
+            title: "Investigate flaky test"
+          },
+          activeTurnId: "turn-1",
+          pendingApprovals: []
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByRole("button", { name: "Send steer" })).toBeInTheDocument();
+
+  const socket = FakeWebSocket.instances[0];
+  await act(async () => {
+    socket.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "turn.failed",
+        timestamp: "2026-04-08T14:00:05Z",
+        payload: {
+          turn: {
+            turnId: "turn-1",
+            threadId: "thread-1",
+            status: "failed"
+          }
+        }
+      }),
+    );
+  });
+
+  await waitFor(() => {
+    expect(screen.queryByRole("button", { name: "Send steer" })).not.toBeInTheDocument();
+  });
+  expect(screen.getByText("Turn turn-1 failed")).toBeInTheDocument();
+});

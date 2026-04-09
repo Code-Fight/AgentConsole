@@ -50,6 +50,10 @@ function getEnvelopeThreadId(envelope: EventEnvelope): string | null {
     return (envelope.payload as TurnCompletedPayload).turn.threadId;
   }
 
+  if (envelope.name === "turn.failed") {
+    return (envelope.payload as TurnCompletedPayload).turn.threadId;
+  }
+
   if (envelope.name === "approval.required") {
     return (envelope.payload as ApprovalRequiredPayload).threadId ?? null;
   }
@@ -233,7 +237,7 @@ export function ThreadWorkspacePage() {
         return;
       }
 
-      if (envelope.name === "turn.completed") {
+      if (envelope.name === "turn.completed" || envelope.name === "turn.failed") {
         const payload = envelope.payload as TurnCompletedPayload;
         setActiveTurnId((current) =>
           current === payload.turn.turnId ? null : current,

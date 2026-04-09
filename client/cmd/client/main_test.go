@@ -273,6 +273,43 @@ func TestBindRuntimeTurnEventsRefreshesThreadSnapshotOnStartedAndCompleted(t *te
 	}
 }
 
+func TestBindRuntimeTurnEventsEmitsTurnFailedAndRefreshesSnapshot(t *testing.T) {
+	runtime := &notifyingRuntime{
+		threadSnapshots: [][]domain.Thread{
+			{
+				{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusIdle, Title: "One"},
+			},
+		},
+	}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	if !bindRuntimeTurnEvents(runtime, session, mgr, "codex") {
+		t.Fatal("expected runtime turn event binding")
+	}
+
+	runtime.emit(agenttypes.RuntimeTurnEvent{
+		Type: agenttypes.RuntimeTurnEventTypeFailed,
+		Turn: domain.Turn{
+			TurnID:   "turn-failed-1",
+			ThreadID: "thread-01",
+			Status:   domain.TurnStatusFailed,
+		},
+	})
+
+	if len(*sent) != 2 {
+		t.Fatalf("expected failed turn event plus snapshot, got %d frames", len(*sent))
+	}
+	if decodeEnvelope(t, (*sent)[0]).Name != "turn.failed" {
+		t.Fatalf("unexpected first envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	}
+	if decodeEnvelope(t, (*sent)[1]).Name != "thread.snapshot" {
+		t.Fatalf("unexpected second envelope: %+v", decodeEnvelope(t, (*sent)[1]))
+	}
+}
+
 func TestBindRuntimeApprovalEventsEmitsApprovalRequired(t *testing.T) {
 	runtime := &notifyingRuntime{}
 	session, sent := newRecordingSession()
@@ -592,6 +629,93 @@ func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) 
 	}
 }
 
+func TestHandleCommandEnvelopeEnvironmentCommandsRefreshEnvironmentSnapshot(t *testing.T) {
+	runtime := &notifyingRuntime{
+		environment: []domain.EnvironmentResource{
+			{
+				ResourceID:     "github",
+				MachineID:      "machine-01",
+				Kind:           domain.EnvironmentKindMCP,
+				DisplayName:    "GitHub MCP",
+				Status:         domain.EnvironmentResourceStatusEnabled,
+				LastObservedAt: "2026-04-09T03:00:00Z",
+			},
+			{
+				ResourceID:     "plugin-a",
+				MachineID:      "machine-01",
+				Kind:           domain.EnvironmentKindPlugin,
+				DisplayName:    "Plugin A",
+				Status:         domain.EnvironmentResourceStatusEnabled,
+				LastObservedAt: "2026-04-09T03:00:01Z",
+			},
+		},
+	}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	commands := []protocol.Envelope{
+		{
+			Name:      "environment.mcp.upsert",
+			RequestID: "req-mcp-upsert",
+			Payload:   []byte(`{"serverId":"github","config":{"command":"npx"}}`),
+		},
+		{
+			Name:      "environment.mcp.disable",
+			RequestID: "req-mcp-disable",
+			Payload:   []byte(`{"serverId":"github","enabled":false}`),
+		},
+		{
+			Name:      "environment.mcp.remove",
+			RequestID: "req-mcp-remove",
+			Payload:   []byte(`{"serverId":"github"}`),
+		},
+		{
+			Name:      "environment.plugin.install",
+			RequestID: "req-plugin-install",
+			Payload:   []byte(`{"pluginId":"plugin-a","marketplacePath":"/tmp/codex/marketplace","pluginName":"plugin-a"}`),
+		},
+		{
+			Name:      "environment.plugin.disable",
+			RequestID: "req-plugin-disable",
+			Payload:   []byte(`{"pluginId":"plugin-a","enabled":false}`),
+		},
+	}
+
+	for _, command := range commands {
+		if err := handleCommandEnvelope(session, mgr, "codex", false, nil, command); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if runtime.lastMCPUpsert.serverID != "github" || runtime.lastMCPUpsert.config["command"] != "npx" {
+		t.Fatalf("unexpected mcp upsert: %+v", runtime.lastMCPUpsert)
+	}
+	if runtime.lastMCPEnabled.serverID != "github" || runtime.lastMCPEnabled.enabled {
+		t.Fatalf("unexpected mcp enable toggle: %+v", runtime.lastMCPEnabled)
+	}
+	if runtime.lastMCPRemoved != "github" {
+		t.Fatalf("unexpected mcp remove: %q", runtime.lastMCPRemoved)
+	}
+	if runtime.lastPluginInstall.pluginID != "plugin-a" || runtime.lastPluginInstall.marketplacePath != "/tmp/codex/marketplace" || runtime.lastPluginInstall.pluginName != "plugin-a" {
+		t.Fatalf("unexpected plugin install: %+v", runtime.lastPluginInstall)
+	}
+	if runtime.lastPluginEnabled.pluginID != "plugin-a" || runtime.lastPluginEnabled.enabled {
+		t.Fatalf("unexpected plugin enable toggle: %+v", runtime.lastPluginEnabled)
+	}
+
+	environmentSnapshotCount := 0
+	for _, raw := range *sent {
+		if decodeEnvelope(t, raw).Name == "environment.snapshot" {
+			environmentSnapshotCount++
+		}
+	}
+	if environmentSnapshotCount != len(commands) {
+		t.Fatalf("expected %d environment snapshots, got %d", len(commands), environmentSnapshotCount)
+	}
+}
+
 func TestBuildRuntimeUsesFakeOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeFake}
 	calledFake := false
@@ -762,6 +886,24 @@ type notifyingRuntime struct {
 		decision  string
 		answers   map[string]any
 	}
+	lastMCPUpsert struct {
+		serverID string
+		config   map[string]any
+	}
+	lastMCPEnabled struct {
+		serverID string
+		enabled  bool
+	}
+	lastMCPRemoved    string
+	lastPluginInstall struct {
+		pluginID        string
+		marketplacePath string
+		pluginName      string
+	}
+	lastPluginEnabled struct {
+		pluginID string
+		enabled  bool
+	}
 }
 
 func (r *notifyingRuntime) ListThreads() ([]domain.Thread, error) {
@@ -825,6 +967,40 @@ func (r *notifyingRuntime) RespondApproval(requestID string, decision string, an
 	r.lastApprovalDecision.requestID = requestID
 	r.lastApprovalDecision.decision = decision
 	r.lastApprovalDecision.answers = cloneTestAnswers(answers)
+	return nil
+}
+
+func (r *notifyingRuntime) UpsertMCPServer(serverID string, config map[string]any) error {
+	r.lastMCPUpsert.serverID = serverID
+	r.lastMCPUpsert.config = cloneTestAnswers(config)
+	return nil
+}
+
+func (r *notifyingRuntime) RemoveMCPServer(serverID string) error {
+	r.lastMCPRemoved = serverID
+	return nil
+}
+
+func (r *notifyingRuntime) SetMCPServerEnabled(serverID string, enabled bool) error {
+	r.lastMCPEnabled.serverID = serverID
+	r.lastMCPEnabled.enabled = enabled
+	return nil
+}
+
+func (r *notifyingRuntime) InstallPlugin(params agenttypes.InstallPluginParams) error {
+	r.lastPluginInstall.pluginID = params.PluginID
+	r.lastPluginInstall.marketplacePath = params.MarketplacePath
+	r.lastPluginInstall.pluginName = params.PluginName
+	return nil
+}
+
+func (r *notifyingRuntime) SetPluginEnabled(pluginID string, enabled bool) error {
+	r.lastPluginEnabled.pluginID = pluginID
+	r.lastPluginEnabled.enabled = enabled
+	return nil
+}
+
+func (r *notifyingRuntime) UninstallPlugin(string) error {
 	return nil
 }
 

@@ -545,11 +545,22 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 			Status:      domain.EnvironmentResourceStatusEnabled,
 		},
 		{
+			ResourceID:  "github",
+			MachineID:   "machine-01",
+			Kind:        domain.EnvironmentKindMCP,
+			DisplayName: "GitHub MCP",
+			Status:      domain.EnvironmentResourceStatusEnabled,
+		},
+		{
 			ResourceID:  "plugin-a",
 			MachineID:   "machine-01",
 			Kind:        domain.EnvironmentKindPlugin,
 			DisplayName: "Plugin A",
 			Status:      domain.EnvironmentResourceStatusEnabled,
+			Details: map[string]any{
+				"marketplacePath": "/tmp/codex/marketplace",
+				"pluginName":      "plugin-a",
+			},
 		},
 	})
 
@@ -600,8 +611,48 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("plugin uninstall returned %d", rec.Code)
 	}
 
-	if len(calls) != 3 {
-		t.Fatalf("expected 3 calls, got %d", len(calls))
+	req = httptest.NewRequest(http.MethodPost, "/environment/mcps", bytes.NewBufferString(`{"machineId":"machine-01","resourceId":"github","config":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"]}}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mcp upsert returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/environment/mcps/github/disable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mcp disable returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/environment/mcps/github", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("mcp remove returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/plugin-a/install", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin install returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/plugin-a/disable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin disable returned %d", rec.Code)
+	}
+
+	if len(calls) != 8 {
+		t.Fatalf("expected 8 calls, got %d", len(calls))
 	}
 	if calls[0].machineID != "machine-01" || calls[0].name != "environment.skill.enable" {
 		t.Fatalf("unexpected enable call: %+v", calls[0])
@@ -634,6 +685,61 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	}
 	if uninstallPayload.PluginID != "plugin-a" {
 		t.Fatalf("unexpected uninstall payload: %+v", uninstallPayload)
+	}
+
+	if calls[3].machineID != "machine-01" || calls[3].name != "environment.mcp.upsert" {
+		t.Fatalf("unexpected mcp upsert call: %+v", calls[3])
+	}
+	mcpUpsertPayload, ok := calls[3].payload.(protocol.EnvironmentMCPUpsertCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected mcp upsert payload type: %T", calls[3].payload)
+	}
+	if mcpUpsertPayload.ServerID != "github" {
+		t.Fatalf("unexpected mcp upsert payload: %+v", mcpUpsertPayload)
+	}
+
+	if calls[4].machineID != "machine-01" || calls[4].name != "environment.mcp.disable" {
+		t.Fatalf("unexpected mcp disable call: %+v", calls[4])
+	}
+	mcpDisablePayload, ok := calls[4].payload.(protocol.EnvironmentMCPSetEnabledCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected mcp disable payload type: %T", calls[4].payload)
+	}
+	if mcpDisablePayload.ServerID != "github" || mcpDisablePayload.Enabled {
+		t.Fatalf("unexpected mcp disable payload: %+v", mcpDisablePayload)
+	}
+
+	if calls[5].machineID != "machine-01" || calls[5].name != "environment.mcp.remove" {
+		t.Fatalf("unexpected mcp remove call: %+v", calls[5])
+	}
+	mcpRemovePayload, ok := calls[5].payload.(protocol.EnvironmentMCPRemoveCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected mcp remove payload type: %T", calls[5].payload)
+	}
+	if mcpRemovePayload.ServerID != "github" {
+		t.Fatalf("unexpected mcp remove payload: %+v", mcpRemovePayload)
+	}
+
+	if calls[6].machineID != "machine-01" || calls[6].name != "environment.plugin.install" {
+		t.Fatalf("unexpected plugin install call: %+v", calls[6])
+	}
+	pluginInstallPayload, ok := calls[6].payload.(protocol.EnvironmentPluginInstallCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected plugin install payload type: %T", calls[6].payload)
+	}
+	if pluginInstallPayload.PluginID != "plugin-a" || pluginInstallPayload.MarketplacePath != "/tmp/codex/marketplace" || pluginInstallPayload.PluginName != "plugin-a" {
+		t.Fatalf("unexpected plugin install payload: %+v", pluginInstallPayload)
+	}
+
+	if calls[7].machineID != "machine-01" || calls[7].name != "environment.plugin.disable" {
+		t.Fatalf("unexpected plugin disable call: %+v", calls[7])
+	}
+	pluginDisablePayload, ok := calls[7].payload.(protocol.EnvironmentPluginSetEnabledCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected plugin disable payload type: %T", calls[7].payload)
+	}
+	if pluginDisablePayload.PluginID != "plugin-a" || pluginDisablePayload.Enabled {
+		t.Fatalf("unexpected plugin disable payload: %+v", pluginDisablePayload)
 	}
 }
 

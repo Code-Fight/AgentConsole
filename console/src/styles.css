@@ -128,6 +128,12 @@ body {
   margin-bottom: 16px;
 }
 
+.section-heading-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
 .resource-list {
   display: flex;
   flex-direction: column;
@@ -154,6 +160,85 @@ body {
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.resource-details {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.resource-detail-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.detail-pill-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.detail-code {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  border-radius: 12px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 0.875rem;
+}
+
+.detail-empty {
+  margin-top: 12px;
+}
+
+.config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #dbe4f0;
+  border-radius: 16px;
+  background: #ffffff;
+}
+
+.config-form-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.config-form-heading h2 {
+  margin: 0;
+}
+
+.config-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  color: #334155;
+}
+
+.config-form input,
+.config-form textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #cbd5e1;
+  border-radius: 12px;
+  font: inherit;
+  color: inherit;
+  background: #ffffff;
+}
+
+.config-form textarea {
+  resize: vertical;
+  min-height: 180px;
 }
 
 .status-badge,

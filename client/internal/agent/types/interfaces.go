@@ -22,6 +22,12 @@ type InterruptTurnParams struct {
 	TurnID   string
 }
 
+type InstallPluginParams struct {
+	PluginID        string
+	MarketplacePath string
+	PluginName      string
+}
+
 type TurnDelta struct {
 	Sequence int
 	Delta    string
@@ -33,6 +39,7 @@ const (
 	RuntimeTurnEventTypeStarted   RuntimeTurnEventType = "turn.started"
 	RuntimeTurnEventTypeDelta     RuntimeTurnEventType = "turn.delta"
 	RuntimeTurnEventTypeCompleted RuntimeTurnEventType = "turn.completed"
+	RuntimeTurnEventTypeFailed    RuntimeTurnEventType = "turn.failed"
 )
 
 type RuntimeTurnEvent struct {
@@ -71,7 +78,15 @@ type RuntimeSkillConfigurator interface {
 	SetSkillEnabled(nameOrPath string, enabled bool) error
 }
 
+type RuntimeMCPManager interface {
+	UpsertMCPServer(serverID string, config map[string]any) error
+	RemoveMCPServer(serverID string) error
+	SetMCPServerEnabled(serverID string, enabled bool) error
+}
+
 type RuntimePluginManager interface {
+	InstallPlugin(params InstallPluginParams) error
+	SetPluginEnabled(pluginID string, enabled bool) error
 	UninstallPlugin(pluginID string) error
 }
 

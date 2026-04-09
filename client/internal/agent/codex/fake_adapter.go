@@ -51,6 +51,150 @@ func (a *FakeAdapter) ListEnvironment() ([]domain.EnvironmentResource, error) {
 	return append([]domain.EnvironmentResource(nil), a.environment...), nil
 }
 
+func (a *FakeAdapter) SetSkillEnabled(nameOrPath string, enabled bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for idx := range a.environment {
+		if a.environment[idx].Kind != domain.EnvironmentKindSkill || a.environment[idx].ResourceID != nameOrPath {
+			continue
+		}
+		a.environment[idx].Status = enabledStatus(enabled)
+		return nil
+	}
+
+	return fmt.Errorf("skill %q not found", nameOrPath)
+}
+
+func (a *FakeAdapter) UpsertMCPServer(serverID string, config map[string]any) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	resource := domain.EnvironmentResource{
+		ResourceID:  serverID,
+		Kind:        domain.EnvironmentKindMCP,
+		DisplayName: serverID,
+		Status:      domain.EnvironmentResourceStatusEnabled,
+		Details:     cloneFakeDetails(config),
+	}
+	for idx := range a.environment {
+		if a.environment[idx].Kind != domain.EnvironmentKindMCP || a.environment[idx].ResourceID != serverID {
+			continue
+		}
+		a.environment[idx] = mergeFakeEnvironmentResource(a.environment[idx], resource)
+		return nil
+	}
+	a.environment = append(a.environment, resource)
+	return nil
+}
+
+func (a *FakeAdapter) RemoveMCPServer(serverID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	filtered := make([]domain.EnvironmentResource, 0, len(a.environment))
+	removed := false
+	for _, resource := range a.environment {
+		if resource.Kind == domain.EnvironmentKindMCP && resource.ResourceID == serverID {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, resource)
+	}
+	if !removed {
+		return fmt.Errorf("mcp server %q not found", serverID)
+	}
+	a.environment = filtered
+	return nil
+}
+
+func (a *FakeAdapter) SetMCPServerEnabled(serverID string, enabled bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for idx := range a.environment {
+		if a.environment[idx].Kind != domain.EnvironmentKindMCP || a.environment[idx].ResourceID != serverID {
+			continue
+		}
+		a.environment[idx].Status = enabledStatus(enabled)
+		if a.environment[idx].Details == nil {
+			a.environment[idx].Details = map[string]any{}
+		}
+		a.environment[idx].Details["enabled"] = enabled
+		return nil
+	}
+
+	return fmt.Errorf("mcp server %q not found", serverID)
+}
+
+func (a *FakeAdapter) InstallPlugin(params agenttypes.InstallPluginParams) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for idx := range a.environment {
+		if a.environment[idx].Kind != domain.EnvironmentKindPlugin || a.environment[idx].ResourceID != params.PluginID {
+			continue
+		}
+		a.environment[idx].Status = domain.EnvironmentResourceStatusEnabled
+		a.environment[idx].RestartRequired = true
+		if a.environment[idx].Details == nil {
+			a.environment[idx].Details = map[string]any{}
+		}
+		a.environment[idx].Details["marketplacePath"] = params.MarketplacePath
+		a.environment[idx].Details["pluginName"] = params.PluginName
+		return nil
+	}
+
+	a.environment = append(a.environment, domain.EnvironmentResource{
+		ResourceID:      params.PluginID,
+		Kind:            domain.EnvironmentKindPlugin,
+		DisplayName:     params.PluginName,
+		Status:          domain.EnvironmentResourceStatusEnabled,
+		RestartRequired: true,
+		Details: map[string]any{
+			"marketplacePath": params.MarketplacePath,
+			"pluginName":      params.PluginName,
+		},
+	})
+	return nil
+}
+
+func (a *FakeAdapter) SetPluginEnabled(pluginID string, enabled bool) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for idx := range a.environment {
+		if a.environment[idx].Kind != domain.EnvironmentKindPlugin || a.environment[idx].ResourceID != pluginID {
+			continue
+		}
+		a.environment[idx].Status = enabledStatus(enabled)
+		a.environment[idx].RestartRequired = true
+		if a.environment[idx].Details == nil {
+			a.environment[idx].Details = map[string]any{}
+		}
+		a.environment[idx].Details["enabled"] = enabled
+		return nil
+	}
+
+	return fmt.Errorf("plugin %q not found", pluginID)
+}
+
+func (a *FakeAdapter) UninstallPlugin(pluginID string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for idx := range a.environment {
+		if a.environment[idx].Kind != domain.EnvironmentKindPlugin || a.environment[idx].ResourceID != pluginID {
+			continue
+		}
+		a.environment[idx].Status = domain.EnvironmentResourceStatusUnknown
+		a.environment[idx].RestartRequired = true
+		return nil
+	}
+
+	return fmt.Errorf("plugin %q not found", pluginID)
+}
+
 func (a *FakeAdapter) CreateThread(params agenttypes.CreateThreadParams) (domain.Thread, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -171,4 +315,29 @@ func (a *FakeAdapter) findThreadIndex(threadID string) int {
 	}
 
 	return -1
+}
+
+func cloneFakeDetails(details map[string]any) map[string]any {
+	if len(details) == 0 {
+		return map[string]any{}
+	}
+
+	cloned := make(map[string]any, len(details))
+	for key, value := range details {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func mergeFakeEnvironmentResource(current domain.EnvironmentResource, next domain.EnvironmentResource) domain.EnvironmentResource {
+	if next.DisplayName == "" {
+		next.DisplayName = current.DisplayName
+	}
+	if next.Status == "" {
+		next.Status = current.Status
+	}
+	if next.Details == nil {
+		next.Details = cloneFakeDetails(current.Details)
+	}
+	return next
 }

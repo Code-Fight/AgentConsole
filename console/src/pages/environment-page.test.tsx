@@ -224,3 +224,139 @@ test("does not render uninstall for plugins that are not installed", async () =>
   expect(await screen.findByText("Marketplace B")).toBeInTheDocument();
   expect(screen.queryByRole("button", { name: "Uninstall" })).not.toBeInTheDocument();
 });
+
+test("renders plugin detail contents and install action for marketplace plugins", async () => {
+  connectConsoleSocketMock.mockReturnValue(() => {});
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+
+    if (path.endsWith("/environment/skills") || path.endsWith("/environment/mcps")) {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (path.endsWith("/environment/plugins")) {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              resourceId: "gmail@openai-curated",
+              machineId: "machine-1",
+              kind: "plugin",
+              displayName: "Gmail",
+              status: "unknown",
+              restartRequired: false,
+              lastObservedAt: "2026-04-08T13:10:00Z",
+              details: {
+                description: "Read and draft Gmail messages",
+                marketplaceName: "OpenAI Curated",
+                marketplacePath: "/tmp/codex/marketplace",
+                bundledSkills: ["gmail_triage"],
+                bundledMcpServers: ["gmail"]
+              }
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        },
+      );
+    }
+
+    if (path.endsWith("/environment/plugins/gmail%40openai-curated/install")) {
+      return new Response(typeof init?.body === "string" ? init.body : "", {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<EnvironmentPage />);
+
+  expect(await screen.findByText("Gmail")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("button", { name: "View details" }));
+  expect(await screen.findByText("Read and draft Gmail messages")).toBeInTheDocument();
+  expect(screen.getByText("gmail_triage")).toBeInTheDocument();
+  expect(screen.getByText("gmail")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "Install" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/environment/plugins/gmail%40openai-curated/install",
+      expect.objectContaining({
+        body: JSON.stringify({ machineId: "machine-1" }),
+        method: "POST"
+      }),
+    );
+  });
+});
+
+test("submits MCP config through the create form", async () => {
+  connectConsoleSocketMock.mockReturnValue(() => {});
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+
+    if (path.endsWith("/environment/skills") || path.endsWith("/environment/plugins")) {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    if (path.endsWith("/environment/mcps")) {
+      if (init?.method === "POST") {
+        return new Response(typeof init?.body === "string" ? init.body : "", {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<EnvironmentPage />);
+
+  fireEvent.click(await screen.findByRole("button", { name: "Add MCP" }));
+  fireEvent.change(screen.getByLabelText("Machine ID"), {
+    target: { value: "machine-1" }
+  });
+  fireEvent.change(screen.getByLabelText("Server ID"), {
+    target: { value: "github" }
+  });
+  fireEvent.change(screen.getByLabelText("Config JSON"), {
+    target: { value: "{\"command\":\"npx\",\"args\":[\"-y\",\"@modelcontextprotocol/server-github\"]}" }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Save MCP" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/environment/mcps",
+      expect.objectContaining({
+        body: JSON.stringify({
+          machineId: "machine-1",
+          resourceId: "github",
+          config: {
+            command: "npx",
+            args: ["-y", "@modelcontextprotocol/server-github"]
+          }
+        }),
+        method: "POST"
+      }),
+    );
+  });
+});

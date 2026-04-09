@@ -96,6 +96,45 @@ func TestManagerRoutesThreadAndTurnOperationsToRuntime(t *testing.T) {
 		t.Fatalf("unexpected skill mutation: nameOrPath=%q enabled=%v", runtime.lastSkillNameOrPath, runtime.lastSkillEnabled)
 	}
 
+	if err := mgr.UpsertMCPServer("fake", "github", map[string]any{"command": "npx"}); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastMCPID != "github" || runtime.lastMCPConfig["command"] != "npx" {
+		t.Fatalf("unexpected mcp upsert: id=%q config=%#v", runtime.lastMCPID, runtime.lastMCPConfig)
+	}
+
+	if err := mgr.SetMCPServerEnabled("fake", "github", false); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastMCPEnabledID != "github" || runtime.lastMCPEnabled {
+		t.Fatalf("unexpected mcp enable toggle: id=%q enabled=%v", runtime.lastMCPEnabledID, runtime.lastMCPEnabled)
+	}
+
+	if err := mgr.RemoveMCPServer("fake", "github"); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastRemovedMCPID != "github" {
+		t.Fatalf("unexpected mcp remove target: %q", runtime.lastRemovedMCPID)
+	}
+
+	if err := mgr.InstallPlugin("fake", agenttypes.InstallPluginParams{
+		PluginID:        "plugin-a",
+		MarketplacePath: "/tmp/codex/marketplace",
+		PluginName:      "plugin-a",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastInstalledPlugin.PluginID != "plugin-a" || runtime.lastInstalledPlugin.MarketplacePath != "/tmp/codex/marketplace" {
+		t.Fatalf("unexpected plugin install params: %+v", runtime.lastInstalledPlugin)
+	}
+
+	if err := mgr.SetPluginEnabled("fake", "plugin-a", false); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastPluginEnabledID != "plugin-a" || runtime.lastPluginEnabled {
+		t.Fatalf("unexpected plugin enable toggle: id=%q enabled=%v", runtime.lastPluginEnabledID, runtime.lastPluginEnabled)
+	}
+
 	if err := mgr.UninstallPlugin("fake", "plugin-a"); err != nil {
 		t.Fatal(err)
 	}
@@ -108,6 +147,14 @@ type stubRuntime struct {
 	lastSkillNameOrPath string
 	lastSkillEnabled    bool
 	lastPluginID        string
+	lastMCPID           string
+	lastMCPConfig       map[string]any
+	lastMCPEnabledID    string
+	lastMCPEnabled      bool
+	lastRemovedMCPID    string
+	lastInstalledPlugin agenttypes.InstallPluginParams
+	lastPluginEnabledID string
+	lastPluginEnabled   bool
 }
 
 func (s *stubRuntime) ListThreads() ([]domain.Thread, error) {
@@ -181,6 +228,34 @@ func (s *stubRuntime) InterruptTurn(params agenttypes.InterruptTurnParams) (doma
 func (s *stubRuntime) SetSkillEnabled(nameOrPath string, enabled bool) error {
 	s.lastSkillNameOrPath = nameOrPath
 	s.lastSkillEnabled = enabled
+	return nil
+}
+
+func (s *stubRuntime) UpsertMCPServer(serverID string, config map[string]any) error {
+	s.lastMCPID = serverID
+	s.lastMCPConfig = config
+	return nil
+}
+
+func (s *stubRuntime) RemoveMCPServer(serverID string) error {
+	s.lastRemovedMCPID = serverID
+	return nil
+}
+
+func (s *stubRuntime) SetMCPServerEnabled(serverID string, enabled bool) error {
+	s.lastMCPEnabledID = serverID
+	s.lastMCPEnabled = enabled
+	return nil
+}
+
+func (s *stubRuntime) InstallPlugin(params agenttypes.InstallPluginParams) error {
+	s.lastInstalledPlugin = params
+	return nil
+}
+
+func (s *stubRuntime) SetPluginEnabled(pluginID string, enabled bool) error {
+	s.lastPluginEnabledID = pluginID
+	s.lastPluginEnabled = enabled
 	return nil
 }
 

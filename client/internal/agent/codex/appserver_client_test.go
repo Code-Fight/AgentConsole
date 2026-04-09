@@ -179,10 +179,38 @@ func TestClientListEnvironment(t *testing.T) {
 						response.Marketplaces = []pluginMarketplaceEntry{
 							{
 								Name: "local",
+								Path: "/tmp/codex/marketplace",
 								Plugins: []pluginSummary{
-									{ID: "plugin-a", Name: "Plugin A", Enabled: true, Installed: true},
+									{ID: "plugin-a", Name: "plugin-a", Enabled: true, Installed: true},
 								},
 							},
+						}
+					case "config/read":
+						response := out.(*configReadResponse)
+						response.Config = map[string]any{
+							"mcp_servers": map[string]any{
+								"github": map[string]any{
+									"command": "npx",
+									"args":    []any{"-y", "@modelcontextprotocol/server-github"},
+								},
+							},
+						}
+					case "plugin/read":
+						response := out.(*pluginReadResponse)
+						response.Plugin = pluginDetail{
+							MarketplaceName: "local",
+							MarketplacePath: "/tmp/codex/marketplace",
+							Summary: pluginSummary{
+								ID:        "plugin-a",
+								Name:      "plugin-a",
+								Installed: true,
+								Enabled:   true,
+							},
+							Description: "Plugin A description",
+							Skills: []skillSummary{
+								{Name: "skill-a", Description: "Skill A"},
+							},
+							MCPServers: []string{"github"},
 						}
 					default:
 						t.Fatalf("unexpected method: %s", method)
@@ -202,7 +230,12 @@ func TestClientListEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(calls) != 3 || calls[0] != "skills/list" || calls[1] != "mcpServerStatus/list" || calls[2] != "plugin/list" {
+			if len(calls) != 5 ||
+				calls[0] != "skills/list" ||
+				calls[1] != "mcpServerStatus/list" ||
+				calls[2] != "plugin/list" ||
+				calls[3] != "config/read" ||
+				calls[4] != "plugin/read" {
 				t.Fatalf("unexpected calls: %#v", calls)
 			}
 			if len(environment) != 3 {
@@ -217,8 +250,17 @@ func TestClientListEnvironment(t *testing.T) {
 			if environment[1].ResourceID != "github" || environment[1].Kind != domain.EnvironmentKindMCP {
 				t.Fatalf("unexpected mcp environment: %+v", environment[1])
 			}
+			if environment[1].Details["command"] != "npx" {
+				t.Fatalf("expected mcp config details, got %+v", environment[1])
+			}
 			if environment[2].ResourceID != "plugin-a" || environment[2].Kind != domain.EnvironmentKindPlugin {
 				t.Fatalf("unexpected environment: %+v", environment)
+			}
+			if environment[2].Details["marketplacePath"] != "/tmp/codex/marketplace" {
+				t.Fatalf("expected plugin marketplace details, got %+v", environment[2])
+			}
+			if environment[2].Details["description"] != "Plugin A description" {
+				t.Fatalf("expected plugin description details, got %+v", environment[2])
 			}
 		})
 	}
@@ -301,6 +343,249 @@ func TestClientSetSkillEnabledUsesExpectedMethodAndPayload(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestClientUpsertMCPUsesConfigWriteAndReload(t *testing.T) {
+	var calls []string
+	var gotPayloads []any
+
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			gotPayloads = append(gotPayloads, payload)
+			switch method {
+			case "config/value/write":
+				response := out.(*configWriteResponse)
+				response.Version = "v1"
+				response.FilePath = "/tmp/codex/config.toml"
+			case "config/mcpServer/reload":
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	err := client.UpsertMCPServer("github", map[string]any{
+		"command": "npx",
+		"args":    []any{"-y", "@modelcontextprotocol/server-github"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calls) != 2 || calls[0] != "config/value/write" || calls[1] != "config/mcpServer/reload" {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+
+	payload, ok := gotPayloads[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", gotPayloads[0])
+	}
+	if payload["keyPath"] != "mcp_servers.github" {
+		t.Fatalf("unexpected keyPath payload: %#v", payload)
+	}
+	if payload["mergeStrategy"] != "replace" {
+		t.Fatalf("unexpected merge strategy payload: %#v", payload)
+	}
+}
+
+func TestClientSetMCPEnabledUsesExistingConfigAndReload(t *testing.T) {
+	var calls []string
+	var gotPayload any
+
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			switch method {
+			case "config/read":
+				response := out.(*configReadResponse)
+				response.Config = map[string]any{
+					"mcp_servers": map[string]any{
+						"github": map[string]any{
+							"command": "npx",
+							"enabled": true,
+						},
+					},
+				}
+			case "config/value/write":
+				gotPayload = payload
+				response := out.(*configWriteResponse)
+				response.Version = "v1"
+				response.FilePath = "/tmp/codex/config.toml"
+			case "config/mcpServer/reload":
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	if err := client.SetMCPServerEnabled("github", false); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calls) != 3 || calls[0] != "config/read" || calls[1] != "config/value/write" || calls[2] != "config/mcpServer/reload" {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+	payload, ok := gotPayload.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", gotPayload)
+	}
+	value, ok := payload["value"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected value payload: %#v", payload)
+	}
+	if value["enabled"] != false {
+		t.Fatalf("expected updated enabled flag, got %#v", value)
+	}
+}
+
+func TestClientRemoveMCPRewritesConfigAndReloads(t *testing.T) {
+	var calls []string
+	var gotPayload any
+
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			switch method {
+			case "config/read":
+				response := out.(*configReadResponse)
+				response.Config = map[string]any{
+					"mcp_servers": map[string]any{
+						"github":   map[string]any{"command": "npx"},
+						"postgres": map[string]any{"command": "docker"},
+					},
+				}
+			case "config/value/write":
+				gotPayload = payload
+				response := out.(*configWriteResponse)
+				response.Version = "v1"
+				response.FilePath = "/tmp/codex/config.toml"
+			case "config/mcpServer/reload":
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	if err := client.RemoveMCPServer("github"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calls) != 3 {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+	payload, ok := gotPayload.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", gotPayload)
+	}
+	if payload["keyPath"] != "mcp_servers" {
+		t.Fatalf("unexpected keyPath payload: %#v", payload)
+	}
+	value, ok := payload["value"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected value payload: %#v", payload)
+	}
+	if _, exists := value["github"]; exists {
+		t.Fatalf("expected removed server to be absent, got %#v", value)
+	}
+	if _, exists := value["postgres"]; !exists {
+		t.Fatalf("expected other server to remain, got %#v", value)
+	}
+}
+
+func TestClientInstallPluginUsesExpectedMethodAndPayload(t *testing.T) {
+	var gotMethod string
+	var gotPayload any
+
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			gotMethod = method
+			gotPayload = payload
+			response := out.(*pluginInstallResponse)
+			response.AuthPolicy = "never"
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	err := client.InstallPlugin(agenttypes.InstallPluginParams{
+		PluginID:        "plugin-a",
+		MarketplacePath: "/tmp/codex/marketplace",
+		PluginName:      "plugin-a",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if gotMethod != "plugin/install" {
+		t.Fatalf("unexpected method: %s", gotMethod)
+	}
+	payload, ok := gotPayload.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", gotPayload)
+	}
+	if payload["marketplacePath"] != "/tmp/codex/marketplace" || payload["pluginName"] != "plugin-a" {
+		t.Fatalf("unexpected install payload: %#v", payload)
+	}
+}
+
+func TestClientSetPluginEnabledWritesConfig(t *testing.T) {
+	var calls []string
+	var gotPayload any
+
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			switch method {
+			case "config/read":
+				response := out.(*configReadResponse)
+				response.Config = map[string]any{
+					"plugins": map[string]any{
+						"plugin-a": map[string]any{
+							"enabled": true,
+						},
+					},
+				}
+			case "config/value/write":
+				gotPayload = payload
+				response := out.(*configWriteResponse)
+				response.Version = "v1"
+				response.FilePath = "/tmp/codex/config.toml"
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	if err := client.SetPluginEnabled("plugin-a", false); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calls) != 2 || calls[0] != "config/read" || calls[1] != "config/value/write" {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+	payload, ok := gotPayload.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", gotPayload)
+	}
+	if payload["keyPath"] != "plugins.plugin-a" {
+		t.Fatalf("unexpected keyPath payload: %#v", payload)
+	}
+	value, ok := payload["value"].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected value payload: %#v", payload)
+	}
+	if value["enabled"] != false {
+		t.Fatalf("expected updated enabled flag, got %#v", value)
 	}
 }
 
@@ -992,6 +1277,9 @@ func TestClientListEnvironmentMapsMcpInventory(t *testing.T) {
 			case "plugin/list":
 				response := out.(*pluginListResponse)
 				response.Marketplaces = nil
+			case "config/read":
+				response := out.(*configReadResponse)
+				response.Config = map[string]any{}
 			default:
 				t.Fatalf("unexpected method: %s", method)
 			}
@@ -1005,7 +1293,7 @@ func TestClientListEnvironmentMapsMcpInventory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(calls) != 3 || calls[0] != "skills/list" || calls[1] != "mcpServerStatus/list" || calls[2] != "plugin/list" {
+	if len(calls) != 4 || calls[0] != "skills/list" || calls[1] != "mcpServerStatus/list" || calls[2] != "plugin/list" || calls[3] != "config/read" {
 		t.Fatalf("unexpected calls: %#v", calls)
 	}
 	if len(environment) != 2 {

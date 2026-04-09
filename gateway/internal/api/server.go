@@ -58,6 +58,12 @@ type environmentMutationRequest struct {
 	MachineID string `json:"machineId"`
 }
 
+type environmentMCPUpsertRequest struct {
+	MachineID  string         `json:"machineId"`
+	ResourceID string         `json:"resourceId"`
+	Config     map[string]any `json:"config"`
+}
+
 type activeTurnReader interface {
 	ActiveTurnID(threadID string) (string, bool)
 }
@@ -126,6 +132,36 @@ func resolveEnvironmentMutationMachineID(r *http.Request) (string, error) {
 	}
 
 	return strings.TrimSpace(req.MachineID), nil
+}
+
+func decodeEnvironmentMCPUpsertRequest(r *http.Request) (environmentMCPUpsertRequest, error) {
+	if r == nil || r.Body == nil {
+		return environmentMCPUpsertRequest{}, nil
+	}
+
+	var req environmentMCPUpsertRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err == io.EOF {
+			return environmentMCPUpsertRequest{}, nil
+		}
+		return environmentMCPUpsertRequest{}, err
+	}
+	return req, nil
+}
+
+func stringDetail(resource domain.EnvironmentResource, key string) string {
+	if resource.Details == nil || strings.TrimSpace(key) == "" {
+		return ""
+	}
+	value, ok := resource.Details[key]
+	if !ok {
+		return ""
+	}
+	stringValue, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(stringValue)
 }
 
 func machineIsOnline(reg *registry.Store, machineID string) bool {
@@ -806,6 +842,247 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID})
+	})
+
+	mux.HandleFunc("POST /environment/mcps", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		req, err := decodeEnvironmentMCPUpsertRequest(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.MachineID) == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.ResourceID) == "" {
+			http.Error(w, "resourceId is required", http.StatusBadRequest)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), req.MachineID, "environment.mcp.upsert", protocol.EnvironmentMCPUpsertCommandPayload{
+			ServerID: req.ResourceID,
+			Config:   req.Config,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"resourceId": req.ResourceID})
+	})
+
+	mux.HandleFunc("POST /environment/mcps/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		serverID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, machineID, serverID)
+		if !ok {
+			http.Error(w, "mcp not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.mcp.enable", protocol.EnvironmentMCPSetEnabledCommandPayload{
+			ServerID: serverID,
+			Enabled:  true,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"resourceId": serverID, "enabled": true})
+	})
+
+	mux.HandleFunc("POST /environment/mcps/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		serverID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, machineID, serverID)
+		if !ok {
+			http.Error(w, "mcp not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.mcp.disable", protocol.EnvironmentMCPSetEnabledCommandPayload{
+			ServerID: serverID,
+			Enabled:  false,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"resourceId": serverID, "enabled": false})
+	})
+
+	mux.HandleFunc("DELETE /environment/mcps/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		serverID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, machineID, serverID)
+		if !ok {
+			http.Error(w, "mcp not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.mcp.remove", protocol.EnvironmentMCPRemoveCommandPayload{
+			ServerID: serverID,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"resourceId": serverID})
+	})
+
+	mux.HandleFunc("POST /environment/plugins/{id}/install", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		pluginID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		if !ok {
+			http.Error(w, "plugin not found", http.StatusNotFound)
+			return
+		}
+		marketplacePath := stringDetail(resource, "marketplacePath")
+		pluginName := stringDetail(resource, "pluginName")
+		if marketplacePath == "" || pluginName == "" {
+			http.Error(w, "plugin install details unavailable", http.StatusConflict)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.install", protocol.EnvironmentPluginInstallCommandPayload{
+			PluginID:        pluginID,
+			MarketplacePath: marketplacePath,
+			PluginName:      pluginName,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID})
+	})
+
+	mux.HandleFunc("POST /environment/plugins/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		pluginID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		if !ok {
+			http.Error(w, "plugin not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.enable", protocol.EnvironmentPluginSetEnabledCommandPayload{
+			PluginID: pluginID,
+			Enabled:  true,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID, "enabled": true})
+	})
+
+	mux.HandleFunc("POST /environment/plugins/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		pluginID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		if !ok {
+			http.Error(w, "plugin not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.disable", protocol.EnvironmentPluginSetEnabledCommandPayload{
+			PluginID: pluginID,
+			Enabled:  false,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID, "enabled": false})
 	})
 
 	return mux
