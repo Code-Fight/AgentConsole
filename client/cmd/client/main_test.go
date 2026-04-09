@@ -393,6 +393,53 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 	}
 }
 
+func TestHandleCommandEnvelopeRespondsToToolUserInputWithAnswers(t *testing.T) {
+	runtime := &notifyingRuntime{}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	if err := session.ApprovalRequired(protocol.ApprovalRequiredPayload{
+		RequestID: "approval-1",
+		ThreadID:  "thread-01",
+		TurnID:    "turn-01",
+		ItemID:    "item-01",
+		Kind:      "tool_user_input",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
+	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+		Name:      "approval.respond",
+		RequestID: "req-approval-answers-1",
+		Payload: []byte(`{
+			"requestId":"` + publicRequestID + `",
+			"threadId":"thread-01",
+			"turnId":"turn-01",
+			"decision":"accept",
+			"answers":{"question-1":"release","question-2":"Need the release branch"}
+		}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if runtime.lastApprovalDecision.requestID != "approval-1" || runtime.lastApprovalDecision.decision != "accept" {
+		t.Fatalf("unexpected approval response: %+v", runtime.lastApprovalDecision)
+	}
+	if len(runtime.lastApprovalDecision.answers) != 2 ||
+		runtime.lastApprovalDecision.answers["question-1"] != "release" ||
+		runtime.lastApprovalDecision.answers["question-2"] != "Need the release branch" {
+		t.Fatalf("unexpected approval answers: %#v", runtime.lastApprovalDecision.answers)
+	}
+
+	if len(*sent) != 3 {
+		t.Fatalf("expected approval required, command ack, and approval event, got %d frames", len(*sent))
+	}
+}
+
 func TestBindRuntimeApprovalEventsEmitsResolvedEventsFromRuntimeOriginatedResolution(t *testing.T) {
 	runtime := &notifyingRuntime{}
 	session, sent := newRecordingSession()
@@ -713,6 +760,7 @@ type notifyingRuntime struct {
 	lastApprovalDecision struct {
 		requestID string
 		decision  string
+		answers   map[string]any
 	}
 }
 
@@ -773,9 +821,10 @@ func (r *notifyingRuntime) SetApprovalResolvedHandler(handler func(codex.Approva
 	r.approvalResolved = handler
 }
 
-func (r *notifyingRuntime) RespondApproval(requestID string, decision string) error {
+func (r *notifyingRuntime) RespondApproval(requestID string, decision string, answers map[string]any) error {
 	r.lastApprovalDecision.requestID = requestID
 	r.lastApprovalDecision.decision = decision
+	r.lastApprovalDecision.answers = cloneTestAnswers(answers)
 	return nil
 }
 
@@ -800,4 +849,16 @@ func (r *notifyingRuntime) emitApprovalResolved(event codex.ApprovalResolvedEven
 	if r.approvalResolved != nil {
 		r.approvalResolved(event)
 	}
+}
+
+func cloneTestAnswers(answers map[string]any) map[string]any {
+	if answers == nil {
+		return nil
+	}
+
+	cloned := make(map[string]any, len(answers))
+	for key, value := range answers {
+		cloned[key] = value
+	}
+	return cloned
 }

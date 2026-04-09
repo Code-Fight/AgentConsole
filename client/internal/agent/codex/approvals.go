@@ -31,7 +31,7 @@ type approvalQuestion struct {
 	Options []string
 }
 
-func (c *AppServerClient) RespondApproval(requestID string, decision string) error {
+func (c *AppServerClient) RespondApproval(requestID string, decision string, answers map[string]any) error {
 	if !isSupportedApprovalDecision(decision) {
 		return fmt.Errorf("unsupported approval decision %q", decision)
 	}
@@ -48,7 +48,7 @@ func (c *AppServerClient) RespondApproval(requestID string, decision string) err
 		return fmt.Errorf("approval request %q not found", requestID)
 	}
 
-	response := approvalResponsePayload(pending.request, decision)
+	response := approvalResponsePayload(pending.request, decision, answers)
 	if err := responder.Respond(pending.id, response, nil); err != nil {
 		return err
 	}
@@ -81,7 +81,7 @@ func isSupportedApprovalDecision(decision string) bool {
 	}
 }
 
-func approvalResponsePayload(request ApprovalRequest, decision string) any {
+func approvalResponsePayload(request ApprovalRequest, decision string, answers map[string]any) any {
 	switch request.Kind {
 	case "permissions":
 		if strings.TrimSpace(decision) == "accept" {
@@ -99,6 +99,9 @@ func approvalResponsePayload(request ApprovalRequest, decision string) any {
 		if strings.TrimSpace(decision) != "accept" {
 			return map[string]any{"answers": map[string]any{}}
 		}
+		if answers != nil {
+			return map[string]any{"answers": cloneApprovalAnswers(answers)}
+		}
 		return map[string]any{"answers": buildToolUserInputAnswers(request.UserInputQuestions)}
 	default:
 		return map[string]any{"decision": decision}
@@ -112,6 +115,18 @@ func cloneApprovalPermissions(permissions map[string]any) map[string]any {
 
 	cloned := make(map[string]any, len(permissions))
 	for key, value := range permissions {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func cloneApprovalAnswers(answers map[string]any) map[string]any {
+	if len(answers) == 0 {
+		return map[string]any{}
+	}
+
+	cloned := make(map[string]any, len(answers))
+	for key, value := range answers {
 		cloned[key] = value
 	}
 	return cloned

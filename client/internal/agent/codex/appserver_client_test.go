@@ -385,11 +385,12 @@ func TestAppServerClientRespondApprovalMapsToolUserInputResponses(t *testing.T) 
 	tests := []struct {
 		name       string
 		decision   string
+		answers    map[string]any
 		request    map[string]any
 		wantAnswer map[string]any
 	}{
 		{
-			name:     "accept chooses the first option",
+			name:     "accept chooses the first option when no answers are provided",
 			decision: "accept",
 			request: map[string]any{
 				"threadId": "thread-1",
@@ -407,6 +408,37 @@ func TestAppServerClientRespondApprovalMapsToolUserInputResponses(t *testing.T) 
 				},
 			},
 			wantAnswer: map[string]any{"question-1": "option-a"},
+		},
+		{
+			name:     "accept uses provided answers",
+			decision: "accept",
+			answers: map[string]any{
+				"question-1": "release",
+				"question-2": "Need the release branch",
+			},
+			request: map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+				"itemId":   "item-1",
+				"questions": []map[string]any{
+					{
+						"id":       "question-1",
+						"question": "Pick an option",
+						"options": []map[string]any{
+							{"value": "option-a", "label": "Option A"},
+							{"value": "option-b", "label": "Option B"},
+						},
+					},
+					{
+						"id":       "question-2",
+						"question": "Why?",
+					},
+				},
+			},
+			wantAnswer: map[string]any{
+				"question-1": "release",
+				"question-2": "Need the release branch",
+			},
 		},
 		{
 			name:     "accept answers freeform questions with an empty string",
@@ -492,7 +524,7 @@ func TestAppServerClientRespondApprovalMapsToolUserInputResponses(t *testing.T) 
 			client := NewAppServerClient(runner)
 			runner.emitServerRequest(t, "approval-1", "item/tool/requestUserInput", tt.request)
 
-			if err := client.RespondApproval("approval-1", tt.decision); err != nil {
+			if err := client.RespondApproval("approval-1", tt.decision, tt.answers); err != nil {
 				t.Fatal(err)
 			}
 
@@ -805,7 +837,7 @@ func TestAppServerClientRespondApprovalWritesStoredServerRequestResponse(t *test
 		"command":  "go test ./...",
 	})
 
-	if err := client.RespondApproval("approval-1", "accept"); err != nil {
+	if err := client.RespondApproval("approval-1", "accept", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -916,7 +948,7 @@ func TestAppServerClientRespondApprovalMapsPermissionsRequests(t *testing.T) {
 				"permissions": map[string]any{"fs.read": true, "net": true},
 			})
 
-			if err := client.RespondApproval("approval-1", tt.decision); err != nil {
+			if err := client.RespondApproval("approval-1", tt.decision, nil); err != nil {
 				t.Fatal(err)
 			}
 

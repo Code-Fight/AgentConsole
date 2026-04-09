@@ -64,7 +64,7 @@ type RuntimeApprovalEventSource interface {
 }
 
 type RuntimeApprovalResponder interface {
-	RespondApproval(requestID string, decision string) error
+	RespondApproval(requestID string, decision string, answers map[string]any) error
 }
 
 type RuntimeSkillConfigurator interface {

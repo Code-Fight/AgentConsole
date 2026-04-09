@@ -989,7 +989,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return session.CommandRejected(envelope.RequestID, envelope.Name, fmt.Sprintf("approval request %q not found", payload.RequestID), "")
 		}
 
-		if err := mgr.RespondApproval(runtimeName, rawRequestID, payload.Decision); err != nil {
+		if err := mgr.RespondApproval(runtimeName, rawRequestID, payload.Decision, payload.Answers); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
