@@ -115,15 +115,23 @@ type mcpServerStatusListResponse struct {
 }
 
 type AppServerClient struct {
-	runner           Runner
-	now              func() time.Time
-	turnEventMu      sync.RWMutex
-	turnEventHandler func(agenttypes.RuntimeTurnEvent)
-	approvalMu       sync.RWMutex
-	approvalHandler  func(agenttypes.RuntimeApprovalRequest)
-	pendingApprovals map[string]pendingApprovalRequest
-	deltaMu          sync.Mutex
-	deltaSequence    map[string]int
+	runner                  Runner
+	now                     func() time.Time
+	turnEventMu             sync.RWMutex
+	turnEventHandler        func(agenttypes.RuntimeTurnEvent)
+	approvalMu              sync.RWMutex
+	approvalHandler         func(agenttypes.RuntimeApprovalRequest)
+	approvalResolvedHandler func(ApprovalResolvedEvent)
+	pendingApprovals        map[string]pendingApprovalRequest
+	deltaMu                 sync.Mutex
+	deltaSequence           map[string]int
+}
+
+type ApprovalResolvedEvent struct {
+	RequestID string
+	ThreadID  string
+	TurnID    string
+	Decision  string
 }
 
 var _ agenttypes.Runtime = (*AppServerClient)(nil)
@@ -219,6 +227,12 @@ func (c *AppServerClient) SetApprovalHandler(handler func(agenttypes.RuntimeAppr
 	c.approvalMu.Unlock()
 }
 
+func (c *AppServerClient) SetApprovalResolvedHandler(handler func(ApprovalResolvedEvent)) {
+	c.approvalMu.Lock()
+	c.approvalResolvedHandler = handler
+	c.approvalMu.Unlock()
+}
+
 func (r threadRecord) toDomain() domain.Thread {
 	status := r.Status.Type
 	if status == "" {
@@ -301,9 +315,25 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 			[]string{"requestID"},
 			[]string{"id"},
 		)
-		if requestID != "" {
-			c.deletePendingApproval(requestID)
+		if requestID == "" {
+			return
 		}
+
+		pending, ok := c.takePendingApproval(requestID)
+		if !ok {
+			return
+		}
+		c.emitApprovalResolved(ApprovalResolvedEvent{
+			RequestID: requestID,
+			ThreadID:  pending.request.ThreadID,
+			TurnID:    pending.request.TurnID,
+			Decision: extractNotificationString(notification.Params,
+				[]string{"decision"},
+				[]string{"result", "decision"},
+				[]string{"response", "decision"},
+				[]string{"resolution"},
+			),
+		})
 	}
 }
 
@@ -391,10 +421,31 @@ func (c *AppServerClient) emitTurnEvent(event agenttypes.RuntimeTurnEvent) {
 	}
 }
 
+func (c *AppServerClient) emitApprovalResolved(event ApprovalResolvedEvent) {
+	c.approvalMu.RLock()
+	handler := c.approvalResolvedHandler
+	c.approvalMu.RUnlock()
+	if handler != nil {
+		handler(event)
+	}
+}
+
 func (c *AppServerClient) deletePendingApproval(requestID string) {
 	c.approvalMu.Lock()
 	delete(c.pendingApprovals, requestID)
 	c.approvalMu.Unlock()
+}
+
+func (c *AppServerClient) takePendingApproval(requestID string) (pendingApprovalRequest, bool) {
+	c.approvalMu.Lock()
+	defer c.approvalMu.Unlock()
+
+	pending, ok := c.pendingApprovals[requestID]
+	if !ok {
+		return pendingApprovalRequest{}, false
+	}
+	delete(c.pendingApprovals, requestID)
+	return pending, true
 }
 
 func (c *AppServerClient) respondToServerRequestError(id json.RawMessage, message string) {

@@ -11,9 +11,10 @@ func TestStoreUpsertAndMarkOffline(t *testing.T) {
 	store := NewStore()
 
 	store.Upsert(domain.Machine{
-		ID:     "machine-01",
-		Name:   "Dev Mac",
-		Status: domain.MachineStatusOnline,
+		ID:            "machine-01",
+		Name:          "Dev Mac",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusRunning,
 	})
 
 	items := store.List()
@@ -22,6 +23,24 @@ func TestStoreUpsertAndMarkOffline(t *testing.T) {
 	}
 	if items[0].Status != domain.MachineStatusOnline {
 		t.Fatalf("expected online status after upsert, got %q", items[0].Status)
+	}
+	if items[0].RuntimeStatus != domain.MachineRuntimeStatusRunning {
+		t.Fatalf("expected running runtime status after upsert, got %q", items[0].RuntimeStatus)
+	}
+
+	store.Upsert(domain.Machine{
+		ID:            "machine-01",
+		Name:          "Dev Mac",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusUnknown,
+	})
+
+	items = store.List()
+	if len(items) != 1 {
+		t.Fatalf("expected 1 machine after second upsert, got %d", len(items))
+	}
+	if items[0].RuntimeStatus != domain.MachineRuntimeStatusRunning {
+		t.Fatalf("expected runtime status to preserve the prior value, got %q", items[0].RuntimeStatus)
 	}
 
 	store.MarkOffline("machine-01")
@@ -32,6 +51,9 @@ func TestStoreUpsertAndMarkOffline(t *testing.T) {
 	}
 	if items[0].Status != domain.MachineStatusOffline {
 		t.Fatalf("expected offline status after mark offline, got %q", items[0].Status)
+	}
+	if items[0].RuntimeStatus != domain.MachineRuntimeStatusUnknown {
+		t.Fatalf("expected runtime status to become unknown after mark offline, got %q", items[0].RuntimeStatus)
 	}
 }
 

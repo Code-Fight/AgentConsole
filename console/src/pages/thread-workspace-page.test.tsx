@@ -424,3 +424,118 @@ test("hydrates pending approvals from the initial thread detail fetch", async ()
     }),
   );
 });
+
+test("renders steer and interrupt controls for an active turn and posts to the expected endpoints", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+
+    if (url === "/threads/thread-1" && (!init?.method || init.method === "GET")) {
+      return new Response(
+        JSON.stringify({
+          thread: {
+            threadId: "thread-1",
+            machineId: "machine-1",
+            status: "active",
+            title: "Investigate flaky test"
+          },
+          pendingApprovals: []
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    if (url === "/threads/thread-1/turns/turn-1/steer") {
+      return new Response(
+        JSON.stringify({
+          turn: {
+            turnId: "turn-1",
+            threadId: "thread-1"
+          }
+        }),
+        {
+          status: 202,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    if (url === "/threads/thread-1/turns/turn-1/interrupt") {
+      return new Response(
+        JSON.stringify({
+          turn: {
+            turnId: "turn-1",
+            threadId: "thread-1",
+            status: "interrupted"
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    throw new Error(`unexpected fetch: ${url}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  const socket = FakeWebSocket.instances[0];
+  await act(async () => {
+    socket.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "turn.started",
+        timestamp: "2026-04-08T14:00:01Z",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1"
+        }
+      }),
+    );
+  });
+
+  expect(await screen.findByRole("button", { name: "Send steer" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Interrupt turn" })).toBeInTheDocument();
+
+  fireEvent.change(screen.getByRole("textbox", { name: "Steer prompt" }), {
+    target: { value: "try a smaller patch" }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Send steer" }));
+  fireEvent.click(screen.getByRole("button", { name: "Interrupt turn" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/threads/thread-1/turns/turn-1/steer",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ input: "try a smaller patch" })
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/threads/thread-1/turns/turn-1/interrupt",
+      expect.objectContaining({
+        method: "POST"
+      }),
+    );
+  });
+});

@@ -6,6 +6,9 @@ import type {
   ApprovalRequiredPayload,
   ApprovalResolvedPayload,
   EventEnvelope,
+  MachineDetailResponse,
+  MachineSummary,
+  MachineUpdatedPayload,
   ThreadDetailResponse,
   StartTurnResponse,
   TurnStartedPayload,
@@ -58,14 +61,20 @@ function getEnvelopeThreadId(envelope: EventEnvelope): string | null {
 export function ThreadWorkspacePage() {
   const { threadId = "" } = useParams();
   const [prompt, setPrompt] = useState("");
+  const [steerPrompt, setSteerPrompt] = useState("");
   const [messages, setMessages] = useState<WorkspaceMessage[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [machine, setMachine] = useState<MachineSummary | null>(null);
+  const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setMessages([]);
     setPendingApprovals([]);
+    setMachine(null);
+    setActiveTurnId(null);
+    setSteerPrompt("");
     setError(null);
   }, [threadId]);
 
@@ -95,6 +104,18 @@ export function ThreadWorkspacePage() {
           next.push(...approvals);
           return next;
         });
+        try {
+          const machineDetail = await http<MachineDetailResponse>(
+            `/machines/${encodeURIComponent(detail.thread.machineId)}`,
+          );
+          if (!cancelled) {
+            setMachine(machineDetail.machine);
+          }
+        } catch {
+          if (!cancelled) {
+            setMachine(null);
+          }
+        }
       } catch (detailError) {
         if (cancelled) {
           return;
@@ -117,9 +138,19 @@ export function ThreadWorkspacePage() {
       return undefined;
     }
 
-    return connectConsoleSocket(threadId, (event) => {
+    return connectConsoleSocket(undefined, (event) => {
       const envelope = parseEnvelope(event.data);
-      if (!envelope || getEnvelopeThreadId(envelope) !== threadId) {
+      if (!envelope) {
+        return;
+      }
+
+      if (envelope.name === "machine.updated") {
+        const payload = envelope.payload as MachineUpdatedPayload;
+        setMachine((current) => (current?.id === payload.machine.id ? payload.machine : current));
+        return;
+      }
+
+      if (getEnvelopeThreadId(envelope) !== threadId) {
         return;
       }
 
@@ -163,6 +194,7 @@ export function ThreadWorkspacePage() {
 
       if (envelope.name === "turn.started") {
         const payload = envelope.payload as TurnStartedPayload;
+        setActiveTurnId(payload.turnId);
         setMessages((current) => [
           ...current,
           {
@@ -175,6 +207,9 @@ export function ThreadWorkspacePage() {
 
       if (envelope.name === "turn.completed") {
         const payload = envelope.payload as TurnCompletedPayload;
+        setActiveTurnId((current) =>
+          current === payload.turn.turnId ? null : current,
+        );
         setMessages((current) => [
           ...current,
           {
@@ -218,7 +253,7 @@ export function ThreadWorkspacePage() {
     setError(null);
 
     try {
-      await http<StartTurnResponse>(buildThreadApiPath(threadId, "turns"), {
+      const response = await http<StartTurnResponse>(buildThreadApiPath(threadId, "turns"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json"
@@ -226,6 +261,7 @@ export function ThreadWorkspacePage() {
         body: JSON.stringify({ input })
       });
 
+      setActiveTurnId(response.turn.turnId);
       setPrompt("");
     } catch (submissionError) {
       setError(
@@ -238,10 +274,63 @@ export function ThreadWorkspacePage() {
     }
   }
 
+  async function handleSteerSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const input = steerPrompt.trim();
+    if (!threadId || !activeTurnId || input === "") {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      await http<StartTurnResponse>(
+        buildThreadApiPath(threadId, `turns/${activeTurnId}/steer`),
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ input })
+        },
+      );
+      setSteerPrompt("");
+    } catch (steerError) {
+      setError(
+        steerError instanceof Error
+          ? steerError.message
+          : "Unable to steer turn.",
+      );
+    }
+  }
+
+  async function handleInterrupt() {
+    if (!threadId || !activeTurnId) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      await http<void>(buildThreadApiPath(threadId, `turns/${activeTurnId}/interrupt`), {
+        method: "POST"
+      });
+      setActiveTurnId(null);
+    } catch (interruptError) {
+      setError(
+        interruptError instanceof Error
+          ? interruptError.message
+          : "Unable to interrupt turn.",
+      );
+    }
+  }
+
   return (
     <section>
       <h1>Thread Workspace</h1>
       <p>{threadId || "No thread selected"}</p>
+      {machine ? <p>{machine.status} / {machine.runtimeStatus}</p> : null}
       {error ? <p>{error}</p> : null}
       <form onSubmit={handleSubmit}>
         <label htmlFor="thread-prompt">Prompt</label>
@@ -255,6 +344,24 @@ export function ThreadWorkspacePage() {
           Send prompt
         </button>
       </form>
+      {activeTurnId ? (
+        <section>
+          <p>Active turn: {activeTurnId}</p>
+          <form onSubmit={handleSteerSubmit}>
+            <label htmlFor="steer-prompt">Steer prompt</label>
+            <textarea
+              id="steer-prompt"
+              aria-label="Steer prompt"
+              value={steerPrompt}
+              onChange={(event) => setSteerPrompt(event.target.value)}
+            />
+            <button type="submit">Send steer</button>
+          </form>
+          <button type="button" onClick={() => void handleInterrupt()}>
+            Interrupt turn
+          </button>
+        </section>
+      ) : null}
       {pendingApprovals.length > 0 ? (
         <section>
           <h2>Approval required</h2>

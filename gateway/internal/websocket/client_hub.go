@@ -190,9 +190,10 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 		}
 
 		machine := domain.Machine{
-			ID:     envelope.MachineID,
-			Name:   envelope.MachineID,
-			Status: domain.MachineStatusOnline,
+			ID:            envelope.MachineID,
+			Name:          envelope.MachineID,
+			Status:        domain.MachineStatusOnline,
+			RuntimeStatus: domain.MachineRuntimeStatusUnknown,
 		}
 		if h.registry != nil {
 			h.registry.Upsert(machine)
@@ -460,6 +461,9 @@ func (h *ClientHub) handleSnapshotEnvelope(conn *cws.Conn, envelope protocol.Env
 		if machine.Status == "" {
 			machine.Status = domain.MachineStatusOnline
 		}
+		if machine.RuntimeStatus == "" {
+			machine.RuntimeStatus = domain.MachineRuntimeStatusUnknown
+		}
 		if h.registry != nil {
 			h.registry.Upsert(machine)
 		}
@@ -698,6 +702,9 @@ func (h *ClientHub) broadcastMachineUpdated(machine domain.Machine, timestamp st
 	}
 	if machine.Status == "" {
 		machine.Status = domain.MachineStatusOnline
+	}
+	if machine.RuntimeStatus == "" {
+		machine.RuntimeStatus = domain.MachineRuntimeStatusUnknown
 	}
 	h.broadcastNorthboundEvent("machine.updated", machine.ID, timestamp, protocol.MachineUpdatedPayload{
 		Machine: machine,

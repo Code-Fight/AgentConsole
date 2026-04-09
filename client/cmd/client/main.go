@@ -102,6 +102,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 			continue
 		}
 		machine.Status = runtimeController.machineStatus()
+		machine.RuntimeStatus = runtimeController.runtimeStatus()
 		if err := sendLiveSnapshot(session, machine, agentManager, runtimeName); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "snapshot-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
@@ -200,16 +201,20 @@ func (c *runtimeController) runtimeStreams() bool {
 }
 
 func (c *runtimeController) machineStatus() domain.MachineStatus {
+	return domain.MachineStatusOnline
+}
+
+func (c *runtimeController) runtimeStatus() domain.MachineRuntimeStatus {
 	if c == nil {
-		return domain.MachineStatusOnline
+		return domain.MachineRuntimeStatusRunning
 	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.stopped {
-		return domain.MachineStatusOffline
+		return domain.MachineRuntimeStatusStopped
 	}
-	return domain.MachineStatusOnline
+	return domain.MachineRuntimeStatusRunning
 }
 
 func (c *runtimeController) Stop() error {
@@ -585,15 +590,32 @@ func emitRuntimeTurnEvent(session *clientSession, event agenttypes.RuntimeTurnEv
 }
 
 func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSession) bool {
+	bound := false
+
 	source, ok := runtime.(agenttypes.RuntimeApprovalEventSource)
-	if !ok {
-		return false
+	if ok {
+		source.SetApprovalHandler(func(event agenttypes.RuntimeApprovalRequest) {
+			_ = emitRuntimeApprovalEvent(session, event)
+		})
+		bound = true
 	}
 
-	source.SetApprovalHandler(func(event agenttypes.RuntimeApprovalRequest) {
-		_ = emitRuntimeApprovalEvent(session, event)
+	resolvedSource, ok := runtime.(interface {
+		SetApprovalResolvedHandler(func(codex.ApprovalResolvedEvent))
 	})
-	return true
+	if ok {
+		resolvedSource.SetApprovalResolvedHandler(func(event codex.ApprovalResolvedEvent) {
+			_ = session.ApprovalResolved(protocol.ApprovalResolvedPayload{
+				RequestID: event.RequestID,
+				ThreadID:  event.ThreadID,
+				TurnID:    event.TurnID,
+				Decision:  event.Decision,
+			})
+		})
+		bound = true
+	}
+
+	return bound
 }
 
 func emitRuntimeApprovalEvent(session *clientSession, event agenttypes.RuntimeApprovalRequest) error {
@@ -924,9 +946,10 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 		return sendLiveSnapshot(session, domain.Machine{
-			ID:     session.machineID,
-			Name:   session.machineID,
-			Status: runtimeController.machineStatus(),
+			ID:            session.machineID,
+			Name:          session.machineID,
+			Status:        runtimeController.machineStatus(),
+			RuntimeStatus: runtimeController.runtimeStatus(),
 		}, mgr, runtimeName)
 	case "runtime.start":
 		var payload protocol.RuntimeStartCommandPayload
@@ -943,9 +966,10 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 		return sendLiveSnapshot(session, domain.Machine{
-			ID:     session.machineID,
-			Name:   session.machineID,
-			Status: runtimeController.machineStatus(),
+			ID:            session.machineID,
+			Name:          session.machineID,
+			Status:        runtimeController.machineStatus(),
+			RuntimeStatus: runtimeController.runtimeStatus(),
 		}, mgr, runtimeName)
 	case "environment.skill.enable", "environment.skill.disable":
 		var payload protocol.EnvironmentSkillSetEnabledCommandPayload

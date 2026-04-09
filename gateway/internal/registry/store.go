@@ -52,6 +52,17 @@ func (s *Store) Upsert(machine domain.Machine) {
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if existing, ok := s.machines[machine.ID]; ok {
+		if machine.Name == "" {
+			machine.Name = existing.Name
+		}
+		if machine.RuntimeStatus == "" || machine.RuntimeStatus == domain.MachineRuntimeStatusUnknown {
+			machine.RuntimeStatus = existing.RuntimeStatus
+		}
+	}
+	if machine.RuntimeStatus == "" {
+		machine.RuntimeStatus = domain.MachineRuntimeStatusUnknown
+	}
 	s.machines[machine.ID] = machine
 }
 
@@ -69,6 +80,7 @@ func (s *Store) MarkOffline(machineID string) {
 	}
 
 	machine.Status = domain.MachineStatusOffline
+	machine.RuntimeStatus = domain.MachineRuntimeStatusUnknown
 	s.machines[machineID] = machine
 }
 

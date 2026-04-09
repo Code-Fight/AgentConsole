@@ -386,6 +386,37 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 	}
 }
 
+func TestBindRuntimeApprovalEventsEmitsResolvedEventsFromRuntimeOriginatedResolution(t *testing.T) {
+	runtime := &notifyingRuntime{}
+	session, sent := newRecordingSession()
+
+	if !bindRuntimeApprovalEvents(runtime, session) {
+		t.Fatal("expected runtime approval event binding")
+	}
+
+	runtime.emitApprovalResolved(codex.ApprovalResolvedEvent{
+		RequestID: "approval-1",
+		ThreadID:  "thread-01",
+		TurnID:    "turn-01",
+		Decision:  "accept",
+	})
+
+	if len(*sent) != 1 {
+		t.Fatalf("expected 1 approval resolved event, got %d", len(*sent))
+	}
+	if decodeEnvelope(t, (*sent)[0]).Name != "approval.resolved" {
+		t.Fatalf("unexpected resolved envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	}
+
+	var resolved protocol.ApprovalResolvedPayload
+	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[0]).Payload, &resolved); err != nil {
+		t.Fatalf("decode resolved payload failed: %v", err)
+	}
+	if resolved.RequestID != "approval-1" || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
+		t.Fatalf("unexpected resolved payload: %+v", resolved)
+	}
+}
+
 func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) {
 	initialRuntime := &notifyingRuntime{
 		threadSnapshots: [][]domain.Thread{
@@ -449,8 +480,11 @@ func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) 
 	}
 
 	machineSnapshot := decodeMachineSnapshotPayload(t, (*sent)[1])
-	if machineSnapshot.Machine.Status != domain.MachineStatusOffline {
-		t.Fatalf("expected offline machine snapshot after stop, got %+v", machineSnapshot.Machine)
+	if machineSnapshot.Machine.Status != domain.MachineStatusOnline {
+		t.Fatalf("expected online machine connectivity after stop, got %+v", machineSnapshot.Machine)
+	}
+	if machineSnapshot.Machine.RuntimeStatus != domain.MachineRuntimeStatusStopped {
+		t.Fatalf("expected stopped runtime status after stop, got %+v", machineSnapshot.Machine)
 	}
 	stoppedThreads := decodeThreadSnapshotPayload(t, (*sent)[2])
 	if len(stoppedThreads.Threads) != 0 {
@@ -481,6 +515,9 @@ func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) 
 	machineSnapshot = decodeMachineSnapshotPayload(t, (*sent)[6])
 	if machineSnapshot.Machine.Status != domain.MachineStatusOnline {
 		t.Fatalf("expected online machine snapshot after start, got %+v", machineSnapshot.Machine)
+	}
+	if machineSnapshot.Machine.RuntimeStatus != domain.MachineRuntimeStatusRunning {
+		t.Fatalf("expected running runtime status after start, got %+v", machineSnapshot.Machine)
 	}
 
 	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
@@ -653,6 +690,7 @@ type notifyingRuntime struct {
 	startTurnResult      agenttypes.StartTurnResult
 	handler              func(agenttypes.RuntimeTurnEvent)
 	approvalHandler      func(agenttypes.RuntimeApprovalRequest)
+	approvalResolved     func(codex.ApprovalResolvedEvent)
 	threadSnapshots      [][]domain.Thread
 	environment          []domain.EnvironmentResource
 	listThreadsCalls     int
@@ -716,6 +754,10 @@ func (r *notifyingRuntime) SetApprovalHandler(handler func(agenttypes.RuntimeApp
 	r.approvalHandler = handler
 }
 
+func (r *notifyingRuntime) SetApprovalResolvedHandler(handler func(codex.ApprovalResolvedEvent)) {
+	r.approvalResolved = handler
+}
+
 func (r *notifyingRuntime) RespondApproval(requestID string, decision string) error {
 	r.lastApprovalDecision.requestID = requestID
 	r.lastApprovalDecision.decision = decision
@@ -736,5 +778,11 @@ func (r *notifyingRuntime) emit(event agenttypes.RuntimeTurnEvent) {
 func (r *notifyingRuntime) emitApproval(event agenttypes.RuntimeApprovalRequest) {
 	if r.approvalHandler != nil {
 		r.approvalHandler(event)
+	}
+}
+
+func (r *notifyingRuntime) emitApprovalResolved(event codex.ApprovalResolvedEvent) {
+	if r.approvalResolved != nil {
+		r.approvalResolved(event)
 	}
 }

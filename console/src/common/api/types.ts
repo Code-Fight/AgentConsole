@@ -1,4 +1,5 @@
 export type MachineStatus = "online" | "offline" | "reconnecting" | "unknown";
+export type MachineRuntimeStatus = "running" | "stopped" | "unknown";
 export type ThreadStatus = "notLoaded" | "idle" | "active" | "unknown" | "systemError";
 export type TurnStatus = "completed" | "interrupted" | "failed";
 export type EventCategory = "system" | "command" | "event" | "snapshot";
@@ -15,6 +16,7 @@ export interface MachineSummary {
   id: string;
   name: string;
   status: MachineStatus;
+  runtimeStatus: MachineRuntimeStatus;
 }
 
 export interface MachineListResponse {
@@ -66,6 +68,16 @@ export interface TurnSummary {
 
 export interface ThreadListResponse {
   items: ThreadSummary[];
+}
+
+export interface CreateThreadResponse {
+  thread: ThreadSummary;
+}
+
+export interface ThreadDeleteResponse {
+  threadId: string;
+  deleted: boolean;
+  archived: boolean;
 }
 
 export interface ThreadUpdatedPayload {

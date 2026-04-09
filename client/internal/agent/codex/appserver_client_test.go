@@ -779,6 +779,41 @@ func TestAppServerClientRespondApprovalWritesStoredServerRequestResponse(t *test
 	}
 }
 
+func TestAppServerClientServerRequestResolvedEmitsApprovalResolvedWithStoredContext(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	var resolvedEvents []ApprovalResolvedEvent
+	client.SetApprovalResolvedHandler(func(event ApprovalResolvedEvent) {
+		resolvedEvents = append(resolvedEvents, event)
+	})
+
+	runner.emitServerRequest(t, "approval-1", "item/commandExecution/requestApproval", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "item-1",
+		"command":  "go test ./...",
+	})
+
+	runner.emitNotification(t, "serverRequest/resolved", map[string]any{
+		"requestId": "approval-1",
+		"decision":  "accept",
+	})
+
+	if len(resolvedEvents) != 1 {
+		t.Fatalf("expected 1 resolved event, got %d", len(resolvedEvents))
+	}
+	if resolvedEvents[0].RequestID != "approval-1" ||
+		resolvedEvents[0].ThreadID != "thread-1" ||
+		resolvedEvents[0].TurnID != "turn-1" ||
+		resolvedEvents[0].Decision != "accept" {
+		t.Fatalf("unexpected resolved event: %+v", resolvedEvents[0])
+	}
+	if _, ok := client.pendingApprovals["approval-1"]; ok {
+		t.Fatal("expected pending approval to be removed after resolution")
+	}
+}
+
 func TestAppServerClientRespondApprovalMapsPermissionsRequests(t *testing.T) {
 	tests := []struct {
 		name            string
