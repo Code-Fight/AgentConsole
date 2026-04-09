@@ -23,6 +23,10 @@ type approvalRequestResolver interface {
 	ResolveApprovalMachine(requestID string) (string, bool)
 }
 
+type approvalRequestCleaner interface {
+	ClearApprovalRequest(requestID string)
+}
+
 type threadDetailResponse struct {
 	Thread           domain.Thread                      `json:"thread"`
 	PendingApprovals []protocol.ApprovalRequiredPayload `json:"pendingApprovals"`
@@ -625,6 +629,12 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
+		}
+		if reg != nil {
+			reg.RemovePendingApproval(requestID)
+		}
+		if cleaner, ok := sender.(approvalRequestCleaner); ok {
+			cleaner.ClearApprovalRequest(requestID)
 		}
 
 		var result protocol.ApprovalRespondCommandResult

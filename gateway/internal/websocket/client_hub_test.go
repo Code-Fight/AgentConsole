@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -441,17 +442,17 @@ func TestClientHubKeepsPendingApprovalRoutingAndRegistryStateAcrossDisconnect(t 
 	}
 
 	waitForCondition(t, 2*time.Second, func() bool {
-		_, ok := hub.ResolveApprovalMachine("approval-1")
+		_, ok := hub.ResolveApprovalMachine(expectedApprovalRequestID("machine-01", "approval-1"))
 		return ok
 	})
 
-	machineID, ok := hub.ResolveApprovalMachine("approval-1")
+	machineID, ok := hub.ResolveApprovalMachine(expectedApprovalRequestID("machine-01", "approval-1"))
 	if !ok || machineID != "machine-01" {
 		t.Fatalf("unexpected approval route: machineID=%q ok=%v", machineID, ok)
 	}
 
 	approvals := reg.PendingApprovalsForThread("thread-01")
-	if len(approvals) != 1 || approvals[0].RequestID != "approval-1" {
+	if len(approvals) != 1 || approvals[0].RequestID != expectedApprovalRequestID("machine-01", "approval-1") {
 		t.Fatalf("unexpected stored approvals: %+v", approvals)
 	}
 }
@@ -564,9 +565,100 @@ func TestClientHubTracksApprovalRequestOwnership(t *testing.T) {
 	}
 
 	waitForCondition(t, 2*time.Second, func() bool {
-		machineID, ok := hub.ResolveApprovalMachine("approval-1")
+		machineID, ok := hub.ResolveApprovalMachine(expectedApprovalRequestID("machine-01", "approval-1"))
 		return ok && machineID == "machine-01"
 	})
+}
+
+func TestClientHubScopesApprovalIDsAcrossMachines(t *testing.T) {
+	reg := registry.NewStore()
+	hub := NewClientHubWithStores(reg, runtimeindex.NewStore(), routing.NewRouter())
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn1, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn1.Close(websocket.StatusNormalClosure, "done")
+
+	conn2, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn2.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, conn1, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEnvelope(t, conn2, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-02",
+		Timestamp: "2026-04-08T10:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeEnvelope(t, conn1, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "approval.required",
+		RequestID: "approval-1",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T10:00:01Z",
+		Payload:   []byte(`{"requestId":"approval-1","threadId":"thread-1","kind":"command","command":"go test ./..."}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeEnvelope(t, conn2, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "approval.required",
+		RequestID: "approval-1",
+		MachineID: "machine-02",
+		Timestamp: "2026-04-08T10:00:02Z",
+		Payload:   []byte(`{"requestId":"approval-1","threadId":"thread-2","kind":"command","command":"go test ./..."}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		approvals1 := reg.PendingApprovalsForThread("thread-1")
+		approvals2 := reg.PendingApprovalsForThread("thread-2")
+		return len(approvals1) == 1 && len(approvals2) == 1
+	})
+
+	approval1 := reg.PendingApprovalsForThread("thread-1")[0]
+	approval2 := reg.PendingApprovalsForThread("thread-2")[0]
+	if approval1.RequestID == "approval-1" || approval2.RequestID == "approval-1" {
+		t.Fatalf("expected public scoped approval ids, got %+v %+v", approval1, approval2)
+	}
+	if approval1.RequestID == approval2.RequestID {
+		t.Fatalf("expected machine-scoped approval ids to be unique, got %q", approval1.RequestID)
+	}
+
+	machine1, ok1 := hub.ResolveApprovalMachine(approval1.RequestID)
+	machine2, ok2 := hub.ResolveApprovalMachine(approval2.RequestID)
+	if !ok1 || machine1 != "machine-01" || !ok2 || machine2 != "machine-02" {
+		t.Fatalf("unexpected approval routes: machine1=%q ok1=%v machine2=%q ok2=%v", machine1, ok1, machine2, ok2)
+	}
+}
+
+func expectedApprovalRequestID(machineID string, rawRequestID string) string {
+	return "apr." +
+		base64.RawURLEncoding.EncodeToString([]byte(machineID)) +
+		"." +
+		base64.RawURLEncoding.EncodeToString([]byte(rawRequestID))
 }
 
 func TestClientHubSendCommandRoundTripsCompletedResponse(t *testing.T) {

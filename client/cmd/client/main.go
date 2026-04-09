@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -133,8 +134,10 @@ type runtimeFactories struct {
 }
 
 type approvalContext struct {
-	threadID string
-	turnID   string
+	rawRequestID    string
+	publicRequestID string
+	threadID        string
+	turnID          string
 }
 
 type runtimeController struct {
@@ -360,11 +363,14 @@ func (s *clientSession) TurnStarted(requestID string, payload protocol.TurnStart
 }
 
 func (s *clientSession) ApprovalRequired(payload protocol.ApprovalRequiredPayload) error {
-	s.rememberApprovalContext(payload.RequestID, payload.ThreadID, payload.TurnID)
-	return s.sendEnvelope(protocol.CategoryEvent, "approval.required", payload.RequestID, payload)
+	publicRequestID := s.publicApprovalRequestID(payload.RequestID)
+	s.rememberApprovalContext(payload.RequestID, publicRequestID, payload.ThreadID, payload.TurnID)
+	payload.RequestID = publicRequestID
+	return s.sendEnvelope(protocol.CategoryEvent, "approval.required", publicRequestID, payload)
 }
 
 func (s *clientSession) ApprovalResolved(payload protocol.ApprovalResolvedPayload) error {
+	payload.RequestID = s.publicApprovalRequestID(payload.RequestID)
 	if payload.ThreadID == "" || payload.TurnID == "" {
 		context := s.approvalContext(payload.RequestID)
 		if payload.ThreadID == "" {
@@ -381,16 +387,18 @@ func (s *clientSession) ApprovalResolved(payload protocol.ApprovalResolvedPayloa
 	return nil
 }
 
-func (s *clientSession) rememberApprovalContext(requestID string, threadID string, turnID string) {
-	if strings.TrimSpace(requestID) == "" {
+func (s *clientSession) rememberApprovalContext(rawRequestID string, publicRequestID string, threadID string, turnID string) {
+	if strings.TrimSpace(publicRequestID) == "" {
 		return
 	}
 
 	s.approvalMu.Lock()
 	defer s.approvalMu.Unlock()
-	s.approvalByID[requestID] = approvalContext{
-		threadID: threadID,
-		turnID:   turnID,
+	s.approvalByID[publicRequestID] = approvalContext{
+		rawRequestID:    strings.TrimSpace(rawRequestID),
+		publicRequestID: publicRequestID,
+		threadID:        threadID,
+		turnID:          turnID,
 	}
 }
 
@@ -412,6 +420,68 @@ func (s *clientSession) clearApprovalContext(requestID string) {
 	s.approvalMu.Lock()
 	defer s.approvalMu.Unlock()
 	delete(s.approvalByID, requestID)
+}
+
+func (s *clientSession) publicApprovalRequestID(requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return ""
+	}
+	if _, ok := decodePublicApprovalRequestID(s.machineID, requestID); ok {
+		return requestID
+	}
+	return encodePublicApprovalRequestID(s.machineID, requestID)
+}
+
+func (s *clientSession) rawApprovalRequestID(requestID string) (string, bool) {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return "", false
+	}
+	if rawRequestID, ok := decodePublicApprovalRequestID(s.machineID, requestID); ok {
+		return rawRequestID, true
+	}
+
+	s.approvalMu.Lock()
+	context, ok := s.approvalByID[requestID]
+	s.approvalMu.Unlock()
+	if ok && strings.TrimSpace(context.rawRequestID) != "" {
+		return context.rawRequestID, true
+	}
+
+	if strings.HasPrefix(requestID, "apr.") {
+		return "", false
+	}
+	return requestID, true
+}
+
+func encodePublicApprovalRequestID(machineID string, rawRequestID string) string {
+	if strings.TrimSpace(machineID) == "" || strings.TrimSpace(rawRequestID) == "" {
+		return ""
+	}
+	return "apr." +
+		base64.RawURLEncoding.EncodeToString([]byte(machineID)) +
+		"." +
+		base64.RawURLEncoding.EncodeToString([]byte(rawRequestID))
+}
+
+func decodePublicApprovalRequestID(machineID string, publicRequestID string) (string, bool) {
+	parts := strings.Split(strings.TrimSpace(publicRequestID), ".")
+	if len(parts) != 3 || parts[0] != "apr" {
+		return "", false
+	}
+
+	decodedMachineID, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || string(decodedMachineID) != machineID {
+		return "", false
+	}
+
+	decodedRequestID, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || strings.TrimSpace(string(decodedRequestID)) == "" {
+		return "", false
+	}
+
+	return string(decodedRequestID), true
 }
 
 func (s *clientSession) sendEnvelope(category protocol.Category, name string, requestID string, payload any) error {
@@ -914,7 +984,12 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		if err := mgr.RespondApproval(runtimeName, payload.RequestID, payload.Decision); err != nil {
+		rawRequestID, ok := session.rawApprovalRequestID(payload.RequestID)
+		if !ok {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, fmt.Sprintf("approval request %q not found", payload.RequestID), "")
+		}
+
+		if err := mgr.RespondApproval(runtimeName, rawRequestID, payload.Decision); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 

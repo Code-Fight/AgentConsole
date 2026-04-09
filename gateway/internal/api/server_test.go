@@ -3,6 +3,7 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -788,6 +789,9 @@ func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 	if body.RequestID != "approval-1" || body.Decision != "accept" {
 		t.Fatalf("unexpected response body: %+v", body)
 	}
+	if _, ok := reg.PendingApproval("approval-1"); ok {
+		t.Fatal("expected successful approval response to clear durable pending approval state")
+	}
 }
 
 func TestServerThreadDetailIncludesPendingApprovalsWhenThreadIsOffline(t *testing.T) {
@@ -880,7 +884,7 @@ func TestServerThreadDetailIncludesPendingApprovalsWhenThreadIsOffline(t *testin
 	if len(body.PendingApprovals) != 1 {
 		t.Fatalf("expected 1 pending approval, got %+v", body.PendingApprovals)
 	}
-	if body.PendingApprovals[0].RequestID != "approval-1" || body.PendingApprovals[0].Command != "go test ./..." {
+	if body.PendingApprovals[0].RequestID != expectedApprovalRequestID("machine-01", "approval-1") || body.PendingApprovals[0].Command != "go test ./..." {
 		t.Fatalf("unexpected pending approval: %+v", body.PendingApprovals[0])
 	}
 }
@@ -1057,6 +1061,13 @@ func mustMarshalJSON(t *testing.T, value any) []byte {
 		t.Fatalf("marshal failed: %v", err)
 	}
 	return raw
+}
+
+func expectedApprovalRequestID(machineID string, rawRequestID string) string {
+	return "apr." +
+		base64.RawURLEncoding.EncodeToString([]byte(machineID)) +
+		"." +
+		base64.RawURLEncoding.EncodeToString([]byte(rawRequestID))
 }
 
 func writeClientEnvelope(t *testing.T, conn *websocket.Conn, envelope protocol.Envelope) error {

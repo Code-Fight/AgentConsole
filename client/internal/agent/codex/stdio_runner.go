@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 type stdioProcess interface {
@@ -34,6 +35,7 @@ type StdioRunner struct {
 	notificationHandler  func(jsonRPCNotification)
 	serverRequestMu      sync.RWMutex
 	serverRequestHandler func(jsonRPCServerRequest)
+	callTimeout          time.Duration
 	wait                 func() error
 }
 
@@ -101,10 +103,11 @@ func newStdioRunner(ctx context.Context, codexBin string, execFn execCommandFunc
 
 func newStdioRunnerFromStreams(stdout io.Reader, stdin io.WriteCloser, wait func() error) *StdioRunner {
 	runner := &StdioRunner{
-		writer:  stdin,
-		pending: make(map[int64]chan rpcCallResult),
-		closed:  make(chan struct{}),
-		wait:    wait,
+		writer:      stdin,
+		pending:     make(map[int64]chan rpcCallResult),
+		closed:      make(chan struct{}),
+		callTimeout: 30 * time.Second,
+		wait:        wait,
 	}
 	go runner.readLoop(stdout)
 	return runner
@@ -133,7 +136,16 @@ func (r *StdioRunner) Call(method string, payload any, out any) error {
 		return err
 	}
 
-	result := <-responseCh
+	timer := time.NewTimer(r.callTimeout)
+	defer timer.Stop()
+
+	var result rpcCallResult
+	select {
+	case result = <-responseCh:
+	case <-timer.C:
+		r.removePending(requestID)
+		return fmt.Errorf("json-rpc %s failed: timed out waiting for response", method)
+	}
 	if result.err != nil {
 		return fmt.Errorf("json-rpc %s failed: %w", method, result.err)
 	}

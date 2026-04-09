@@ -115,6 +115,38 @@ func TestStdioRunnerCallReturnsServerError(t *testing.T) {
 	}
 }
 
+func TestStdioRunnerCallTimesOutWithoutResponse(t *testing.T) {
+	serverReader, runnerWriter := io.Pipe()
+	runnerReader, _ := io.Pipe()
+
+	runner := newStdioRunnerFromStreams(runnerReader, runnerWriter, nil)
+	runner.callTimeout = 20 * time.Millisecond
+	defer runner.Close()
+
+	go func() {
+		defer serverReader.Close()
+		var request struct {
+			ID int64 `json:"id"`
+		}
+		_ = json.NewDecoder(serverReader).Decode(&request)
+	}()
+
+	var out map[string]any
+	err := runner.Call("initialize", map[string]any{"clientInfo": map[string]any{"name": "client"}}, &out)
+	if err == nil {
+		t.Fatal("expected runner timeout")
+	}
+	if err.Error() != "json-rpc initialize failed: timed out waiting for response" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	runner.pendingMu.Lock()
+	defer runner.pendingMu.Unlock()
+	if len(runner.pending) != 0 {
+		t.Fatalf("expected timeout to clean up pending calls, got %d", len(runner.pending))
+	}
+}
+
 func TestStdioRunnerDispatchesNotificationsWithoutConsumingResponses(t *testing.T) {
 	serverReader, runnerWriter := io.Pipe()
 	runnerReader, serverWriter := io.Pipe()

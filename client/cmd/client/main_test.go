@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -293,8 +294,9 @@ func TestBindRuntimeApprovalEventsEmitsApprovalRequired(t *testing.T) {
 		t.Fatalf("expected 1 approval event, got %d", len(*sent))
 	}
 
+	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
 	envelope := decodeEnvelope(t, (*sent)[0])
-	if envelope.Name != "approval.required" || envelope.RequestID != "approval-1" {
+	if envelope.Name != "approval.required" || envelope.RequestID != publicRequestID {
 		t.Fatalf("unexpected approval envelope: %+v", envelope)
 	}
 
@@ -302,7 +304,7 @@ func TestBindRuntimeApprovalEventsEmitsApprovalRequired(t *testing.T) {
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 		t.Fatalf("decode payload failed: %v", err)
 	}
-	if payload.RequestID != "approval-1" || payload.Command != "go test ./..." || payload.Kind != "command" {
+	if payload.RequestID != publicRequestID || payload.RequestID == "approval-1" || payload.Command != "go test ./..." || payload.Kind != "command" {
 		t.Fatalf("unexpected approval payload: %+v", payload)
 	}
 }
@@ -325,10 +327,11 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
 	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-1",
-		Payload:   []byte(`{"requestId":"approval-1","decision":"accept"}`),
+		Payload:   []byte(`{"requestId":"` + publicRequestID + `","decision":"accept"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -352,7 +355,7 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[2]).Payload, &resolved); err != nil {
 		t.Fatalf("decode resolved payload failed: %v", err)
 	}
-	if resolved.RequestID != "approval-1" || resolved.ThreadID != "thread-01" || resolved.Decision != "accept" {
+	if resolved.RequestID != publicRequestID || resolved.ThreadID != "thread-01" || resolved.Decision != "accept" {
 		t.Fatalf("unexpected resolved payload: %+v", resolved)
 	}
 }
@@ -363,11 +366,12 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 	registry.Register("codex", runtime)
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
+	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
 
 	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-1",
-		Payload:   []byte(`{"requestId":"approval-1","threadId":"thread-01","turnId":"turn-01","decision":"accept"}`),
+		Payload:   []byte(`{"requestId":"` + publicRequestID + `","threadId":"thread-01","turnId":"turn-01","decision":"accept"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -381,7 +385,10 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[1]).Payload, &resolved); err != nil {
 		t.Fatalf("decode resolved payload failed: %v", err)
 	}
-	if resolved.RequestID != "approval-1" || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
+	if runtime.lastApprovalDecision.requestID != "approval-1" || runtime.lastApprovalDecision.decision != "accept" {
+		t.Fatalf("unexpected approval response: %+v", runtime.lastApprovalDecision)
+	}
+	if resolved.RequestID != publicRequestID || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
 		t.Fatalf("unexpected resolved payload: %+v", resolved)
 	}
 }
@@ -389,6 +396,7 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 func TestBindRuntimeApprovalEventsEmitsResolvedEventsFromRuntimeOriginatedResolution(t *testing.T) {
 	runtime := &notifyingRuntime{}
 	session, sent := newRecordingSession()
+	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
 
 	if !bindRuntimeApprovalEvents(runtime, session) {
 		t.Fatal("expected runtime approval event binding")
@@ -412,7 +420,7 @@ func TestBindRuntimeApprovalEventsEmitsResolvedEventsFromRuntimeOriginatedResolu
 	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[0]).Payload, &resolved); err != nil {
 		t.Fatalf("decode resolved payload failed: %v", err)
 	}
-	if resolved.RequestID != "approval-1" || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
+	if resolved.RequestID != publicRequestID || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
 		t.Fatalf("unexpected resolved payload: %+v", resolved)
 	}
 }
@@ -684,6 +692,13 @@ func decodeRejectedPayload(t *testing.T, raw []byte) protocol.CommandRejectedPay
 	}
 
 	return payload
+}
+
+func expectedPublicApprovalID(machineID string, rawRequestID string) string {
+	return "apr." +
+		base64.RawURLEncoding.EncodeToString([]byte(machineID)) +
+		"." +
+		base64.RawURLEncoding.EncodeToString([]byte(rawRequestID))
 }
 
 type notifyingRuntime struct {

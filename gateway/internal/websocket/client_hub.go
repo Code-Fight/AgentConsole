@@ -2,9 +2,11 @@ package websocket
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -125,6 +127,16 @@ func (h *ClientHub) ResolveApprovalMachine(requestID string) (string, bool) {
 	return machineID, ok
 }
 
+func (h *ClientHub) ClearApprovalRequest(requestID string) {
+	if strings.TrimSpace(requestID) == "" {
+		return
+	}
+
+	h.mu.Lock()
+	delete(h.approvalRequests, requestID)
+	h.mu.Unlock()
+}
+
 func (h *ClientHub) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws/client", func(w http.ResponseWriter, r *http.Request) {
@@ -212,6 +224,8 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 		return
 	}
 
+	envelope = normalizeApprovalEnvelope(envelope)
+
 	h.mu.RLock()
 	consoleHub := h.consoleHub
 	h.mu.RUnlock()
@@ -245,15 +259,14 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 			},
 		})
 	case "approval.required":
-		requestID := envelope.RequestID
 		var payload protocol.ApprovalRequiredPayload
-		if err := transport.Decode(envelope.Payload, &payload); err == nil && payload.RequestID != "" {
-			requestID = payload.RequestID
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return
 		}
+		requestID := payload.RequestID
 		if requestID == "" || envelope.MachineID == "" {
 			return
 		}
-		payload.RequestID = requestID
 		h.mu.Lock()
 		h.approvalRequests[requestID] = envelope.MachineID
 		h.mu.Unlock()
@@ -261,11 +274,11 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 			h.registry.UpsertPendingApproval(envelope.MachineID, payload)
 		}
 	case "approval.resolved":
-		requestID := envelope.RequestID
 		var payload protocol.ApprovalResolvedPayload
-		if err := transport.Decode(envelope.Payload, &payload); err == nil && payload.RequestID != "" {
-			requestID = payload.RequestID
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return
 		}
+		requestID := payload.RequestID
 		if requestID == "" {
 			return
 		}
@@ -276,6 +289,90 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 			h.registry.RemovePendingApproval(requestID)
 		}
 	}
+}
+
+func normalizeApprovalEnvelope(envelope protocol.Envelope) protocol.Envelope {
+	switch envelope.Name {
+	case "approval.required":
+		var payload protocol.ApprovalRequiredPayload
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return envelope
+		}
+		requestID := normalizeApprovalRequestID(envelope.MachineID, envelope.RequestID)
+		if payload.RequestID != "" {
+			requestID = normalizeApprovalRequestID(envelope.MachineID, payload.RequestID)
+		}
+		if requestID == "" {
+			return envelope
+		}
+		payload.RequestID = requestID
+		envelope.RequestID = requestID
+		envelope.Payload = mustMarshalApprovalPayload(payload, envelope.Payload)
+	case "approval.resolved":
+		var payload protocol.ApprovalResolvedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return envelope
+		}
+		requestID := normalizeApprovalRequestID(envelope.MachineID, envelope.RequestID)
+		if payload.RequestID != "" {
+			requestID = normalizeApprovalRequestID(envelope.MachineID, payload.RequestID)
+		}
+		if requestID == "" {
+			return envelope
+		}
+		payload.RequestID = requestID
+		envelope.RequestID = requestID
+		envelope.Payload = mustMarshalApprovalPayload(payload, envelope.Payload)
+	}
+	return envelope
+}
+
+func normalizeApprovalRequestID(machineID string, requestID string) string {
+	requestID = strings.TrimSpace(requestID)
+	if requestID == "" {
+		return ""
+	}
+	if _, ok := decodePublicApprovalRequestID(machineID, requestID); ok {
+		return requestID
+	}
+	return encodePublicApprovalRequestID(machineID, requestID)
+}
+
+func encodePublicApprovalRequestID(machineID string, rawRequestID string) string {
+	if strings.TrimSpace(machineID) == "" || strings.TrimSpace(rawRequestID) == "" {
+		return ""
+	}
+	return "apr." +
+		base64.RawURLEncoding.EncodeToString([]byte(machineID)) +
+		"." +
+		base64.RawURLEncoding.EncodeToString([]byte(rawRequestID))
+}
+
+func decodePublicApprovalRequestID(machineID string, publicRequestID string) (string, bool) {
+	parts := strings.Split(strings.TrimSpace(publicRequestID), ".")
+	if len(parts) != 3 || parts[0] != "apr" {
+		return "", false
+	}
+
+	decodedMachineID, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil || string(decodedMachineID) != machineID {
+		return "", false
+	}
+
+	decodedRequestID, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil || strings.TrimSpace(string(decodedRequestID)) == "" {
+		return "", false
+	}
+
+	return string(decodedRequestID), true
+}
+
+func mustMarshalApprovalPayload(payload any, fallback []byte) []byte {
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return fallback
+	}
+	return encoded
 }
 
 func (h *ClientHub) resolvePendingCommand(requestID string, result pendingCommandResult) {
