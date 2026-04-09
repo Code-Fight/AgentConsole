@@ -18,6 +18,23 @@ test("navigates to thread workspace", async ({ page }) => {
     });
   });
 
+  await page.route("**/machines", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        items: [
+          {
+            id: "machine-1",
+            name: "Machine One",
+            status: "online",
+            runtimeStatus: "running"
+          }
+        ]
+      })
+    });
+  });
+
   await page.goto("/");
   await page.getByText("Threads").click();
   await expect(page.getByRole("heading", { name: "Threads" })).toBeVisible();
