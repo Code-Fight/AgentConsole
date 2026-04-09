@@ -343,6 +343,44 @@ func TestAppServerClientSupportsToolUserInputApprovalRequests(t *testing.T) {
 	}
 }
 
+func TestAppServerClientPreservesToolUserInputQuestionMetadata(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	runner.emitServerRequest(t, "approval-1", "item/tool/requestUserInput", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "item-1",
+		"questions": []map[string]any{
+			{
+				"id":       "question-1",
+				"header":   "Git branch",
+				"question": "Pick a branch",
+				"options": []map[string]any{
+					{"value": "main", "label": "Main"},
+					{"value": "release", "label": "Release"},
+				},
+			},
+		},
+	})
+
+	pending, ok := client.pendingApprovals["approval-1"]
+	if !ok {
+		t.Fatal("expected pending approval to be stored")
+	}
+	if len(pending.request.UserInputQuestions) != 1 {
+		t.Fatalf("unexpected questions: %+v", pending.request.UserInputQuestions)
+	}
+
+	question := pending.request.UserInputQuestions[0]
+	if question.Key != "question-1" || question.Header != "Git branch" || question.Text != "Pick a branch" {
+		t.Fatalf("unexpected question metadata: %+v", question)
+	}
+	if len(question.Options) != 2 || question.Options[0] != "main" || question.Options[1] != "release" {
+		t.Fatalf("unexpected question options: %+v", question)
+	}
+}
+
 func TestAppServerClientRespondApprovalMapsToolUserInputResponses(t *testing.T) {
 	tests := []struct {
 		name       string

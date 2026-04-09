@@ -605,6 +605,7 @@ func extractToolUserInputQuestions(params json.RawMessage) []approvalQuestion {
 			question.Text = strings.TrimSpace(typed)
 		case map[string]any:
 			question.Key = approvalQuestionKey(typed, index)
+			question.Header = extractApprovalQuestionHeader(typed)
 			question.Text = extractApprovalQuestionText(typed)
 			question.Options = extractApprovalQuestionOptions(typed)
 		default:
@@ -624,6 +625,16 @@ func approvalQuestionKey(question map[string]any, index int) string {
 		}
 	}
 	return fmt.Sprintf("%d", index)
+}
+
+func extractApprovalQuestionHeader(question map[string]any) string {
+	for _, key := range []string{"header", "title"} {
+		value, ok := question[key].(string)
+		if ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 func extractApprovalQuestionText(question map[string]any) string {

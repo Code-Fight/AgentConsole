@@ -86,8 +86,16 @@ export interface ThreadUpdatedPayload {
   thread?: ThreadSummary;
 }
 
+export interface ApprovalQuestion {
+  id: string;
+  header?: string;
+  text?: string;
+  options?: string[];
+}
+
 export interface ThreadDetailResponse {
   thread: ThreadSummary;
+  activeTurnId?: string | null;
   pendingApprovals: ApprovalRequiredPayload[];
 }
 
@@ -122,6 +130,7 @@ export interface ApprovalRequiredPayload {
   kind: string;
   reason?: string;
   command?: string;
+  questions?: ApprovalQuestion[];
 }
 
 export interface ApprovalResolvedPayload {

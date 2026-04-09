@@ -26,6 +26,7 @@ type pendingApprovalRequest struct {
 
 type approvalQuestion struct {
 	Key     string
+	Header  string
 	Text    string
 	Options []string
 }

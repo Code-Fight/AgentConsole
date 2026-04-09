@@ -64,6 +64,9 @@ function resourceActionLabel(resource: EnvironmentResource): string | null {
   }
 
   if (resource.kind === "plugin") {
+    if (resource.status === "unknown") {
+      return null;
+    }
     return "Uninstall";
   }
 

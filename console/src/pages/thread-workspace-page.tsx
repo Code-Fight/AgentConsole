@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { buildThreadApiPath, http } from "../common/api/http";
 import type {
   ApprovalDecision,
+  ApprovalQuestion,
   ApprovalRequiredPayload,
   ApprovalResolvedPayload,
   EventEnvelope,
@@ -25,6 +26,8 @@ interface WorkspaceMessage {
 interface PendingApproval extends ApprovalRequiredPayload {
   requestId: string;
 }
+
+type ApprovalAnswerMap = Record<string, string>;
 
 function parseEnvelope(raw: string): EventEnvelope | null {
   try {
@@ -64,6 +67,7 @@ export function ThreadWorkspacePage() {
   const [steerPrompt, setSteerPrompt] = useState("");
   const [messages, setMessages] = useState<WorkspaceMessage[]>([]);
   const [pendingApprovals, setPendingApprovals] = useState<PendingApproval[]>([]);
+  const [approvalAnswers, setApprovalAnswers] = useState<Record<string, ApprovalAnswerMap>>({});
   const [machine, setMachine] = useState<MachineSummary | null>(null);
   const [activeTurnId, setActiveTurnId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,6 +76,7 @@ export function ThreadWorkspacePage() {
   useEffect(() => {
     setMessages([]);
     setPendingApprovals([]);
+    setApprovalAnswers({});
     setMachine(null);
     setActiveTurnId(null);
     setSteerPrompt("");
@@ -97,11 +102,22 @@ export function ThreadWorkspacePage() {
               .filter((approval): approval is PendingApproval => Boolean(approval?.requestId))
               .map((approval) => ({ ...approval, requestId: approval.requestId }))
           : [];
+        setActiveTurnId((current) => current ?? detail.activeTurnId ?? null);
         setPendingApprovals((current) => {
           const next = current.filter(
             (item) => !approvals.some((approval) => approval.requestId === item.requestId),
           );
           next.push(...approvals);
+          return next;
+        });
+        setApprovalAnswers((current) => {
+          const next = { ...current };
+          for (const approval of approvals) {
+            next[approval.requestId] = {
+              ...(next[approval.requestId] ?? {}),
+              ...buildDefaultApprovalAnswers(approval.questions),
+            };
+          }
           return next;
         });
         try {
@@ -165,6 +181,13 @@ export function ThreadWorkspacePage() {
           next.push({ ...payload, requestId: payload.requestId });
           return next;
         });
+        setApprovalAnswers((current) => ({
+          ...current,
+          [payload.requestId]: {
+            ...(current[payload.requestId] ?? {}),
+            ...buildDefaultApprovalAnswers(payload.questions),
+          }
+        }));
         return;
       }
 
@@ -177,6 +200,11 @@ export function ThreadWorkspacePage() {
         setPendingApprovals((current) =>
           current.filter((item) => item.requestId !== payload.requestId),
         );
+        setApprovalAnswers((current) => {
+          const next = { ...current };
+          delete next[payload.requestId];
+          return next;
+        });
         return;
       }
 
@@ -221,7 +249,11 @@ export function ThreadWorkspacePage() {
     });
   }, [threadId]);
 
-  async function handleApprovalDecision(requestId: string, decision: ApprovalDecision) {
+  async function handleApprovalDecision(
+    requestId: string,
+    decision: ApprovalDecision,
+    answers?: ApprovalAnswerMap,
+  ) {
     setError(null);
 
     try {
@@ -230,7 +262,10 @@ export function ThreadWorkspacePage() {
         headers: {
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({ decision })
+        body: JSON.stringify({
+          decision,
+          ...(answers ? { answers } : {})
+        })
       });
     } catch (approvalError) {
       setError(
@@ -326,6 +361,16 @@ export function ThreadWorkspacePage() {
     }
   }
 
+  function handleApprovalAnswerChange(requestId: string, questionId: string, value: string) {
+    setApprovalAnswers((current) => ({
+      ...current,
+      [requestId]: {
+        ...(current[requestId] ?? {}),
+        [questionId]: value
+      }
+    }));
+  }
+
   return (
     <section>
       <h1>Thread Workspace</h1>
@@ -369,7 +414,30 @@ export function ThreadWorkspacePage() {
             {pendingApprovals.map((approval) => (
               <li key={approval.requestId}>
                 <div>{approval.command || approval.reason || approval.kind}</div>
-                <button type="button" onClick={() => void handleApprovalDecision(approval.requestId, "accept")}>
+                {approval.kind === "tool_user_input" && approval.questions?.length ? (
+                  <div>
+                    {approval.questions.map((question) => (
+                      <ApprovalQuestionField
+                        key={question.id}
+                        question={question}
+                        value={approvalAnswers[approval.requestId]?.[question.id] ?? ""}
+                        onChange={(value) =>
+                          handleApprovalAnswerChange(approval.requestId, question.id, value)
+                        }
+                      />
+                    ))}
+                  </div>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => void handleApprovalDecision(
+                    approval.requestId,
+                    "accept",
+                    approval.kind === "tool_user_input" && approval.questions?.length
+                      ? approvalAnswers[approval.requestId] ?? buildDefaultApprovalAnswers(approval.questions)
+                      : undefined,
+                  )}
+                >
                   Accept
                 </button>
                 <button type="button" onClick={() => void handleApprovalDecision(approval.requestId, "decline")}>
@@ -390,5 +458,46 @@ export function ThreadWorkspacePage() {
         ))}
       </ul>
     </section>
+  );
+}
+
+function buildDefaultApprovalAnswers(questions?: ApprovalQuestion[]): ApprovalAnswerMap {
+  if (!questions?.length) {
+    return {};
+  }
+
+  return Object.fromEntries(
+    questions
+      .filter((question) => question.id)
+      .map((question) => [question.id, question.options?.[0] ?? ""]),
+  );
+}
+
+function ApprovalQuestionField(props: {
+  question: ApprovalQuestion;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const { question, value, onChange } = props;
+  const label = question.text || question.header || question.id;
+
+  return (
+    <div>
+      {question.header && question.header !== label ? <p>{question.header}</p> : null}
+      <label>
+        {label}
+        {question.options?.length ? (
+          <select value={value} onChange={(event) => onChange(event.target.value)}>
+            {question.options.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input type="text" value={value} onChange={(event) => onChange(event.target.value)} />
+        )}
+      </label>
+    </div>
   );
 }

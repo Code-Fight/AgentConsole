@@ -758,6 +758,11 @@ func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 			if commandPayload.ThreadID != "thread-01" || commandPayload.TurnID != "turn-01" {
 				t.Fatalf("expected stored thread context in payload: %+v", commandPayload)
 			}
+			if len(commandPayload.Answers) != 2 ||
+				commandPayload.Answers["question-1"] != "release" ||
+				commandPayload.Answers["question-2"] != "Need the release branch" {
+				t.Fatalf("expected approval answers in payload: %+v", commandPayload)
+			}
 
 			return protocol.CommandCompletedPayload{
 				CommandName: "approval.respond",
@@ -770,7 +775,7 @@ func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 	}
 
 	handler := NewServer(reg, runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
-	req := httptest.NewRequest(http.MethodPost, "/approvals/approval-1/respond", bytes.NewBufferString(`{"decision":"accept"}`))
+	req := httptest.NewRequest(http.MethodPost, "/approvals/approval-1/respond", bytes.NewBufferString(`{"decision":"accept","answers":{"question-1":"release","question-2":"Need the release branch"}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -791,6 +796,107 @@ func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 	}
 	if _, ok := reg.PendingApproval("approval-1"); ok {
 		t.Fatal("expected successful approval response to clear durable pending approval state")
+	}
+}
+
+func TestServerThreadDetailIncludesActiveTurnIDFromSenderState(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	thread := domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusActive,
+		Title:     "Investigate flaky test",
+	}
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
+
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01")
+
+	handler := NewServer(registry.NewStore(), idx, router, &fakeCommandSender{
+		activeTurnID: func(threadID string) (string, bool) {
+			if threadID != "thread-01" {
+				t.Fatalf("threadID = %q", threadID)
+			}
+			return "turn-active-1", true
+		},
+	}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Thread       domain.Thread `json:"thread"`
+		ActiveTurnID string        `json:"activeTurnId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Thread.ThreadID != "thread-01" || body.ActiveTurnID != "turn-active-1" {
+		t.Fatalf("unexpected thread detail: %+v", body)
+	}
+}
+
+func TestServerDeleteThreadBroadcastsThreadUpdatedInvalidation(t *testing.T) {
+	reg := registry.NewStore()
+	idx := runtimeindex.NewStore()
+	router := routing.NewRouter()
+	clientHub := gatewayws.NewClientHubWithStores(reg, idx, router)
+	consoleHub := gatewayws.NewConsoleHub()
+	clientHub.SetConsoleHub(consoleHub)
+
+	thread := domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Investigate flaky test",
+	}
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
+	router.TrackThread("thread-01", "machine-01")
+
+	server := httptest.NewServer(NewServer(reg, idx, router, clientHub, clientHub.Handler(), consoleHub.Handler()))
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	req := httptest.NewRequest(http.MethodDelete, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	NewServer(reg, idx, router, clientHub, clientHub.Handler(), consoleHub.Handler()).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	readCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, data, err := conn.Read(readCtx)
+	if err != nil {
+		t.Fatalf("expected thread.updated broadcast after delete: %v", err)
+	}
+
+	var envelope protocol.Envelope
+	if err := transport.Decode(data, &envelope); err != nil {
+		t.Fatalf("decode envelope failed: %v", err)
+	}
+	if envelope.Name != "thread.updated" {
+		t.Fatalf("expected thread.updated, got %q", envelope.Name)
+	}
+
+	var payload protocol.ThreadUpdatedPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("decode payload failed: %v", err)
+	}
+	if payload.MachineID != "machine-01" || payload.ThreadID != "thread-01" {
+		t.Fatalf("unexpected payload: %+v", payload)
 	}
 }
 
@@ -1036,6 +1142,7 @@ func TestServerGetsMachineByIDAndDeletesThreadThroughArchiveShim(t *testing.T) {
 type fakeCommandSender struct {
 	send                   func(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error)
 	resolveApprovalMachine func(requestID string) (string, bool)
+	activeTurnID           func(threadID string) (string, bool)
 }
 
 func (s *fakeCommandSender) SendCommand(ctx context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
@@ -1051,6 +1158,13 @@ func (s *fakeCommandSender) ResolveApprovalMachine(requestID string) (string, bo
 		return "", false
 	}
 	return s.resolveApprovalMachine(requestID)
+}
+
+func (s *fakeCommandSender) ActiveTurnID(threadID string) (string, bool) {
+	if s.activeTurnID == nil {
+		return "", false
+	}
+	return s.activeTurnID(threadID)
 }
 
 func mustMarshalJSON(t *testing.T, value any) []byte {

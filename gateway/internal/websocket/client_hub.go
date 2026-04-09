@@ -29,6 +29,7 @@ type ClientHub struct {
 	runtimeIndex      *runtimeindex.Store
 	router            *routing.Router
 	snapshotByMachine map[string]machineSnapshotState
+	activeTurns       map[string]string
 	approvalRequests  map[string]string
 	pendingCommands   map[string]pendingCommandWaiter
 	commandTimeout    time.Duration
@@ -99,6 +100,7 @@ func NewClientHubWithStores(reg *registry.Store, idx *runtimeindex.Store, router
 		runtimeIndex:      idx,
 		router:            routerStore,
 		snapshotByMachine: map[string]machineSnapshotState{},
+		activeTurns:       map[string]string{},
 		approvalRequests:  map[string]string{},
 		pendingCommands:   map[string]pendingCommandWaiter{},
 		commandTimeout:    defaultCommandTimeout,
@@ -135,6 +137,22 @@ func (h *ClientHub) ClearApprovalRequest(requestID string) {
 	h.mu.Lock()
 	delete(h.approvalRequests, requestID)
 	h.mu.Unlock()
+}
+
+func (h *ClientHub) ActiveTurnID(threadID string) (string, bool) {
+	if strings.TrimSpace(threadID) == "" {
+		return "", false
+	}
+
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	turnID, ok := h.activeTurns[threadID]
+	return turnID, ok
+}
+
+func (h *ClientHub) EmitThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string) {
+	h.broadcastThreadUpdated(payload, timestamp)
 }
 
 func (h *ClientHub) Handler() http.Handler {
@@ -231,6 +249,19 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 	h.mu.RUnlock()
 	if consoleHub != nil {
 		_ = consoleHub.Broadcast(envelope)
+	}
+
+	switch envelope.Name {
+	case "turn.started":
+		var payload protocol.TurnStartedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			h.setActiveTurn(envelope.MachineID, payload.ThreadID, payload.TurnID)
+		}
+	case "turn.completed":
+		var payload protocol.TurnCompletedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			h.clearActiveTurn(envelope.MachineID, payload.Turn.ThreadID, payload.Turn.TurnID)
+		}
 	}
 
 	if envelope.RequestID == "" {
@@ -892,12 +923,63 @@ func (h *ClientHub) upsertThreadSnapshot(machineID string, thread domain.Thread)
 	}
 }
 
+func (h *ClientHub) setActiveTurn(machineID string, threadID string, turnID string) {
+	if machineID == "" || threadID == "" || turnID == "" {
+		return
+	}
+
+	h.mu.Lock()
+	h.activeTurns[threadID] = turnID
+	state := h.snapshotByMachine[machineID]
+	for idx := range state.threads {
+		if state.threads[idx].ThreadID == threadID {
+			state.threads[idx].Status = domain.ThreadStatusActive
+			break
+		}
+	}
+	h.snapshotByMachine[machineID] = state
+	threadsToStore := append([]domain.Thread(nil), state.threads...)
+	environmentToStore := append([]domain.EnvironmentResource(nil), state.environment...)
+	h.mu.Unlock()
+
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	}
+}
+
+func (h *ClientHub) clearActiveTurn(machineID string, threadID string, turnID string) {
+	if machineID == "" || threadID == "" {
+		return
+	}
+
+	h.mu.Lock()
+	if currentTurnID, ok := h.activeTurns[threadID]; ok && (turnID == "" || currentTurnID == turnID) {
+		delete(h.activeTurns, threadID)
+	}
+	state := h.snapshotByMachine[machineID]
+	for idx := range state.threads {
+		if state.threads[idx].ThreadID == threadID {
+			state.threads[idx].Status = domain.ThreadStatusIdle
+			break
+		}
+	}
+	h.snapshotByMachine[machineID] = state
+	threadsToStore := append([]domain.Thread(nil), state.threads...)
+	environmentToStore := append([]domain.EnvironmentResource(nil), state.environment...)
+	h.mu.Unlock()
+
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	}
+}
+
 func (h *ClientHub) removeThreadSnapshot(machineID string, threadID string) {
 	if machineID == "" || threadID == "" {
 		return
 	}
 
 	h.mu.Lock()
+	delete(h.activeTurns, threadID)
 	state := h.snapshotByMachine[machineID]
 	filtered := make([]domain.Thread, 0, len(state.threads))
 	for _, thread := range state.threads {

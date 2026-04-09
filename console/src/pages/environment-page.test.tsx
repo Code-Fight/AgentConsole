@@ -172,3 +172,55 @@ test("clicking a skill action sends the path-based resource id and machineId", a
     );
   });
 });
+
+test("does not render uninstall for plugins that are not installed", async () => {
+  connectConsoleSocketMock.mockReturnValue(() => {});
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = typeof input === "string" ? input : input.toString();
+
+    if (path.endsWith("/environment/skills") || path.endsWith("/environment/mcps")) {
+      return new Response(
+        JSON.stringify({ items: [] }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    if (path.endsWith("/environment/plugins")) {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              resourceId: "plugin-unknown",
+              machineId: "machine-1",
+              kind: "plugin",
+              displayName: "Marketplace B",
+              status: "unknown",
+              restartRequired: false,
+              lastObservedAt: "2026-04-08T13:10:00Z"
+            }
+          ]
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(<EnvironmentPage />);
+
+  expect(await screen.findByText("Marketplace B")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "Uninstall" })).not.toBeInTheDocument();
+});

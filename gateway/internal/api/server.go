@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"time"
 
 	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/protocol"
@@ -29,6 +30,7 @@ type approvalRequestCleaner interface {
 
 type threadDetailResponse struct {
 	Thread           domain.Thread                      `json:"thread"`
+	ActiveTurnID     string                             `json:"activeTurnId,omitempty"`
 	PendingApprovals []protocol.ApprovalRequiredPayload `json:"pendingApprovals"`
 }
 
@@ -48,11 +50,20 @@ type startTurnRequest struct {
 }
 
 type approvalRespondRequest struct {
-	Decision string `json:"decision"`
+	Decision string         `json:"decision"`
+	Answers  map[string]any `json:"answers"`
 }
 
 type environmentMutationRequest struct {
 	MachineID string `json:"machineId"`
+}
+
+type activeTurnReader interface {
+	ActiveTurnID(threadID string) (string, bool)
+}
+
+type threadUpdateEmitter interface {
+	EmitThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string)
 }
 
 func resolveThreadMachineID(router *routing.Router, threadID string) (string, bool) {
@@ -123,6 +134,23 @@ func machineIsOnline(reg *registry.Store, machineID string) bool {
 	}
 	machine, ok := reg.Get(machineID)
 	return ok && machine.Status == domain.MachineStatusOnline
+}
+
+func resolveActiveTurnID(sender CommandSender, threadID string) string {
+	if sender == nil || strings.TrimSpace(threadID) == "" {
+		return ""
+	}
+
+	reader, ok := sender.(activeTurnReader)
+	if !ok {
+		return ""
+	}
+
+	activeTurnID, ok := reader.ActiveTurnID(threadID)
+	if !ok {
+		return ""
+	}
+	return activeTurnID
 }
 
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
@@ -248,6 +276,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		if reg != nil {
 			pendingApprovals = reg.PendingApprovalsForThread(threadID)
 		}
+		activeTurnID := resolveActiveTurnID(sender, threadID)
 
 		if sender != nil {
 			if machineID, ok := resolveThreadMachineID(router, threadID); ok {
@@ -267,6 +296,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 						clearDeleted(result.Thread.ThreadID)
 						writeJSON(w, http.StatusOK, threadDetailResponse{
 							Thread:           result.Thread,
+							ActiveTurnID:     activeTurnID,
 							PendingApprovals: pendingApprovals,
 						})
 						return
@@ -290,6 +320,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		}
 		writeJSON(w, http.StatusOK, threadDetailResponse{
 			Thread:           thread,
+			ActiveTurnID:     activeTurnID,
 			PendingApprovals: pendingApprovals,
 		})
 	})
@@ -428,7 +459,8 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			})
 			return
 		}
-		if _, ok := findThread(idx, threadID); !ok {
+		thread, ok := findThread(idx, threadID)
+		if !ok {
 			http.Error(w, "thread not found", http.StatusNotFound)
 			return
 		}
@@ -449,6 +481,16 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		}
 
 		markDeleted(threadID)
+		if emitter, ok := sender.(threadUpdateEmitter); ok {
+			machineID := thread.MachineID
+			if machineID == "" {
+				machineID, _ = resolveThreadMachineID(router, threadID)
+			}
+			emitter.EmitThreadUpdated(protocol.ThreadUpdatedPayload{
+				MachineID: machineID,
+				ThreadID:  threadID,
+			}, time.Now().UTC().Format(time.RFC3339))
+		}
 		writeJSON(w, http.StatusOK, threadDeleteResponse{
 			ThreadID: threadID,
 			Deleted:  true,
@@ -625,6 +667,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			ThreadID:  storedApproval.ThreadID,
 			TurnID:    storedApproval.TurnID,
 			Decision:  req.Decision,
+			Answers:   req.Answers,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)

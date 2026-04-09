@@ -92,11 +92,19 @@ type EnvironmentPluginUninstallCommandPayload struct {
 	PluginID string `json:"pluginId"`
 }
 
+type ApprovalQuestionPayload struct {
+	ID      string   `json:"id"`
+	Header  string   `json:"header,omitempty"`
+	Text    string   `json:"text,omitempty"`
+	Options []string `json:"options,omitempty"`
+}
+
 type ApprovalRespondCommandPayload struct {
-	RequestID string `json:"requestId"`
-	ThreadID  string `json:"threadId,omitempty"`
-	TurnID    string `json:"turnId,omitempty"`
-	Decision  string `json:"decision"`
+	RequestID string         `json:"requestId"`
+	ThreadID  string         `json:"threadId,omitempty"`
+	TurnID    string         `json:"turnId,omitempty"`
+	Decision  string         `json:"decision"`
+	Answers   map[string]any `json:"answers,omitempty"`
 }
 
 type CommandCompletedPayload struct {
@@ -175,13 +183,14 @@ type TurnCompletedPayload struct {
 }
 
 type ApprovalRequiredPayload struct {
-	RequestID string `json:"requestId"`
-	ThreadID  string `json:"threadId,omitempty"`
-	TurnID    string `json:"turnId,omitempty"`
-	ItemID    string `json:"itemId,omitempty"`
-	Kind      string `json:"kind"`
-	Reason    string `json:"reason,omitempty"`
-	Command   string `json:"command,omitempty"`
+	RequestID string                    `json:"requestId"`
+	ThreadID  string                    `json:"threadId,omitempty"`
+	TurnID    string                    `json:"turnId,omitempty"`
+	ItemID    string                    `json:"itemId,omitempty"`
+	Kind      string                    `json:"kind"`
+	Reason    string                    `json:"reason,omitempty"`
+	Command   string                    `json:"command,omitempty"`
+	Questions []ApprovalQuestionPayload `json:"questions,omitempty"`
 }
 
 type ApprovalResolvedPayload struct {

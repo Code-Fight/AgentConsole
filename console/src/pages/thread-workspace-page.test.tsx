@@ -230,6 +230,113 @@ test("renders tool-user-input approval controls for approval.required events on 
   expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
 });
 
+test("renders tool-user-input questions and posts explicit answers on accept", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+
+    if (path === "/approvals/approval-1/respond" && init?.method === "POST") {
+      return new Response(null, { status: 204 });
+    }
+
+    if (path === "/machines/machine-1") {
+      return new Response(
+        JSON.stringify({
+          machine: {
+            id: "machine-1",
+            name: "machine-1",
+            status: "online",
+            runtimeStatus: "running"
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "idle",
+          title: "Investigate flaky test"
+        },
+        activeTurnId: null,
+        pendingApprovals: [
+          {
+            requestId: "approval-1",
+            threadId: "thread-1",
+            turnId: "turn-1",
+            itemId: "item-1",
+            kind: "tool_user_input",
+            reason: "Need operator input",
+            questions: [
+              {
+                id: "question-1",
+                text: "Pick a branch",
+                options: ["main", "release"]
+              },
+              {
+                id: "question-2",
+                text: "Why are you overriding it?"
+              }
+            ]
+          }
+        ]
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      },
+    );
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("Pick a branch")).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "main" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "release" })).toBeInTheDocument();
+
+  fireEvent.change(screen.getByRole("combobox", { name: "Pick a branch" }), {
+    target: { value: "release" }
+  });
+  fireEvent.change(screen.getByRole("textbox", { name: "Why are you overriding it?" }), {
+    target: { value: "Need the release branch for validation." }
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Accept" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/approvals/approval-1/respond",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          decision: "accept",
+          answers: {
+            "question-1": "release",
+            "question-2": "Need the release branch for validation."
+          }
+        })
+      }),
+    );
+  });
+});
+
 test("clicking accept posts the approval decision to the approval endpoint", async () => {
   const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") {
@@ -297,6 +404,65 @@ test("clicking accept posts the approval decision to the approval endpoint", asy
       }),
     );
   });
+});
+
+test("hydrates the active turn from thread detail so steer and interrupt remain available after reload", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = typeof input === "string" ? input : input.toString();
+
+    if (path === "/machines/machine-1") {
+      return new Response(
+        JSON.stringify({
+          machine: {
+            id: "machine-1",
+            name: "machine-1",
+            status: "online",
+            runtimeStatus: "running"
+          }
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json"
+          }
+        },
+      );
+    }
+
+    return new Response(
+      JSON.stringify({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "active",
+          title: "Investigate flaky test"
+        },
+        activeTurnId: "turn-active-1",
+        pendingApprovals: []
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      },
+    );
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("Active turn: turn-active-1")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Send steer" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Interrupt turn" })).toBeInTheDocument();
 });
 
 test("removes a pending approval when approval.resolved arrives for the current thread", async () => {

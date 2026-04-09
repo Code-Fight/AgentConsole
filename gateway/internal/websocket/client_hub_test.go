@@ -84,6 +84,41 @@ func TestClientHubReconnectKeepsLatestConnectionOwner(t *testing.T) {
 	}
 }
 
+func TestClientHubTracksActiveTurnsForThreadRecovery(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	hub := NewClientHubWithStores(registry.NewStore(), idx)
+
+	hub.upsertThreadSnapshot("machine-01", domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Investigate flaky test",
+	})
+
+	hub.setActiveTurn("machine-01", "thread-01", "turn-01")
+
+	activeTurnID, ok := hub.ActiveTurnID("thread-01")
+	if !ok || activeTurnID != "turn-01" {
+		t.Fatalf("expected active turn to be tracked, got %q ok=%v", activeTurnID, ok)
+	}
+
+	threads := idx.Threads()
+	if len(threads) != 1 || threads[0].Status != domain.ThreadStatusActive {
+		t.Fatalf("expected active thread snapshot, got %+v", threads)
+	}
+
+	hub.clearActiveTurn("machine-01", "thread-01", "turn-01")
+
+	if activeTurnID, ok := hub.ActiveTurnID("thread-01"); ok || activeTurnID != "" {
+		t.Fatalf("expected active turn to clear, got %q ok=%v", activeTurnID, ok)
+	}
+
+	threads = idx.Threads()
+	if len(threads) != 1 || threads[0].Status != domain.ThreadStatusIdle {
+		t.Fatalf("expected idle thread snapshot after clear, got %+v", threads)
+	}
+}
+
 func TestClientHubIgnoresMessagesFromSupersededConnection(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()
