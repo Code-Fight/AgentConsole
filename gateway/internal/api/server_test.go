@@ -478,7 +478,171 @@ func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	}
 }
 
+func TestServerRuntimeControlEndpointsUseExpectedCommands(t *testing.T) {
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{
+				machineID: machineID,
+				name:      name,
+				payload:   payload,
+			})
+			return protocol.CommandCompletedPayload{
+				CommandName: name,
+				Result:      mustMarshalJSON(t, map[string]any{}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPost, "/machines/machine-01/runtime/stop", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("runtime stop returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/machines/machine-01/runtime/start", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("runtime start returned %d", rec.Code)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	if calls[0].machineID != "machine-01" || calls[0].name != "runtime.stop" {
+		t.Fatalf("unexpected stop call: %+v", calls[0])
+	}
+	if _, ok := calls[0].payload.(protocol.RuntimeStopCommandPayload); !ok {
+		t.Fatalf("unexpected runtime.stop payload type: %T", calls[0].payload)
+	}
+	if calls[1].machineID != "machine-01" || calls[1].name != "runtime.start" {
+		t.Fatalf("unexpected start call: %+v", calls[1])
+	}
+	if _, ok := calls[1].payload.(protocol.RuntimeStartCommandPayload); !ok {
+		t.Fatalf("unexpected runtime.start payload type: %T", calls[1].payload)
+	}
+}
+
+func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", nil, []domain.EnvironmentResource{
+		{
+			ResourceID:  "skill-a",
+			MachineID:   "machine-01",
+			Kind:        domain.EnvironmentKindSkill,
+			DisplayName: "Skill A",
+			Status:      domain.EnvironmentResourceStatusEnabled,
+		},
+		{
+			ResourceID:  "plugin-a",
+			MachineID:   "machine-01",
+			Kind:        domain.EnvironmentKindPlugin,
+			DisplayName: "Plugin A",
+			Status:      domain.EnvironmentResourceStatusEnabled,
+		},
+	})
+
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{
+				machineID: machineID,
+				name:      name,
+				payload:   payload,
+			})
+			return protocol.CommandCompletedPayload{
+				CommandName: name,
+				Result:      mustMarshalJSON(t, map[string]any{}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("enable returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/disable", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("disable returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/environment/plugins/plugin-a", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin uninstall returned %d", rec.Code)
+	}
+
+	if len(calls) != 3 {
+		t.Fatalf("expected 3 calls, got %d", len(calls))
+	}
+	if calls[0].machineID != "machine-01" || calls[0].name != "environment.skill.enable" {
+		t.Fatalf("unexpected enable call: %+v", calls[0])
+	}
+	enablePayload, ok := calls[0].payload.(protocol.EnvironmentSkillSetEnabledCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected enable payload type: %T", calls[0].payload)
+	}
+	if enablePayload.SkillID != "skill-a" || !enablePayload.Enabled {
+		t.Fatalf("unexpected enable payload: %+v", enablePayload)
+	}
+
+	if calls[1].machineID != "machine-01" || calls[1].name != "environment.skill.disable" {
+		t.Fatalf("unexpected disable call: %+v", calls[1])
+	}
+	disablePayload, ok := calls[1].payload.(protocol.EnvironmentSkillSetEnabledCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected disable payload type: %T", calls[1].payload)
+	}
+	if disablePayload.SkillID != "skill-a" || disablePayload.Enabled {
+		t.Fatalf("unexpected disable payload: %+v", disablePayload)
+	}
+
+	if calls[2].machineID != "machine-01" || calls[2].name != "environment.plugin.uninstall" {
+		t.Fatalf("unexpected plugin uninstall call: %+v", calls[2])
+	}
+	uninstallPayload, ok := calls[2].payload.(protocol.EnvironmentPluginUninstallCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected uninstall payload type: %T", calls[2].payload)
+	}
+	if uninstallPayload.PluginID != "plugin-a" {
+		t.Fatalf("unexpected uninstall payload: %+v", uninstallPayload)
+	}
+}
+
 func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
+	reg := registry.NewStore()
+	reg.UpsertPendingApproval("machine-01", protocol.ApprovalRequiredPayload{
+		RequestID: "approval-1",
+		ThreadID:  "thread-01",
+		TurnID:    "turn-01",
+		Kind:      "command",
+		Command:   "go test ./...",
+	})
+
 	sender := &fakeCommandSender{
 		resolveApprovalMachine: func(requestID string) (string, bool) {
 			if requestID != "approval-1" {
@@ -501,6 +665,9 @@ func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 			if commandPayload.RequestID != "approval-1" || commandPayload.Decision != "accept" {
 				t.Fatalf("unexpected payload: %+v", commandPayload)
 			}
+			if commandPayload.ThreadID != "thread-01" || commandPayload.TurnID != "turn-01" {
+				t.Fatalf("expected stored thread context in payload: %+v", commandPayload)
+			}
 
 			return protocol.CommandCompletedPayload{
 				CommandName: "approval.respond",
@@ -512,7 +679,7 @@ func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 		},
 	}
 
-	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+	handler := NewServer(reg, runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
 	req := httptest.NewRequest(http.MethodPost, "/approvals/approval-1/respond", bytes.NewBufferString(`{"decision":"accept"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -626,6 +793,45 @@ func TestServerThreadDetailIncludesPendingApprovalsWhenThreadIsOffline(t *testin
 	}
 	if body.PendingApprovals[0].RequestID != "approval-1" || body.PendingApprovals[0].Command != "go test ./..." {
 		t.Fatalf("unexpected pending approval: %+v", body.PendingApprovals[0])
+	}
+}
+
+func TestServerThreadDetailReturnsLiveReadFailureForOnlineMachine(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:     "machine-01",
+		Name:   "machine-01",
+		Status: domain.MachineStatusOnline,
+	})
+
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{
+		{
+			ThreadID:  "thread-01",
+			MachineID: "machine-01",
+			Status:    domain.ThreadStatusIdle,
+			Title:     "stale snapshot",
+		},
+	}, nil)
+
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01")
+
+	handler := NewServer(reg, idx, router, &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" || name != "thread.read" {
+				t.Fatalf("unexpected live read route %q %q", machineID, name)
+			}
+			return protocol.CommandCompletedPayload{}, context.DeadlineExceeded
+		},
+	}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d with %s", rec.Code, rec.Body.String())
 	}
 }
 

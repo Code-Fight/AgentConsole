@@ -92,6 +92,7 @@ export interface ApprovalRequiredPayload {
 export interface ApprovalResolvedPayload {
   requestId: string;
   threadId?: string;
+  turnId?: string;
   decision: ApprovalDecision;
 }
 

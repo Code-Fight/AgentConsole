@@ -58,18 +58,18 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 		_, _ = fmt.Fprintf(stderr, "runtime bootstrap failed: %v\n", err)
 		return 1
 	}
-	defer func() {
-		_ = cleanupRuntime()
-	}()
 
 	runtimeRegistry := agentregistry.New()
 	runtimeRegistry.Register(runtimeName, runtime)
 	agentManager := manager.New(runtimeRegistry)
+	runtimeController := newRuntimeController(shutdownCtx, cfg, now, factories, runtimeRegistry, runtimeName, runtime, cleanupRuntime)
+	defer func() {
+		_ = runtimeController.Close()
+	}()
 
 	machine := domain.Machine{
-		ID:     cfg.MachineID,
-		Name:   cfg.MachineID,
-		Status: domain.MachineStatusOnline,
+		ID:   cfg.MachineID,
+		Name: cfg.MachineID,
 	}
 
 	backoff := time.Duration(0)
@@ -92,8 +92,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 		session := newClientSession(cfg.MachineID, func(msg []byte) error {
 			return conn.Write(shutdownCtx, cws.MessageText, msg)
 		}, now)
-		runtimeStreamsTurnEvents := bindRuntimeTurnEvents(runtime, session, agentManager, runtimeName)
-		bindRuntimeApprovalEvents(runtime, session)
+		runtimeStreamsTurnEvents := runtimeController.bindSession(session, agentManager, runtimeName)
 		if err := session.Register(); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "register-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
@@ -102,6 +101,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 			}
 			continue
 		}
+		machine.Status = runtimeController.machineStatus()
 		if err := sendLiveSnapshot(session, machine, agentManager, runtimeName); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "snapshot-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
@@ -112,7 +112,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 		}
 
 		backoff = 0
-		if err := runConnection(shutdownCtx, conn, session, agentManager, runtimeName, runtimeStreamsTurnEvents, heartbeatInterval); err != nil {
+		if err := runConnection(shutdownCtx, conn, session, agentManager, runtimeName, runtimeStreamsTurnEvents, runtimeController, heartbeatInterval); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "reconnect")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
@@ -131,6 +131,160 @@ type runtimeFactories struct {
 	newAppServer func(ctx context.Context, cfg config.Config) (agenttypes.Runtime, func() error, error)
 }
 
+type approvalContext struct {
+	threadID string
+	turnID   string
+}
+
+type runtimeController struct {
+	mu                       sync.Mutex
+	ctx                      context.Context
+	cfg                      config.Config
+	now                      func() time.Time
+	factories                runtimeFactories
+	registry                 *agentregistry.Registry
+	runtimeName              string
+	machineID                string
+	runtime                  agenttypes.Runtime
+	cleanup                  func() error
+	runtimeStreamsTurnEvents bool
+	stopped                  bool
+}
+
+type stoppedRuntime struct{}
+
+func newRuntimeController(ctx context.Context, cfg config.Config, now func() time.Time, factories runtimeFactories, registry *agentregistry.Registry, runtimeName string, runtime agenttypes.Runtime, cleanup func() error) *runtimeController {
+	return &runtimeController{
+		ctx:         ctx,
+		cfg:         cfg,
+		now:         now,
+		factories:   factories,
+		registry:    registry,
+		runtimeName: runtimeName,
+		machineID:   cfg.MachineID,
+		runtime:     runtime,
+		cleanup:     cleanup,
+		stopped:     false,
+	}
+}
+
+func (c *runtimeController) bindSession(session *clientSession, mgr *manager.Manager, runtimeName string) bool {
+	if c == nil {
+		return false
+	}
+
+	c.mu.Lock()
+	runtime := c.runtime
+	if runtimeName != "" {
+		c.runtimeName = runtimeName
+	}
+	c.mu.Unlock()
+
+	streamsTurnEvents := bindRuntimeTurnEvents(runtime, session, mgr, c.runtimeName)
+	bindRuntimeApprovalEvents(runtime, session)
+
+	c.mu.Lock()
+	c.runtimeStreamsTurnEvents = streamsTurnEvents
+	c.mu.Unlock()
+	return streamsTurnEvents
+}
+
+func (c *runtimeController) runtimeStreams() bool {
+	if c == nil {
+		return false
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.runtimeStreamsTurnEvents
+}
+
+func (c *runtimeController) machineStatus() domain.MachineStatus {
+	if c == nil {
+		return domain.MachineStatusOnline
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stopped {
+		return domain.MachineStatusOffline
+	}
+	return domain.MachineStatusOnline
+}
+
+func (c *runtimeController) Stop() error {
+	if c == nil {
+		return fmt.Errorf("runtime controller is not configured")
+	}
+
+	c.mu.Lock()
+	cleanup := c.cleanup
+	c.runtime = stoppedRuntime{}
+	c.cleanup = func() error { return nil }
+	c.runtimeStreamsTurnEvents = false
+	c.stopped = true
+	if c.registry != nil {
+		c.registry.Register(c.runtimeName, c.runtime)
+	}
+	c.mu.Unlock()
+
+	if cleanup != nil {
+		return cleanup()
+	}
+	return nil
+}
+
+func (c *runtimeController) Start(session *clientSession, mgr *manager.Manager, runtimeName string) error {
+	if c == nil {
+		return fmt.Errorf("runtime controller is not configured")
+	}
+
+	c.mu.Lock()
+	if !c.stopped {
+		c.mu.Unlock()
+		if session != nil && mgr != nil {
+			c.bindSession(session, mgr, runtimeName)
+		}
+		return nil
+	}
+	c.mu.Unlock()
+
+	runtime, cleanup, err := buildRuntime(c.ctx, c.cfg, c.now, c.factories)
+	if err != nil {
+		return err
+	}
+
+	c.mu.Lock()
+	c.runtime = runtime
+	c.cleanup = cleanup
+	c.stopped = false
+	if c.registry != nil {
+		c.registry.Register(c.runtimeName, runtime)
+	}
+	c.mu.Unlock()
+
+	if session != nil && mgr != nil {
+		c.bindSession(session, mgr, runtimeName)
+	}
+	return nil
+}
+
+func (c *runtimeController) Close() error {
+	if c == nil {
+		return nil
+	}
+
+	c.mu.Lock()
+	cleanup := c.cleanup
+	c.cleanup = func() error { return nil }
+	c.mu.Unlock()
+
+	if cleanup != nil {
+		return cleanup()
+	}
+	return nil
+}
+
 type clientSession struct {
 	delegate     *gateway.Session
 	machineID    string
@@ -138,7 +292,7 @@ type clientSession struct {
 	now          func() time.Time
 	sendMu       sync.Mutex
 	approvalMu   sync.Mutex
-	approvalByID map[string]string
+	approvalByID map[string]approvalContext
 }
 
 func newClientSession(machineID string, send gateway.Sender, now func() time.Time) *clientSession {
@@ -149,7 +303,7 @@ func newClientSession(machineID string, send gateway.Sender, now func() time.Tim
 	session := &clientSession{
 		machineID:    machineID,
 		now:          now,
-		approvalByID: map[string]string{},
+		approvalByID: map[string]approvalContext{},
 	}
 	session.send = func(msg []byte) error {
 		session.sendMu.Lock()
@@ -201,34 +355,43 @@ func (s *clientSession) TurnStarted(requestID string, payload protocol.TurnStart
 }
 
 func (s *clientSession) ApprovalRequired(payload protocol.ApprovalRequiredPayload) error {
-	s.rememberApprovalThread(payload.RequestID, payload.ThreadID)
+	s.rememberApprovalContext(payload.RequestID, payload.ThreadID, payload.TurnID)
 	return s.sendEnvelope(protocol.CategoryEvent, "approval.required", payload.RequestID, payload)
 }
 
 func (s *clientSession) ApprovalResolved(payload protocol.ApprovalResolvedPayload) error {
-	if payload.ThreadID == "" {
-		payload.ThreadID = s.approvalThreadID(payload.RequestID)
+	if payload.ThreadID == "" || payload.TurnID == "" {
+		context := s.approvalContext(payload.RequestID)
+		if payload.ThreadID == "" {
+			payload.ThreadID = context.threadID
+		}
+		if payload.TurnID == "" {
+			payload.TurnID = context.turnID
+		}
 	}
 	if err := s.sendEnvelope(protocol.CategoryEvent, "approval.resolved", payload.RequestID, payload); err != nil {
 		return err
 	}
-	s.clearApprovalThread(payload.RequestID)
+	s.clearApprovalContext(payload.RequestID)
 	return nil
 }
 
-func (s *clientSession) rememberApprovalThread(requestID string, threadID string) {
-	if strings.TrimSpace(requestID) == "" || strings.TrimSpace(threadID) == "" {
+func (s *clientSession) rememberApprovalContext(requestID string, threadID string, turnID string) {
+	if strings.TrimSpace(requestID) == "" {
 		return
 	}
 
 	s.approvalMu.Lock()
 	defer s.approvalMu.Unlock()
-	s.approvalByID[requestID] = threadID
+	s.approvalByID[requestID] = approvalContext{
+		threadID: threadID,
+		turnID:   turnID,
+	}
 }
 
-func (s *clientSession) approvalThreadID(requestID string) string {
+func (s *clientSession) approvalContext(requestID string) approvalContext {
 	if strings.TrimSpace(requestID) == "" {
-		return ""
+		return approvalContext{}
 	}
 
 	s.approvalMu.Lock()
@@ -236,7 +399,7 @@ func (s *clientSession) approvalThreadID(requestID string) string {
 	return s.approvalByID[requestID]
 }
 
-func (s *clientSession) clearApprovalThread(requestID string) {
+func (s *clientSession) clearApprovalContext(requestID string) {
 	if strings.TrimSpace(requestID) == "" {
 		return
 	}
@@ -331,6 +494,42 @@ func newFakeRuntime(cfg config.Config, now func() time.Time) agenttypes.Runtime 
 	return adapter
 }
 
+func (stoppedRuntime) ListThreads() ([]domain.Thread, error) {
+	return nil, nil
+}
+
+func (stoppedRuntime) ListEnvironment() ([]domain.EnvironmentResource, error) {
+	return nil, nil
+}
+
+func (stoppedRuntime) CreateThread(agenttypes.CreateThreadParams) (domain.Thread, error) {
+	return domain.Thread{}, fmt.Errorf("runtime is stopped")
+}
+
+func (stoppedRuntime) ReadThread(string) (domain.Thread, error) {
+	return domain.Thread{}, fmt.Errorf("runtime is stopped")
+}
+
+func (stoppedRuntime) ResumeThread(string) (domain.Thread, error) {
+	return domain.Thread{}, fmt.Errorf("runtime is stopped")
+}
+
+func (stoppedRuntime) ArchiveThread(string) error {
+	return fmt.Errorf("runtime is stopped")
+}
+
+func (stoppedRuntime) StartTurn(agenttypes.StartTurnParams) (agenttypes.StartTurnResult, error) {
+	return agenttypes.StartTurnResult{}, fmt.Errorf("runtime is stopped")
+}
+
+func (stoppedRuntime) SteerTurn(agenttypes.SteerTurnParams) (agenttypes.SteerTurnResult, error) {
+	return agenttypes.SteerTurnResult{}, fmt.Errorf("runtime is stopped")
+}
+
+func (stoppedRuntime) InterruptTurn(agenttypes.InterruptTurnParams) (domain.Turn, error) {
+	return domain.Turn{}, fmt.Errorf("runtime is stopped")
+}
+
 func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession, mgr *manager.Manager, runtimeName string) bool {
 	source, ok := runtime.(agenttypes.RuntimeTurnEventSource)
 	if !ok {
@@ -409,7 +608,7 @@ func emitRuntimeApprovalEvent(session *clientSession, event agenttypes.RuntimeAp
 	})
 }
 
-func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, heartbeatInterval time.Duration) error {
+func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, runtimeController *runtimeController, heartbeatInterval time.Duration) error {
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -420,7 +619,7 @@ func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, 
 	}()
 
 	go func() {
-		errCh <- runCommandLoop(loopCtx, conn, session, mgr, runtimeName, runtimeStreamsTurnEvents)
+		errCh <- runCommandLoop(loopCtx, conn, session, mgr, runtimeName, runtimeStreamsTurnEvents, runtimeController)
 	}()
 
 	err := <-errCh
@@ -467,7 +666,7 @@ func runHeartbeatLoop(ctx context.Context, session *clientSession, interval time
 	}
 }
 
-func runCommandLoop(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool) error {
+func runCommandLoop(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, runtimeController *runtimeController) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -486,13 +685,17 @@ func runCommandLoop(ctx context.Context, conn *cws.Conn, session *clientSession,
 			continue
 		}
 
-		if err := handleCommandEnvelope(session, mgr, runtimeName, runtimeStreamsTurnEvents, envelope); err != nil {
+		if err := handleCommandEnvelope(session, mgr, runtimeName, runtimeStreamsTurnEvents, runtimeController, envelope); err != nil {
 			return err
 		}
 	}
 }
 
-func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, envelope protocol.Envelope) error {
+func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, runtimeController *runtimeController, envelope protocol.Envelope) error {
+	if runtimeController != nil {
+		runtimeStreamsTurnEvents = runtimeController.runtimeStreams()
+	}
+
 	switch envelope.Name {
 	case "thread.create":
 		var payload protocol.ThreadCreateCommandPayload
@@ -702,8 +905,77 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 
 		return session.ApprovalResolved(protocol.ApprovalResolvedPayload{
 			RequestID: payload.RequestID,
+			ThreadID:  payload.ThreadID,
+			TurnID:    payload.TurnID,
 			Decision:  payload.Decision,
 		})
+	case "runtime.stop":
+		var payload protocol.RuntimeStopCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if runtimeController == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime controller unavailable", "")
+		}
+		if err := runtimeController.Stop(); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.RuntimeStopCommandResult{}); err != nil {
+			return err
+		}
+		return sendLiveSnapshot(session, domain.Machine{
+			ID:     session.machineID,
+			Name:   session.machineID,
+			Status: runtimeController.machineStatus(),
+		}, mgr, runtimeName)
+	case "runtime.start":
+		var payload protocol.RuntimeStartCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if runtimeController == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime controller unavailable", "")
+		}
+		if err := runtimeController.Start(session, mgr, runtimeName); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.RuntimeStartCommandResult{}); err != nil {
+			return err
+		}
+		return sendLiveSnapshot(session, domain.Machine{
+			ID:     session.machineID,
+			Name:   session.machineID,
+			Status: runtimeController.machineStatus(),
+		}, mgr, runtimeName)
+	case "environment.skill.enable", "environment.skill.disable":
+		var payload protocol.EnvironmentSkillSetEnabledCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.SetSkillEnabled(runtimeName, payload.SkillID, payload.Enabled); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentSkillSetEnabledCommandResult{
+			SkillID: payload.SkillID,
+			Enabled: payload.Enabled,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.plugin.uninstall":
+		var payload protocol.EnvironmentPluginUninstallCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.UninstallPlugin(runtimeName, payload.PluginID); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentPluginUninstallCommandResult{
+			PluginID: payload.PluginID,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
 	default:
 		return session.CommandRejected(envelope.RequestID, envelope.Name, "unsupported command", "")
 	}
@@ -716,6 +988,15 @@ func refreshThreadSnapshot(session *clientSession, mgr *manager.Manager, runtime
 	}
 
 	return session.ThreadSnapshot(threads)
+}
+
+func refreshEnvironmentSnapshot(session *clientSession, mgr *manager.Manager, runtimeName string) error {
+	environment, err := mgr.Environment(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	return session.EnvironmentSnapshot(environment)
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) bool {

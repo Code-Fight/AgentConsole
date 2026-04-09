@@ -96,6 +96,21 @@ func (s *Store) RemovePendingApproval(requestID string) {
 	delete(s.pendingApprovals, requestID)
 }
 
+func (s *Store) PendingApproval(requestID string) (protocol.ApprovalRequiredPayload, bool) {
+	if requestID == "" {
+		return protocol.ApprovalRequiredPayload{}, false
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	approval, ok := s.pendingApprovals[requestID]
+	if !ok {
+		return protocol.ApprovalRequiredPayload{}, false
+	}
+	return approval.payload, true
+}
+
 func (s *Store) PendingApprovalsForThread(threadID string) []protocol.ApprovalRequiredPayload {
 	if threadID == "" {
 		return nil

@@ -80,6 +80,10 @@ type skillsListResponse struct {
 	Data []skillsListEntry `json:"data"`
 }
 
+type skillsConfigWriteResponse struct {
+	Data []skillMetadata `json:"data"`
+}
+
 type pluginSummary struct {
 	ID        string `json:"id"`
 	Name      string `json:"name"`
@@ -126,6 +130,8 @@ var _ agenttypes.Runtime = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeTurnEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalResponder = (*AppServerClient)(nil)
+var _ agenttypes.RuntimeSkillConfigurator = (*AppServerClient)(nil)
+var _ agenttypes.RuntimePluginManager = (*AppServerClient)(nil)
 
 func NewAppServerClient(runner Runner) *AppServerClient {
 	client := &AppServerClient{

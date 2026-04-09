@@ -71,6 +71,26 @@ func findThread(idx *runtimeindex.Store, threadID string) (domain.Thread, bool) 
 	return domain.Thread{}, false
 }
 
+func findEnvironmentResource(idx *runtimeindex.Store, kind domain.EnvironmentKind, resourceID string) (domain.EnvironmentResource, bool) {
+	if idx == nil || strings.TrimSpace(resourceID) == "" {
+		return domain.EnvironmentResource{}, false
+	}
+	for _, resource := range idx.Environment(kind) {
+		if resource.ResourceID == resourceID {
+			return resource, true
+		}
+	}
+	return domain.EnvironmentResource{}, false
+}
+
+func machineIsOnline(reg *registry.Store, machineID string) bool {
+	if reg == nil || strings.TrimSpace(machineID) == "" {
+		return false
+	}
+	machine, ok := reg.Get(machineID)
+	return ok && machine.Status == domain.MachineStatusOnline
+}
+
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	var deletedThreadsMu sync.RWMutex
@@ -128,6 +148,46 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 		writeJSON(w, http.StatusOK, map[string]any{"machine": machine})
 	})
 
+	mux.HandleFunc("POST /machines/{machineId}/runtime/start", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := r.PathValue("machineId")
+		if strings.TrimSpace(machineID) == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), machineID, "runtime.start", protocol.RuntimeStartCommandPayload{}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"machineId": machineID})
+	})
+
+	mux.HandleFunc("POST /machines/{machineId}/runtime/stop", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := r.PathValue("machineId")
+		if strings.TrimSpace(machineID) == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), machineID, "runtime.stop", protocol.RuntimeStopCommandPayload{}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"machineId": machineID})
+	})
+
 	mux.HandleFunc("GET /threads", func(w http.ResponseWriter, _ *http.Request) {
 		threads := make([]domain.Thread, 0)
 		for _, thread := range idx.Threads() {
@@ -157,6 +217,7 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 
 		if sender != nil {
 			if machineID, ok := resolveThreadMachineID(router, threadID); ok {
+				liveReadRequired := machineIsOnline(reg, machineID)
 				completed, err := sender.SendCommand(r.Context(), machineID, "thread.read", protocol.ThreadReadCommandPayload{
 					ThreadID: threadID,
 				})
@@ -176,6 +237,14 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 						})
 						return
 					}
+					if liveReadRequired {
+						http.Error(w, "invalid thread.read result", http.StatusBadGateway)
+						return
+					}
+				}
+				if err != nil && liveReadRequired {
+					http.Error(w, err.Error(), http.StatusBadGateway)
+					return
 				}
 			}
 		}
@@ -510,8 +579,17 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			return
 		}
 
+		storedApproval := protocol.ApprovalRequiredPayload{}
+		if reg != nil {
+			if payload, ok := reg.PendingApproval(requestID); ok {
+				storedApproval = payload
+			}
+		}
+
 		completed, err := sender.SendCommand(r.Context(), machineID, "approval.respond", protocol.ApprovalRespondCommandPayload{
 			RequestID: requestID,
+			ThreadID:  storedApproval.ThreadID,
+			TurnID:    storedApproval.TurnID,
 			Decision:  req.Decision,
 		})
 		if err != nil {
@@ -544,6 +622,77 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 
 	mux.HandleFunc("GET /environment/plugins", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": idx.Environment(domain.EnvironmentKindPlugin)})
+	})
+
+	mux.HandleFunc("POST /environment/skills/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		skillID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, skillID)
+		if !ok || strings.TrimSpace(resource.MachineID) == "" {
+			http.Error(w, "skill not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.skill.enable", protocol.EnvironmentSkillSetEnabledCommandPayload{
+			SkillID: skillID,
+			Enabled: true,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"skillId": skillID, "enabled": true})
+	})
+
+	mux.HandleFunc("POST /environment/skills/{id}/disable", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		skillID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, skillID)
+		if !ok || strings.TrimSpace(resource.MachineID) == "" {
+			http.Error(w, "skill not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.skill.disable", protocol.EnvironmentSkillSetEnabledCommandPayload{
+			SkillID: skillID,
+			Enabled: false,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"skillId": skillID, "enabled": false})
+	})
+
+	mux.HandleFunc("DELETE /environment/plugins/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		pluginID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, pluginID)
+		if !ok || strings.TrimSpace(resource.MachineID) == "" {
+			http.Error(w, "plugin not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.uninstall", protocol.EnvironmentPluginUninstallCommandPayload{
+			PluginID: pluginID,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID})
 	})
 
 	return mux

@@ -82,4 +82,12 @@ func TestStoreGetAndPendingApprovals(t *testing.T) {
 	if len(approvals) != 1 || approvals[0].RequestID != "approval-2" {
 		t.Fatalf("unexpected approvals after removal: %+v", approvals)
 	}
+
+	stored, ok := store.PendingApproval("approval-2")
+	if !ok {
+		t.Fatal("expected pending approval lookup to succeed")
+	}
+	if stored.ThreadID != "thread-01" || stored.Command != "go test ./..." {
+		t.Fatalf("unexpected stored approval payload: %+v", stored)
+	}
 }

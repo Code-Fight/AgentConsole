@@ -23,7 +23,8 @@ func TestSnapshotReturnsErrorWhenRuntimeMissing(t *testing.T) {
 
 func TestManagerRoutesThreadAndTurnOperationsToRuntime(t *testing.T) {
 	reg := agentregistry.New()
-	reg.Register("fake", &stubRuntime{})
+	runtime := &stubRuntime{}
+	reg.Register("fake", runtime)
 	mgr := New(reg)
 
 	thread, err := mgr.CreateThread("fake", agenttypes.CreateThreadParams{Title: "Investigate flaky test"})
@@ -87,9 +88,27 @@ func TestManagerRoutesThreadAndTurnOperationsToRuntime(t *testing.T) {
 	if interruptedTurn.TurnID != "turn-01" || interruptedTurn.Status != domain.TurnStatusInterrupted {
 		t.Fatalf("unexpected interrupted turn: %+v", interruptedTurn)
 	}
+
+	if err := mgr.SetSkillEnabled("fake", "skill-a", false); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastSkillNameOrPath != "skill-a" || runtime.lastSkillEnabled {
+		t.Fatalf("unexpected skill mutation: nameOrPath=%q enabled=%v", runtime.lastSkillNameOrPath, runtime.lastSkillEnabled)
+	}
+
+	if err := mgr.UninstallPlugin("fake", "plugin-a"); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.lastPluginID != "plugin-a" {
+		t.Fatalf("unexpected plugin uninstall target: %q", runtime.lastPluginID)
+	}
 }
 
-type stubRuntime struct{}
+type stubRuntime struct {
+	lastSkillNameOrPath string
+	lastSkillEnabled    bool
+	lastPluginID        string
+}
 
 func (s *stubRuntime) ListThreads() ([]domain.Thread, error) {
 	return nil, nil
@@ -157,4 +176,15 @@ func (s *stubRuntime) InterruptTurn(params agenttypes.InterruptTurnParams) (doma
 		ThreadID: params.ThreadID,
 		Status:   domain.TurnStatusInterrupted,
 	}, nil
+}
+
+func (s *stubRuntime) SetSkillEnabled(nameOrPath string, enabled bool) error {
+	s.lastSkillNameOrPath = nameOrPath
+	s.lastSkillEnabled = enabled
+	return nil
+}
+
+func (s *stubRuntime) UninstallPlugin(pluginID string) error {
+	s.lastPluginID = pluginID
+	return nil
 }

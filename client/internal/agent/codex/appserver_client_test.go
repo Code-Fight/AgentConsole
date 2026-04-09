@@ -221,6 +221,134 @@ func TestClientListEnvironment(t *testing.T) {
 	}
 }
 
+func TestClientSetSkillEnabledUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name       string
+		nameOrPath string
+		enabled    bool
+		callErr    error
+	}{
+		{
+			name:       "enables a skill by name",
+			nameOrPath: "skill-a",
+			enabled:    true,
+		},
+		{
+			name:       "propagates runner error",
+			nameOrPath: "/tmp/project/.codex/skills/skill-a/SKILL.md",
+			enabled:    false,
+			callErr:    errors.New("skill update failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+
+					response := out.(*skillsConfigWriteResponse)
+					response.Data = []skillMetadata{
+						{Name: "skill-a", Path: tt.nameOrPath, Enabled: tt.enabled},
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			err := client.SetSkillEnabled(tt.nameOrPath, tt.enabled)
+			if gotMethod != "skills/config/write" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			if payloadMap["nameOrPath"] != tt.nameOrPath || payloadMap["enabled"] != tt.enabled {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestClientUninstallPluginUsesExpectedMethodAndPayload(t *testing.T) {
+	tests := []struct {
+		name     string
+		pluginID string
+		callErr  error
+	}{
+		{
+			name:     "uses plugin/uninstall payload keys",
+			pluginID: "plugin-a",
+		},
+		{
+			name:     "propagates runner error",
+			pluginID: "plugin-b",
+			callErr:  errors.New("plugin uninstall failed"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotMethod string
+			var gotPayload any
+
+			runner := &fakeRunner{
+				call: func(method string, payload any, out any) error {
+					gotMethod = method
+					gotPayload = payload
+					if tt.callErr != nil {
+						return tt.callErr
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			err := client.UninstallPlugin(tt.pluginID)
+			if gotMethod != "plugin/uninstall" {
+				t.Fatalf("unexpected method: %s", gotMethod)
+			}
+
+			payloadMap, ok := gotPayload.(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected payload type: %T", gotPayload)
+			}
+			if payloadMap["pluginId"] != tt.pluginID {
+				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+
+			if tt.callErr != nil {
+				if err == nil || err.Error() != tt.callErr.Error() {
+					t.Fatalf("expected error %q, got %v", tt.callErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestClientCreateThreadUsesExpectedMethodAndPayload(t *testing.T) {
 	tests := []struct {
 		name    string

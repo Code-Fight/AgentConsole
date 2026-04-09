@@ -90,7 +90,7 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 func TestHandleCommandEnvelopeRejectsUnsupportedCommands(t *testing.T) {
 	session, sent := newRecordingSession()
 
-	err := handleCommandEnvelope(session, nil, "codex", false, protocol.Envelope{
+	err := handleCommandEnvelope(session, nil, "codex", false, nil, protocol.Envelope{
 		Name:      "unknown.command",
 		RequestID: "req-1",
 		Payload:   []byte(`{}`),
@@ -112,7 +112,7 @@ func TestHandleCommandEnvelopeRejectsFailedTurnStartWithoutDisconnecting(t *test
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	err := handleCommandEnvelope(session, mgr, "codex", false, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
 		Name:      "turn.start",
 		RequestID: "req-2",
 		Payload:   []byte(`{"threadId":"thread-99","input":"run tests"}`),
@@ -149,7 +149,7 @@ func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) 
 		t.Fatal("expected runtime turn event binding")
 	}
 
-	err := handleCommandEnvelope(session, mgr, "codex", true, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, "codex", true, nil, protocol.Envelope{
 		Name:      "turn.start",
 		RequestID: "req-async-1",
 		Payload:   []byte(`{"threadId":"thread-01","input":"run tests"}`),
@@ -325,7 +325,7 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err := handleCommandEnvelope(session, mgr, "codex", false, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-1",
 		Payload:   []byte(`{"requestId":"approval-1","decision":"accept"}`),
@@ -354,6 +354,149 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 	}
 	if resolved.RequestID != "approval-1" || resolved.ThreadID != "thread-01" || resolved.Decision != "accept" {
 		t.Fatalf("unexpected resolved payload: %+v", resolved)
+	}
+}
+
+func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconnect(t *testing.T) {
+	runtime := &notifyingRuntime{}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+		Name:      "approval.respond",
+		RequestID: "req-approval-1",
+		Payload:   []byte(`{"requestId":"approval-1","threadId":"thread-01","turnId":"turn-01","decision":"accept"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(*sent) != 2 {
+		t.Fatalf("expected command ack and resolved event, got %d frames", len(*sent))
+	}
+
+	var resolved protocol.ApprovalResolvedPayload
+	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[1]).Payload, &resolved); err != nil {
+		t.Fatalf("decode resolved payload failed: %v", err)
+	}
+	if resolved.RequestID != "approval-1" || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
+		t.Fatalf("unexpected resolved payload: %+v", resolved)
+	}
+}
+
+func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) {
+	initialRuntime := &notifyingRuntime{
+		threadSnapshots: [][]domain.Thread{
+			{
+				{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusIdle, Title: "Initial"},
+			},
+		},
+		environment: []domain.EnvironmentResource{
+			{
+				ResourceID:     "skill-01",
+				MachineID:      "machine-01",
+				Kind:           domain.EnvironmentKindSkill,
+				DisplayName:    "Skill A",
+				Status:         domain.EnvironmentResourceStatusEnabled,
+				LastObservedAt: "2026-04-08T10:00:00Z",
+			},
+		},
+	}
+	startedRuntime := &notifyingRuntime{
+		startTurnResult: agenttypes.StartTurnResult{
+			TurnID:   "turn-02",
+			ThreadID: "thread-01",
+		},
+		threadSnapshots: [][]domain.Thread{
+			{
+				{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusIdle, Title: "Restarted"},
+			},
+		},
+	}
+
+	registry := agentregistry.New()
+	registry.Register("codex", initialRuntime)
+	mgr := manager.New(registry)
+	controller := newRuntimeController(
+		context.Background(),
+		config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeFake},
+		time.Now,
+		runtimeFactories{
+			newFake: func(config.Config, func() time.Time) agenttypes.Runtime {
+				return startedRuntime
+			},
+		},
+		registry,
+		"codex",
+		initialRuntime,
+		initialRuntime.cleanup,
+	)
+	session, sent := newRecordingSession()
+	controller.bindSession(session, mgr, "codex")
+
+	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+		Name:      "runtime.stop",
+		RequestID: "req-stop-1",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !initialRuntime.cleanupCalled {
+		t.Fatal("expected initial runtime cleanup to run on stop")
+	}
+
+	machineSnapshot := decodeMachineSnapshotPayload(t, (*sent)[1])
+	if machineSnapshot.Machine.Status != domain.MachineStatusOffline {
+		t.Fatalf("expected offline machine snapshot after stop, got %+v", machineSnapshot.Machine)
+	}
+	stoppedThreads := decodeThreadSnapshotPayload(t, (*sent)[2])
+	if len(stoppedThreads.Threads) != 0 {
+		t.Fatalf("expected empty thread snapshot after stop, got %+v", stoppedThreads.Threads)
+	}
+
+	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+		Name:      "turn.start",
+		RequestID: "req-turn-1",
+		Payload:   []byte(`{"threadId":"thread-01","input":"run tests"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rejection := decodeRejectedPayload(t, (*sent)[4])
+	if rejection.CommandName != "turn.start" {
+		t.Fatalf("expected turn.start rejection while stopped, got %+v", rejection)
+	}
+
+	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+		Name:      "runtime.start",
+		RequestID: "req-start-1",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	machineSnapshot = decodeMachineSnapshotPayload(t, (*sent)[6])
+	if machineSnapshot.Machine.Status != domain.MachineStatusOnline {
+		t.Fatalf("expected online machine snapshot after start, got %+v", machineSnapshot.Machine)
+	}
+
+	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+		Name:      "turn.start",
+		RequestID: "req-turn-2",
+		Payload:   []byte(`{"threadId":"thread-01","input":"run tests"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var completed protocol.CommandCompletedPayload
+	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[9]).Payload, &completed); err != nil {
+		t.Fatalf("decode command completed payload failed: %v", err)
+	}
+	if completed.CommandName != "turn.start" {
+		t.Fatalf("unexpected final command ack: %+v", completed)
 	}
 }
 
@@ -474,6 +617,22 @@ func decodeThreadSnapshotPayload(t *testing.T, raw []byte) protocol.ThreadSnapsh
 	return payload
 }
 
+func decodeMachineSnapshotPayload(t *testing.T, raw []byte) protocol.MachineSnapshotPayload {
+	t.Helper()
+
+	var envelope protocol.Envelope
+	if err := transport.Decode(raw, &envelope); err != nil {
+		t.Fatalf("decode envelope failed: %v", err)
+	}
+
+	var payload protocol.MachineSnapshotPayload
+	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+		t.Fatalf("decode payload failed: %v", err)
+	}
+
+	return payload
+}
+
 func decodeRejectedPayload(t *testing.T, raw []byte) protocol.CommandRejectedPayload {
 	t.Helper()
 
@@ -495,7 +654,9 @@ type notifyingRuntime struct {
 	handler              func(agenttypes.RuntimeTurnEvent)
 	approvalHandler      func(agenttypes.RuntimeApprovalRequest)
 	threadSnapshots      [][]domain.Thread
+	environment          []domain.EnvironmentResource
 	listThreadsCalls     int
+	cleanupCalled        bool
 	lastApprovalDecision struct {
 		requestID string
 		decision  string
@@ -516,7 +677,7 @@ func (r *notifyingRuntime) ListThreads() ([]domain.Thread, error) {
 }
 
 func (r *notifyingRuntime) ListEnvironment() ([]domain.EnvironmentResource, error) {
-	return nil, nil
+	return append([]domain.EnvironmentResource(nil), r.environment...), nil
 }
 
 func (r *notifyingRuntime) CreateThread(agenttypes.CreateThreadParams) (domain.Thread, error) {
@@ -558,6 +719,11 @@ func (r *notifyingRuntime) SetApprovalHandler(handler func(agenttypes.RuntimeApp
 func (r *notifyingRuntime) RespondApproval(requestID string, decision string) error {
 	r.lastApprovalDecision.requestID = requestID
 	r.lastApprovalDecision.decision = decision
+	return nil
+}
+
+func (r *notifyingRuntime) cleanup() error {
+	r.cleanupCalled = true
 	return nil
 }
 

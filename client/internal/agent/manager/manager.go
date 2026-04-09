@@ -103,6 +103,34 @@ func (m *Manager) RespondApproval(runtimeName string, requestID string, decision
 	return responder.RespondApproval(requestID, decision)
 }
 
+func (m *Manager) SetSkillEnabled(runtimeName string, nameOrPath string, enabled bool) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	configurator, ok := runtime.(types.RuntimeSkillConfigurator)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support skill configuration", runtimeName)
+	}
+
+	return configurator.SetSkillEnabled(nameOrPath, enabled)
+}
+
+func (m *Manager) UninstallPlugin(runtimeName string, pluginID string) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	pluginManager, ok := runtime.(types.RuntimePluginManager)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support plugin uninstall", runtimeName)
+	}
+
+	return pluginManager.UninstallPlugin(pluginID)
+}
+
 func (m *Manager) Snapshot(runtimeName string) (snapshot.Snapshot, error) {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {

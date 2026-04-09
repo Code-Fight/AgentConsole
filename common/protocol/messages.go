@@ -61,8 +61,23 @@ type TurnInterruptCommandPayload struct {
 	TurnID   string `json:"turnId"`
 }
 
+type RuntimeStartCommandPayload struct{}
+
+type RuntimeStopCommandPayload struct{}
+
+type EnvironmentSkillSetEnabledCommandPayload struct {
+	SkillID string `json:"skillId"`
+	Enabled bool   `json:"enabled"`
+}
+
+type EnvironmentPluginUninstallCommandPayload struct {
+	PluginID string `json:"pluginId"`
+}
+
 type ApprovalRespondCommandPayload struct {
 	RequestID string `json:"requestId"`
+	ThreadID  string `json:"threadId,omitempty"`
+	TurnID    string `json:"turnId,omitempty"`
 	Decision  string `json:"decision"`
 }
 
@@ -107,6 +122,19 @@ type TurnInterruptCommandResult struct {
 	Turn domain.Turn `json:"turn"`
 }
 
+type RuntimeStartCommandResult struct{}
+
+type RuntimeStopCommandResult struct{}
+
+type EnvironmentSkillSetEnabledCommandResult struct {
+	SkillID string `json:"skillId"`
+	Enabled bool   `json:"enabled"`
+}
+
+type EnvironmentPluginUninstallCommandResult struct {
+	PluginID string `json:"pluginId"`
+}
+
 type ApprovalRespondCommandResult struct {
 	RequestID string `json:"requestId"`
 	Decision  string `json:"decision"`
@@ -141,6 +169,7 @@ type ApprovalRequiredPayload struct {
 type ApprovalResolvedPayload struct {
 	RequestID string `json:"requestId"`
 	ThreadID  string `json:"threadId,omitempty"`
+	TurnID    string `json:"turnId,omitempty"`
 	Decision  string `json:"decision"`
 }
 

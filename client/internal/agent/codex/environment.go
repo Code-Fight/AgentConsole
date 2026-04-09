@@ -73,6 +73,21 @@ func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error
 	return environment, nil
 }
 
+func (c *AppServerClient) SetSkillEnabled(nameOrPath string, enabled bool) error {
+	var response skillsConfigWriteResponse
+	return c.runner.Call("skills/config/write", map[string]any{
+		"nameOrPath": nameOrPath,
+		"enabled":    enabled,
+	}, &response)
+}
+
+func (c *AppServerClient) UninstallPlugin(pluginID string) error {
+	var response map[string]any
+	return c.runner.Call("plugin/uninstall", map[string]any{
+		"pluginId": pluginID,
+	}, &response)
+}
+
 const timeLayoutRFC3339 = "2006-01-02T15:04:05Z07:00"
 
 func enabledStatus(enabled bool) domain.EnvironmentResourceStatus {

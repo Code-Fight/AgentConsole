@@ -67,6 +67,14 @@ type RuntimeApprovalResponder interface {
 	RespondApproval(requestID string, decision string) error
 }
 
+type RuntimeSkillConfigurator interface {
+	SetSkillEnabled(nameOrPath string, enabled bool) error
+}
+
+type RuntimePluginManager interface {
+	UninstallPlugin(pluginID string) error
+}
+
 type StartTurnResult struct {
 	TurnID   string
 	ThreadID string
