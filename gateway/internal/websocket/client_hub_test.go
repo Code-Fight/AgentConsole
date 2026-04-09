@@ -323,6 +323,85 @@ func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 	}
 }
 
+func TestClientHubEmitsNorthboundUpdateEvents(t *testing.T) {
+	reg := registry.NewStore()
+	idx := runtimeindex.NewStore()
+	consoleHub := NewConsoleHub()
+	hub := NewClientHubWithStores(reg, idx, routing.NewRouter())
+	hub.SetConsoleHub(consoleHub)
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws/client", hub.Handler())
+	mux.Handle("/ws", consoleHub.Handler())
+
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	consoleConn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consoleConn.Close(websocket.StatusNormalClosure, "done")
+
+	clientConn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clientConn.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, clientConn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T11:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeEnvelope(t, clientConn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySnapshot,
+		Name:      "thread.snapshot",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T11:00:01Z",
+		Payload:   []byte(`{"threads":[{"threadId":"thread-01","status":"idle","title":"One"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeEnvelope(t, clientConn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySnapshot,
+		Name:      "environment.snapshot",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T11:00:02Z",
+		Payload:   []byte(`{"environment":[{"resourceId":"skill-01","kind":"skill","displayName":"Skill A","status":"enabled","restartRequired":false,"lastObservedAt":"2026-04-09T11:00:02Z"}]}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	expectedNames := []string{"machine.updated", "thread.updated", "resource.changed"}
+	for _, expectedName := range expectedNames {
+		_, data, err := consoleConn.Read(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var envelope protocol.Envelope
+		if err := transport.Decode(data, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if envelope.Name != expectedName {
+			t.Fatalf("expected %q, got %+v", expectedName, envelope)
+		}
+		if envelope.Category != protocol.CategoryEvent {
+			t.Fatalf("category = %q", envelope.Category)
+		}
+	}
+}
+
 func TestClientHubKeepsPendingApprovalRoutingAndRegistryStateAcrossDisconnect(t *testing.T) {
 	reg := registry.NewStore()
 	hub := NewClientHubWithStores(reg, runtimeindex.NewStore(), routing.NewRouter())
@@ -798,6 +877,15 @@ func TestClientHubFansOutEventEnvelopesToConsoleClients(t *testing.T) {
 	}
 
 	waitForCount(t, hub, 1, 1*time.Second)
+	if err := consoleConn.Close(websocket.StatusNormalClosure, "reset-console"); err != nil {
+		t.Fatal(err)
+	}
+
+	consoleConn, _, err = websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer consoleConn.Close(websocket.StatusNormalClosure, "done")
 
 	done := make(chan protocol.Envelope, 1)
 	go func() {

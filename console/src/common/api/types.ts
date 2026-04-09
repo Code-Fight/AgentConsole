@@ -21,6 +21,10 @@ export interface MachineListResponse {
   items: MachineSummary[];
 }
 
+export interface MachineUpdatedPayload {
+  machine: MachineSummary;
+}
+
 export interface MachineDetailResponse {
   machine: MachineSummary;
 }
@@ -39,6 +43,14 @@ export interface EnvironmentListResponse {
   items: EnvironmentResource[];
 }
 
+export interface ResourceChangedPayload {
+  machineId: string;
+  kind?: EnvironmentKind;
+  resourceId?: string;
+  resource?: EnvironmentResource;
+  action?: "snapshot" | "updated" | "removed";
+}
+
 export interface ThreadSummary {
   threadId: string;
   machineId: string;
@@ -54,6 +66,12 @@ export interface TurnSummary {
 
 export interface ThreadListResponse {
   items: ThreadSummary[];
+}
+
+export interface ThreadUpdatedPayload {
+  machineId: string;
+  threadId?: string;
+  thread?: ThreadSummary;
 }
 
 export interface ThreadDetailResponse {

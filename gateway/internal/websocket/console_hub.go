@@ -138,7 +138,7 @@ func shouldDeliverEnvelope(threadID string, envelope protocol.Envelope) bool {
 	}
 
 	eventThreadID := envelopeThreadID(envelope)
-	return eventThreadID == "" || eventThreadID == threadID
+	return eventThreadID != "" && eventThreadID == threadID
 }
 
 func envelopeThreadID(envelope protocol.Envelope) string {
@@ -183,6 +183,14 @@ func envelopeThreadID(envelope protocol.Envelope) string {
 	case "command.rejected":
 		var payload protocol.CommandRejectedPayload
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.ThreadID
+		}
+	case "thread.updated":
+		var payload protocol.ThreadUpdatedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			if payload.Thread != nil && payload.Thread.ThreadID != "" {
+				return payload.Thread.ThreadID
+			}
 			return payload.ThreadID
 		}
 	}

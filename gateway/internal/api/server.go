@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"sync"
@@ -46,6 +47,10 @@ type approvalRespondRequest struct {
 	Decision string `json:"decision"`
 }
 
+type environmentMutationRequest struct {
+	MachineID string `json:"machineId"`
+}
+
 func resolveThreadMachineID(router *routing.Router, threadID string) (string, bool) {
 	if router == nil {
 		return "", false
@@ -71,16 +76,41 @@ func findThread(idx *runtimeindex.Store, threadID string) (domain.Thread, bool) 
 	return domain.Thread{}, false
 }
 
-func findEnvironmentResource(idx *runtimeindex.Store, kind domain.EnvironmentKind, resourceID string) (domain.EnvironmentResource, bool) {
-	if idx == nil || strings.TrimSpace(resourceID) == "" {
+func findEnvironmentResource(idx *runtimeindex.Store, kind domain.EnvironmentKind, machineID string, resourceID string) (domain.EnvironmentResource, bool) {
+	if idx == nil || strings.TrimSpace(machineID) == "" || strings.TrimSpace(resourceID) == "" {
 		return domain.EnvironmentResource{}, false
 	}
 	for _, resource := range idx.Environment(kind) {
-		if resource.ResourceID == resourceID {
+		if resource.ResourceID == resourceID && resource.MachineID == machineID {
 			return resource, true
 		}
 	}
 	return domain.EnvironmentResource{}, false
+}
+
+func resolveEnvironmentMutationMachineID(r *http.Request) (string, error) {
+	if r == nil {
+		return "", nil
+	}
+
+	machineID := strings.TrimSpace(r.URL.Query().Get("machineId"))
+	if machineID != "" {
+		return machineID, nil
+	}
+
+	if r.Body == nil {
+		return "", nil
+	}
+
+	var req environmentMutationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err == io.EOF {
+			return "", nil
+		}
+		return "", err
+	}
+
+	return strings.TrimSpace(req.MachineID), nil
 }
 
 func machineIsOnline(reg *registry.Store, machineID string) bool {
@@ -630,9 +660,19 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			return
 		}
 
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
 		skillID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, skillID)
-		if !ok || strings.TrimSpace(resource.MachineID) == "" {
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, machineID, skillID)
+		if !ok {
 			http.Error(w, "skill not found", http.StatusNotFound)
 			return
 		}
@@ -654,9 +694,19 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			return
 		}
 
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
 		skillID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, skillID)
-		if !ok || strings.TrimSpace(resource.MachineID) == "" {
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, machineID, skillID)
+		if !ok {
 			http.Error(w, "skill not found", http.StatusNotFound)
 			return
 		}
@@ -678,9 +728,19 @@ func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Rou
 			return
 		}
 
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
 		pluginID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, pluginID)
-		if !ok || strings.TrimSpace(resource.MachineID) == "" {
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		if !ok {
 			http.Error(w, "plugin not found", http.StatusNotFound)
 			return
 		}

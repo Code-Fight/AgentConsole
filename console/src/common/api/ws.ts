@@ -9,16 +9,24 @@ function getDefaultWsUrl(): string {
 
 const WS_URL = import.meta.env.VITE_WS_URL ?? getDefaultWsUrl();
 
-export function buildThreadSocketUrl(threadId: string): string {
+export function buildConsoleSocketUrl(threadId?: string): string {
+  if (!threadId) {
+    return WS_URL;
+  }
+
   const separator = WS_URL.includes("?") ? "&" : "?";
   return `${WS_URL}${separator}threadId=${encodeURIComponent(threadId)}`;
 }
 
+export function buildThreadSocketUrl(threadId: string): string {
+  return buildConsoleSocketUrl(threadId);
+}
+
 export function connectConsoleSocket(
-  threadId: string,
+  threadId: string | undefined,
   onMessage: (event: MessageEvent<string>) => void,
 ): () => void {
-  const socket = new WebSocket(buildThreadSocketUrl(threadId));
+  const socket = new WebSocket(buildConsoleSocketUrl(threadId));
   socket.addEventListener("message", onMessage);
 
   return () => {

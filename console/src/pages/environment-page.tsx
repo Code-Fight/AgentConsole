@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
 import { http } from "../common/api/http";
 import type {
+  EventEnvelope,
   EnvironmentListResponse,
   EnvironmentResource
 } from "../common/api/types";
+import { connectConsoleSocket } from "../common/api/ws";
 
 interface EnvironmentSections {
   skills: EnvironmentResource[];
@@ -23,6 +25,8 @@ function renderEnvironmentSection(
   title: string,
   items: EnvironmentResource[],
   emptyLabel: string,
+  pendingResourceKey: string | null,
+  onResourceAction: (resource: EnvironmentResource) => void,
 ) {
   return (
     <section className="environment-section" aria-label={title}>
@@ -44,6 +48,7 @@ function renderEnvironmentSection(
                   {formatResourceStatus(item)}
                 </span>
                 {item.restartRequired ? <span className="meta-pill">Restart required</span> : null}
+                {renderResourceAction(item, pendingResourceKey, onResourceAction)}
               </div>
             </article>
           ))}
@@ -51,6 +56,60 @@ function renderEnvironmentSection(
       ) : null}
     </section>
   );
+}
+
+function resourceActionLabel(resource: EnvironmentResource): string | null {
+  if (resource.kind === "skill") {
+    return resource.status === "enabled" ? "Disable" : "Enable";
+  }
+
+  if (resource.kind === "plugin") {
+    return "Uninstall";
+  }
+
+  return null;
+}
+
+function renderResourceAction(
+  resource: EnvironmentResource,
+  pendingResourceKey: string | null,
+  onResourceAction: (resource: EnvironmentResource) => void,
+) {
+  const label = resourceActionLabel(resource);
+  if (!label) {
+    return null;
+  }
+
+  const resourceKey = `${resource.kind}:${resource.machineId}:${resource.resourceId}`;
+
+  return (
+    <button
+      type="button"
+      disabled={pendingResourceKey === resourceKey}
+      onClick={() => onResourceAction(resource)}
+    >
+      {label}
+    </button>
+  );
+}
+
+function buildResourceMutationPath(resource: EnvironmentResource): { method: "POST" | "DELETE"; path: string } | null {
+  if (resource.kind === "skill") {
+    const action = resource.status === "enabled" ? "disable" : "enable";
+    return {
+      method: "POST",
+      path: `/environment/skills/${encodeURIComponent(resource.resourceId)}/${action}`
+    };
+  }
+
+  if (resource.kind === "plugin") {
+    return {
+      method: "DELETE",
+      path: `/environment/plugins/${encodeURIComponent(resource.resourceId)}`
+    };
+  }
+
+  return null;
 }
 
 export function EnvironmentPage() {
@@ -61,6 +120,8 @@ export function EnvironmentPage() {
   });
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pendingResourceKey, setPendingResourceKey] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -102,7 +163,47 @@ export function EnvironmentPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshNonce]);
+
+  useEffect(() => connectConsoleSocket(undefined, (event) => {
+    let envelope: EventEnvelope | null = null;
+
+    try {
+      envelope = JSON.parse(event.data) as EventEnvelope;
+    } catch {
+      return;
+    }
+
+    if (envelope.name === "resource.changed") {
+      setRefreshNonce((current) => current + 1);
+    }
+  }), []);
+
+  async function handleResourceAction(resource: EnvironmentResource) {
+    const mutation = buildResourceMutationPath(resource);
+    if (!mutation) {
+      return;
+    }
+
+    const resourceKey = `${resource.kind}:${resource.machineId}:${resource.resourceId}`;
+    setPendingResourceKey(resourceKey);
+    setError(null);
+
+    try {
+      await http<void>(mutation.path, {
+        method: mutation.method,
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ machineId: resource.machineId })
+      });
+      setRefreshNonce((current) => current + 1);
+    } catch {
+      setError("Unable to update environment resources.");
+    } finally {
+      setPendingResourceKey(null);
+    }
+  }
 
   return (
     <section className="page">
@@ -116,9 +217,9 @@ export function EnvironmentPage() {
 
       {!isLoading && !error ? (
         <div className="environment-grid">
-          {renderEnvironmentSection("Skills", sections.skills, "No skills reported.")}
-          {renderEnvironmentSection("MCPs", sections.mcps, "No MCP servers reported.")}
-          {renderEnvironmentSection("Plugins", sections.plugins, "No plugins reported.")}
+          {renderEnvironmentSection("Skills", sections.skills, "No skills reported.", pendingResourceKey, handleResourceAction)}
+          {renderEnvironmentSection("MCPs", sections.mcps, "No MCP servers reported.", pendingResourceKey, handleResourceAction)}
+          {renderEnvironmentSection("Plugins", sections.plugins, "No plugins reported.", pendingResourceKey, handleResourceAction)}
         </div>
       ) : null}
     </section>

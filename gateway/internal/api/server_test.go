@@ -575,21 +575,24 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 
 	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
 
-	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", nil)
+	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("enable returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/disable", nil)
+	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/disable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disable returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodDelete, "/environment/plugins/plugin-a", nil)
+	req = httptest.NewRequest(http.MethodDelete, "/environment/plugins/plugin-a", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
@@ -630,6 +633,92 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	}
 	if uninstallPayload.PluginID != "plugin-a" {
 		t.Fatalf("unexpected uninstall payload: %+v", uninstallPayload)
+	}
+}
+
+func TestServerEnvironmentMutationRejectsMissingMachineID(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", nil, []domain.EnvironmentResource{
+		{
+			ResourceID:  "skill-a",
+			MachineID:   "machine-01",
+			Kind:        domain.EnvironmentKindSkill,
+			DisplayName: "Skill A",
+			Status:      domain.EnvironmentResourceStatusEnabled,
+		},
+	})
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), &fakeCommandSender{}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); body != "machineId is required\n" {
+		t.Fatalf("unexpected body: %q", body)
+	}
+}
+
+func TestServerEnvironmentMutationTargetsRequestedMachine(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", nil, []domain.EnvironmentResource{
+		{
+			ResourceID:  "skill-a",
+			MachineID:   "machine-01",
+			Kind:        domain.EnvironmentKindSkill,
+			DisplayName: "Skill A 1",
+			Status:      domain.EnvironmentResourceStatusEnabled,
+		},
+	})
+	idx.ReplaceSnapshot("machine-02", nil, []domain.EnvironmentResource{
+		{
+			ResourceID:  "skill-a",
+			MachineID:   "machine-02",
+			Kind:        domain.EnvironmentKindSkill,
+			DisplayName: "Skill A 2",
+			Status:      domain.EnvironmentResourceStatusDisabled,
+		},
+	})
+
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{
+				machineID: machineID,
+				name:      name,
+				payload:   payload,
+			})
+			return protocol.CommandCompletedPayload{
+				CommandName: name,
+				Result:      mustMarshalJSON(t, map[string]any{}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-02"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	if calls[0].machineID != "machine-02" {
+		t.Fatalf("expected machine-02, got %+v", calls[0])
 	}
 }
 

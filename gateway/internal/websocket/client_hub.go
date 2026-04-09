@@ -172,25 +172,35 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 		}
 
 		var waiters []pendingCommandWaiter
+		disconnectedMachineID := ""
 		h.mu.Lock()
 		if *registeredMachineID != "" && *registeredMachineID != envelope.MachineID {
 			if existing := h.clients[*registeredMachineID]; existing != nil && existing.conn == conn {
 				delete(h.clients, *registeredMachineID)
 				waiters = h.cleanupMachineLocked(*registeredMachineID, true)
+				disconnectedMachineID = *registeredMachineID
 			}
 		}
 		h.clients[envelope.MachineID] = &clientConn{conn: conn}
 		*registeredMachineID = envelope.MachineID
 		h.mu.Unlock()
 		h.failPendingWaiters(waiters)
-
-		if h.registry != nil {
-			h.registry.Upsert(domain.Machine{
-				ID:     envelope.MachineID,
-				Name:   envelope.MachineID,
-				Status: domain.MachineStatusOnline,
-			})
+		if disconnectedMachineID != "" {
+			h.broadcastMachineUpdated(h.machineForEvent(disconnectedMachineID, domain.MachineStatusOffline), envelope.Timestamp)
 		}
+
+		machine := domain.Machine{
+			ID:     envelope.MachineID,
+			Name:   envelope.MachineID,
+			Status: domain.MachineStatusOnline,
+		}
+		if h.registry != nil {
+			h.registry.Upsert(machine)
+		}
+		if storedMachine, ok := h.machineFromRegistry(envelope.MachineID); ok {
+			machine = storedMachine
+		}
+		h.broadcastMachineUpdated(machine, envelope.Timestamp)
 	case "client.heartbeat":
 		return
 	}
@@ -218,6 +228,7 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 		if err := transport.Decode(envelope.Payload, &payload); err != nil {
 			return
 		}
+		h.applyCompletedCommand(envelope.MachineID, envelope.Timestamp, payload)
 		h.resolvePendingCommand(envelope.RequestID, pendingCommandResult{
 			response: payload,
 		})
@@ -373,6 +384,7 @@ func (h *ClientHub) disconnectClient(conn *cws.Conn, machineID string) {
 	h.mu.Unlock()
 
 	h.failPendingWaiters(waiters)
+	h.broadcastMachineUpdated(h.machineForEvent(machineID, domain.MachineStatusOffline), time.Now().UTC().Format(time.RFC3339))
 }
 
 func (h *ClientHub) cleanupMachineLocked(machineID string, markOffline bool) []pendingCommandWaiter {
@@ -433,10 +445,6 @@ func (h *ClientHub) handleSnapshotEnvelope(conn *cws.Conn, envelope protocol.Env
 
 	switch envelope.Name {
 	case "machine.snapshot":
-		if h.registry == nil {
-			return
-		}
-
 		var payload protocol.MachineSnapshotPayload
 		if err := transport.Decode(envelope.Payload, &payload); err != nil {
 			return
@@ -452,7 +460,10 @@ func (h *ClientHub) handleSnapshotEnvelope(conn *cws.Conn, envelope protocol.Env
 		if machine.Status == "" {
 			machine.Status = domain.MachineStatusOnline
 		}
-		h.registry.Upsert(machine)
+		if h.registry != nil {
+			h.registry.Upsert(machine)
+		}
+		h.broadcastMachineUpdated(machine, envelope.Timestamp)
 	case "thread.snapshot":
 		var payload protocol.ThreadSnapshotPayload
 		if err := transport.Decode(envelope.Payload, &payload); err != nil {
@@ -460,17 +471,14 @@ func (h *ClientHub) handleSnapshotEnvelope(conn *cws.Conn, envelope protocol.Env
 		}
 
 		threads := normalizeThreads(payload.Threads, envelope.MachineID)
-		if h.runtimeIndex != nil {
-			h.replaceMachineSnapshot(envelope.MachineID, threads, nil, true, false)
-		}
+		h.replaceMachineSnapshot(envelope.MachineID, threads, nil, true, false)
 		if h.router != nil {
 			h.router.ReplaceSnapshot(envelope.MachineID, threads)
 		}
+		h.broadcastThreadUpdated(protocol.ThreadUpdatedPayload{
+			MachineID: envelope.MachineID,
+		}, envelope.Timestamp)
 	case "environment.snapshot":
-		if h.runtimeIndex == nil {
-			return
-		}
-
 		var payload protocol.EnvironmentSnapshotPayload
 		if err := transport.Decode(envelope.Payload, &payload); err != nil {
 			return
@@ -478,6 +486,10 @@ func (h *ClientHub) handleSnapshotEnvelope(conn *cws.Conn, envelope protocol.Env
 
 		environment := normalizeEnvironment(payload.Environment, envelope.MachineID)
 		h.replaceMachineSnapshot(envelope.MachineID, nil, environment, false, true)
+		h.broadcastResourceChanged(protocol.ResourceChangedPayload{
+			MachineID: envelope.MachineID,
+			Action:    "snapshot",
+		}, envelope.Timestamp)
 	}
 }
 
@@ -495,7 +507,9 @@ func (h *ClientHub) replaceMachineSnapshot(machineID string, threads []domain.Th
 	environmentToStore := append([]domain.EnvironmentResource(nil), state.environment...)
 	h.mu.Unlock()
 
-	h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	}
 }
 
 func normalizeThreads(items []domain.Thread, machineID string) []domain.Thread {
@@ -543,4 +557,351 @@ func (h *ClientHub) isCurrentOwner(conn *cws.Conn, machineID string) bool {
 	current := h.clients[machineID]
 	h.mu.RUnlock()
 	return current != nil && current.conn == conn
+}
+
+func (h *ClientHub) applyCompletedCommand(machineID string, timestamp string, completed protocol.CommandCompletedPayload) {
+	switch completed.CommandName {
+	case "thread.create":
+		var result protocol.ThreadCreateCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			return
+		}
+		thread := result.Thread
+		if thread.ThreadID == "" {
+			return
+		}
+		if thread.MachineID == "" {
+			thread.MachineID = machineID
+		}
+		h.upsertThreadSnapshot(machineID, thread)
+		if h.router != nil {
+			h.router.TrackThread(thread.ThreadID, thread.MachineID)
+		}
+		h.broadcastThreadUpdated(protocol.ThreadUpdatedPayload{
+			MachineID: thread.MachineID,
+			ThreadID:  thread.ThreadID,
+			Thread:    &thread,
+		}, timestamp)
+	case "thread.resume":
+		var result protocol.ThreadResumeCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			return
+		}
+		thread := result.Thread
+		if thread.ThreadID == "" {
+			return
+		}
+		if thread.MachineID == "" {
+			thread.MachineID = machineID
+		}
+		h.upsertThreadSnapshot(machineID, thread)
+		if h.router != nil {
+			h.router.TrackThread(thread.ThreadID, thread.MachineID)
+		}
+		h.broadcastThreadUpdated(protocol.ThreadUpdatedPayload{
+			MachineID: thread.MachineID,
+			ThreadID:  thread.ThreadID,
+			Thread:    &thread,
+		}, timestamp)
+	case "thread.archive":
+		var result protocol.ThreadArchiveCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			return
+		}
+		if result.ThreadID == "" {
+			return
+		}
+		h.removeThreadSnapshot(machineID, result.ThreadID)
+		h.broadcastThreadUpdated(protocol.ThreadUpdatedPayload{
+			MachineID: machineID,
+			ThreadID:  result.ThreadID,
+		}, timestamp)
+	case "environment.skill.enable", "environment.skill.disable":
+		var result protocol.EnvironmentSkillSetEnabledCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			return
+		}
+		if result.SkillID == "" {
+			return
+		}
+
+		resource, ok := h.upsertEnvironmentResource(machineID, domain.EnvironmentResource{
+			ResourceID:      result.SkillID,
+			MachineID:       machineID,
+			Kind:            domain.EnvironmentKindSkill,
+			Status:          environmentSkillStatus(result.Enabled),
+			LastObservedAt:  timestamp,
+			RestartRequired: false,
+		})
+		if !ok {
+			h.broadcastResourceChanged(protocol.ResourceChangedPayload{
+				MachineID:  machineID,
+				Kind:       domain.EnvironmentKindSkill,
+				ResourceID: result.SkillID,
+				Action:     "updated",
+			}, timestamp)
+			return
+		}
+		h.broadcastResourceChanged(protocol.ResourceChangedPayload{
+			MachineID:  machineID,
+			Kind:       resource.Kind,
+			ResourceID: resource.ResourceID,
+			Resource:   &resource,
+			Action:     "updated",
+		}, timestamp)
+	case "environment.plugin.uninstall":
+		var result protocol.EnvironmentPluginUninstallCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			return
+		}
+		if result.PluginID == "" {
+			return
+		}
+		h.removeEnvironmentResource(machineID, domain.EnvironmentKindPlugin, result.PluginID)
+		h.broadcastResourceChanged(protocol.ResourceChangedPayload{
+			MachineID:  machineID,
+			Kind:       domain.EnvironmentKindPlugin,
+			ResourceID: result.PluginID,
+			Action:     "removed",
+		}, timestamp)
+	}
+}
+
+func (h *ClientHub) machineFromRegistry(machineID string) (domain.Machine, bool) {
+	if h.registry == nil {
+		return domain.Machine{}, false
+	}
+	return h.registry.Get(machineID)
+}
+
+func (h *ClientHub) machineForEvent(machineID string, fallbackStatus domain.MachineStatus) domain.Machine {
+	if machine, ok := h.machineFromRegistry(machineID); ok {
+		if machine.Name == "" {
+			machine.Name = machine.ID
+		}
+		return machine
+	}
+
+	return domain.Machine{
+		ID:     machineID,
+		Name:   machineID,
+		Status: fallbackStatus,
+	}
+}
+
+func (h *ClientHub) broadcastMachineUpdated(machine domain.Machine, timestamp string) {
+	if machine.ID == "" {
+		return
+	}
+	if machine.Name == "" {
+		machine.Name = machine.ID
+	}
+	if machine.Status == "" {
+		machine.Status = domain.MachineStatusOnline
+	}
+	h.broadcastNorthboundEvent("machine.updated", machine.ID, timestamp, protocol.MachineUpdatedPayload{
+		Machine: machine,
+	})
+}
+
+func (h *ClientHub) broadcastThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string) {
+	if payload.MachineID == "" && payload.Thread != nil {
+		payload.MachineID = payload.Thread.MachineID
+	}
+	if payload.ThreadID == "" && payload.Thread != nil {
+		payload.ThreadID = payload.Thread.ThreadID
+	}
+	if payload.MachineID == "" {
+		return
+	}
+	h.broadcastNorthboundEvent("thread.updated", payload.MachineID, timestamp, payload)
+}
+
+func (h *ClientHub) broadcastResourceChanged(payload protocol.ResourceChangedPayload, timestamp string) {
+	if payload.MachineID == "" {
+		return
+	}
+	if payload.ResourceID == "" && payload.Resource != nil {
+		payload.ResourceID = payload.Resource.ResourceID
+	}
+	if payload.Kind == "" && payload.Resource != nil {
+		payload.Kind = payload.Resource.Kind
+	}
+	h.broadcastNorthboundEvent("resource.changed", payload.MachineID, timestamp, payload)
+}
+
+func (h *ClientHub) broadcastNorthboundEvent(name string, machineID string, timestamp string, payload any) {
+	h.mu.RLock()
+	consoleHub := h.consoleHub
+	h.mu.RUnlock()
+	if consoleHub == nil {
+		return
+	}
+
+	if timestamp == "" {
+		timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	payloadJSON, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+
+	_ = consoleHub.Broadcast(protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      name,
+		MachineID: machineID,
+		Timestamp: timestamp,
+		Payload:   payloadJSON,
+	})
+}
+
+func (h *ClientHub) upsertThreadSnapshot(machineID string, thread domain.Thread) {
+	if machineID == "" || thread.ThreadID == "" {
+		return
+	}
+	if thread.MachineID == "" {
+		thread.MachineID = machineID
+	}
+
+	h.mu.Lock()
+	state := h.snapshotByMachine[machineID]
+	replaced := false
+	for idx := range state.threads {
+		if state.threads[idx].ThreadID == thread.ThreadID {
+			state.threads[idx] = thread
+			replaced = true
+			break
+		}
+	}
+	if !replaced {
+		state.threads = append(state.threads, thread)
+	}
+	h.snapshotByMachine[machineID] = state
+	threadsToStore := append([]domain.Thread(nil), state.threads...)
+	environmentToStore := append([]domain.EnvironmentResource(nil), state.environment...)
+	h.mu.Unlock()
+
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	}
+}
+
+func (h *ClientHub) removeThreadSnapshot(machineID string, threadID string) {
+	if machineID == "" || threadID == "" {
+		return
+	}
+
+	h.mu.Lock()
+	state := h.snapshotByMachine[machineID]
+	filtered := make([]domain.Thread, 0, len(state.threads))
+	for _, thread := range state.threads {
+		if thread.ThreadID != threadID {
+			filtered = append(filtered, thread)
+		}
+	}
+	state.threads = filtered
+	h.snapshotByMachine[machineID] = state
+	threadsToStore := append([]domain.Thread(nil), state.threads...)
+	environmentToStore := append([]domain.EnvironmentResource(nil), state.environment...)
+	h.mu.Unlock()
+
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	}
+}
+
+func (h *ClientHub) upsertEnvironmentResource(machineID string, resource domain.EnvironmentResource) (domain.EnvironmentResource, bool) {
+	if machineID == "" || resource.ResourceID == "" || resource.Kind == "" {
+		return domain.EnvironmentResource{}, false
+	}
+	if resource.MachineID == "" {
+		resource.MachineID = machineID
+	}
+
+	h.mu.Lock()
+	state := h.snapshotByMachine[machineID]
+	replaced := false
+	for idx := range state.environment {
+		if state.environment[idx].Kind != resource.Kind || state.environment[idx].ResourceID != resource.ResourceID {
+			continue
+		}
+		if resource.DisplayName == "" {
+			resource.DisplayName = state.environment[idx].DisplayName
+		}
+		if resource.LastObservedAt == "" {
+			resource.LastObservedAt = state.environment[idx].LastObservedAt
+		}
+		state.environment[idx] = mergeEnvironmentResource(state.environment[idx], resource)
+		resource = state.environment[idx]
+		replaced = true
+		break
+	}
+	if !replaced {
+		state.environment = append(state.environment, resource)
+	}
+	h.snapshotByMachine[machineID] = state
+	threadsToStore := append([]domain.Thread(nil), state.threads...)
+	environmentToStore := append([]domain.EnvironmentResource(nil), state.environment...)
+	h.mu.Unlock()
+
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	}
+	return resource, replaced
+}
+
+func (h *ClientHub) removeEnvironmentResource(machineID string, kind domain.EnvironmentKind, resourceID string) {
+	if machineID == "" || kind == "" || resourceID == "" {
+		return
+	}
+
+	h.mu.Lock()
+	state := h.snapshotByMachine[machineID]
+	filtered := make([]domain.EnvironmentResource, 0, len(state.environment))
+	for _, resource := range state.environment {
+		if resource.Kind == kind && resource.ResourceID == resourceID {
+			continue
+		}
+		filtered = append(filtered, resource)
+	}
+	state.environment = filtered
+	h.snapshotByMachine[machineID] = state
+	threadsToStore := append([]domain.Thread(nil), state.threads...)
+	environmentToStore := append([]domain.EnvironmentResource(nil), state.environment...)
+	h.mu.Unlock()
+
+	if h.runtimeIndex != nil {
+		h.runtimeIndex.ReplaceSnapshot(machineID, threadsToStore, environmentToStore)
+	}
+}
+
+func environmentSkillStatus(enabled bool) domain.EnvironmentResourceStatus {
+	if enabled {
+		return domain.EnvironmentResourceStatusEnabled
+	}
+	return domain.EnvironmentResourceStatusDisabled
+}
+
+func mergeEnvironmentResource(current domain.EnvironmentResource, next domain.EnvironmentResource) domain.EnvironmentResource {
+	if next.DisplayName == "" {
+		next.DisplayName = current.DisplayName
+	}
+	if next.Status == "" {
+		next.Status = current.Status
+	}
+	if next.LastObservedAt == "" {
+		next.LastObservedAt = current.LastObservedAt
+	}
+	if next.MachineID == "" {
+		next.MachineID = current.MachineID
+	}
+	if next.Kind == "" {
+		next.Kind = current.Kind
+	}
+	if !next.RestartRequired {
+		next.RestartRequired = current.RestartRequired
+	}
+	return next
 }

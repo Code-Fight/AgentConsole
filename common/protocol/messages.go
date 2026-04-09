@@ -29,6 +29,24 @@ type EnvironmentSnapshotPayload struct {
 	Environment []domain.EnvironmentResource `json:"environment"`
 }
 
+type MachineUpdatedPayload struct {
+	Machine domain.Machine `json:"machine"`
+}
+
+type ThreadUpdatedPayload struct {
+	MachineID string         `json:"machineId"`
+	ThreadID  string         `json:"threadId,omitempty"`
+	Thread    *domain.Thread `json:"thread,omitempty"`
+}
+
+type ResourceChangedPayload struct {
+	MachineID  string                      `json:"machineId"`
+	Kind       domain.EnvironmentKind      `json:"kind,omitempty"`
+	ResourceID string                      `json:"resourceId,omitempty"`
+	Resource   *domain.EnvironmentResource `json:"resource,omitempty"`
+	Action     string                      `json:"action,omitempty"`
+}
+
 type ThreadCreateCommandPayload struct {
 	Title string `json:"title,omitempty"`
 }

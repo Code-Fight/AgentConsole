@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { http } from "../common/api/http";
-import type { MachineListResponse, MachineSummary } from "../common/api/types";
+import type { EventEnvelope, MachineListResponse, MachineSummary } from "../common/api/types";
+import { connectConsoleSocket } from "../common/api/ws";
 
 interface OverviewStat {
   label: string;
@@ -32,6 +33,7 @@ export function OverviewPage() {
   const [machines, setMachines] = useState<MachineSummary[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -60,7 +62,21 @@ export function OverviewPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshNonce]);
+
+  useEffect(() => connectConsoleSocket(undefined, (event) => {
+    let envelope: EventEnvelope | null = null;
+
+    try {
+      envelope = JSON.parse(event.data) as EventEnvelope;
+    } catch {
+      return;
+    }
+
+    if (envelope.name === "machine.updated") {
+      setRefreshNonce((current) => current + 1);
+    }
+  }), []);
 
   const stats = buildOverviewStats(machines);
 

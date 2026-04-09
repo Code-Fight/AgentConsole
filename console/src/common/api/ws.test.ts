@@ -45,3 +45,18 @@ test("builds thread websocket url for workspace placeholders", () => {
 
   expect(buildThreadSocketUrl("thread 1")).toBe(expectedUrl);
 });
+
+test("connects without a thread filter when no thread id is provided", () => {
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  const onMessage = vi.fn();
+  const disconnect = connectConsoleSocket(undefined, onMessage);
+
+  const socket = FakeWebSocket.instances[0];
+  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
+
+  expect(socket.url).toBe(`${protocol}://${window.location.host}/ws`);
+
+  disconnect();
+  expect(socket.close).toHaveBeenCalledOnce();
+});
