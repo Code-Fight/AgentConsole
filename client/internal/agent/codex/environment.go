@@ -26,8 +26,12 @@ func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error
 	environment := make([]domain.EnvironmentResource, 0, len(skills.Data)+len(mcps.Data)+len(plugins.Marketplaces))
 	for _, entry := range skills.Data {
 		for _, skill := range entry.Skills {
+			resourceID := strings.TrimSpace(skill.Path)
+			if resourceID == "" {
+				resourceID = strings.TrimSpace(skill.Name)
+			}
 			environment = append(environment, domain.EnvironmentResource{
-				ResourceID:      skill.Name,
+				ResourceID:      resourceID,
 				Kind:            domain.EnvironmentKindSkill,
 				DisplayName:     skill.Name,
 				Status:          enabledStatus(skill.Enabled),
@@ -74,11 +78,17 @@ func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error
 }
 
 func (c *AppServerClient) SetSkillEnabled(nameOrPath string, enabled bool) error {
+	payload := map[string]any{
+		"enabled": enabled,
+	}
+	if isPathLikeResourceID(nameOrPath) {
+		payload["path"] = nameOrPath
+	} else {
+		payload["name"] = nameOrPath
+	}
+
 	var response skillsConfigWriteResponse
-	return c.runner.Call("skills/config/write", map[string]any{
-		"nameOrPath": nameOrPath,
-		"enabled":    enabled,
-	}, &response)
+	return c.runner.Call("skills/config/write", payload, &response)
 }
 
 func (c *AppServerClient) UninstallPlugin(pluginID string) error {
@@ -123,4 +133,15 @@ func mcpStatus(server mcpServerStatusRecord) domain.EnvironmentResourceStatus {
 		return domain.EnvironmentResourceStatusError
 	}
 	return enabledStatus(server.Enabled)
+}
+
+func isPathLikeResourceID(resourceID string) bool {
+	trimmed := strings.TrimSpace(resourceID)
+	if trimmed == "" {
+		return false
+	}
+	if strings.ContainsAny(trimmed, `/\`) {
+		return true
+	}
+	return len(trimmed) > 1 && trimmed[1] == ':'
 }

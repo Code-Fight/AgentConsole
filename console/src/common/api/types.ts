@@ -93,6 +93,11 @@ export interface TurnDeltaPayload {
   delta: string;
 }
 
+export interface TurnStartedPayload {
+  threadId: string;
+  turnId: string;
+}
+
 export interface TurnCompletedPayload {
   turn: TurnSummary;
 }

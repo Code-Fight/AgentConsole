@@ -158,6 +158,11 @@ func envelopeThreadID(envelope protocol.Envelope) string {
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {
 			return payload.ThreadID
 		}
+	case "turn.started":
+		var payload protocol.TurnStartedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.ThreadID
+		}
 	case "turn.completed":
 		var payload protocol.TurnCompletedPayload
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {

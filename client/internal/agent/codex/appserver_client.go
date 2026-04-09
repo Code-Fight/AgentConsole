@@ -319,6 +319,16 @@ func (c *AppServerClient) handleServerRequest(request jsonRPCServerRequest) {
 		return
 	}
 
+	userInputQuestions := extractToolUserInputQuestions(request.Params)
+	reason := extractNotificationString(request.Params,
+		[]string{"reason"},
+		[]string{"message"},
+		[]string{"item", "reason"},
+	)
+	if reason == "" && approvalKind == "tool_user_input" && len(userInputQuestions) > 0 {
+		reason = userInputQuestions[0].Text
+	}
+
 	approval := ApprovalRequest{
 		RequestID: requestID,
 		ThreadID: extractNotificationString(request.Params,
@@ -334,12 +344,8 @@ func (c *AppServerClient) handleServerRequest(request jsonRPCServerRequest) {
 			[]string{"item", "itemId"},
 			[]string{"item", "id"},
 		),
-		Kind: approvalKind,
-		Reason: extractNotificationString(request.Params,
-			[]string{"reason"},
-			[]string{"message"},
-			[]string{"item", "reason"},
-		),
+		Kind:   approvalKind,
+		Reason: reason,
 		Command: extractNotificationString(request.Params,
 			[]string{"command"},
 			[]string{"item", "command"},
@@ -352,6 +358,7 @@ func (c *AppServerClient) handleServerRequest(request jsonRPCServerRequest) {
 			[]string{"permissions"},
 			[]string{"item", "permissions"},
 		),
+		UserInputQuestions: userInputQuestions,
 	}
 
 	c.approvalMu.Lock()
@@ -514,6 +521,100 @@ func extractNotificationMap(params json.RawMessage, paths ...[]string) map[strin
 	}
 
 	return nil
+}
+
+func extractToolUserInputQuestions(params json.RawMessage) []approvalQuestion {
+	if len(params) == 0 {
+		return nil
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return nil
+	}
+
+	rawQuestions, ok := nestedValue(payload, "questions")
+	if !ok {
+		rawQuestions, ok = nestedValue(payload, "item", "questions")
+	}
+	if !ok {
+		return nil
+	}
+
+	questions, ok := rawQuestions.([]any)
+	if !ok {
+		return nil
+	}
+
+	result := make([]approvalQuestion, 0, len(questions))
+	for index, rawQuestion := range questions {
+		question := approvalQuestion{Key: fmt.Sprintf("%d", index)}
+		switch typed := rawQuestion.(type) {
+		case string:
+			question.Text = strings.TrimSpace(typed)
+		case map[string]any:
+			question.Key = approvalQuestionKey(typed, index)
+			question.Text = extractApprovalQuestionText(typed)
+			question.Options = extractApprovalQuestionOptions(typed)
+		default:
+			continue
+		}
+		result = append(result, question)
+	}
+
+	return result
+}
+
+func approvalQuestionKey(question map[string]any, index int) string {
+	for _, key := range []string{"name", "id"} {
+		value, ok := question[key].(string)
+		if ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return fmt.Sprintf("%d", index)
+}
+
+func extractApprovalQuestionText(question map[string]any) string {
+	for _, key := range []string{"question", "text", "prompt", "label"} {
+		value, ok := question[key].(string)
+		if ok && strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func extractApprovalQuestionOptions(question map[string]any) []string {
+	rawOptions, ok := question["options"]
+	if !ok {
+		return nil
+	}
+
+	options, ok := rawOptions.([]any)
+	if !ok {
+		return nil
+	}
+
+	values := make([]string, 0, len(options))
+	for _, rawOption := range options {
+		switch typed := rawOption.(type) {
+		case string:
+			if value := strings.TrimSpace(typed); value != "" {
+				values = append(values, value)
+			}
+		case map[string]any:
+			for _, key := range []string{"value", "id", "name", "label", "text"} {
+				value, ok := typed[key].(string)
+				if ok && strings.TrimSpace(value) != "" {
+					values = append(values, strings.TrimSpace(value))
+					break
+				}
+			}
+		}
+	}
+
+	return values
 }
 
 func nestedValue(payload map[string]any, path ...string) (any, bool) {

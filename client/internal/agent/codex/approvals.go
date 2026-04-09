@@ -7,20 +7,27 @@ import (
 )
 
 type ApprovalRequest struct {
-	RequestID   string
-	ThreadID    string
-	TurnID      string
-	ItemID      string
-	Kind        string
-	Reason      string
-	Command     string
-	Session     string
-	Permissions map[string]any
+	RequestID          string
+	ThreadID           string
+	TurnID             string
+	ItemID             string
+	Kind               string
+	Reason             string
+	Command            string
+	Session            string
+	Permissions        map[string]any
+	UserInputQuestions []approvalQuestion
 }
 
 type pendingApprovalRequest struct {
 	id      json.RawMessage
 	request ApprovalRequest
+}
+
+type approvalQuestion struct {
+	Key     string
+	Text    string
+	Options []string
 }
 
 func (c *AppServerClient) RespondApproval(requestID string, decision string) error {
@@ -57,6 +64,8 @@ func approvalKindFromMethod(method string) (string, bool) {
 		return "file_change", true
 	case "item/permissions/requestApproval":
 		return "permissions", true
+	case "item/tool/requestUserInput":
+		return "tool_user_input", true
 	default:
 		return "unknown", false
 	}
@@ -72,20 +81,26 @@ func isSupportedApprovalDecision(decision string) bool {
 }
 
 func approvalResponsePayload(request ApprovalRequest, decision string) any {
-	if request.Kind != "permissions" {
-		return map[string]any{"decision": decision}
-	}
-
-	if strings.TrimSpace(decision) == "accept" {
-		return map[string]any{
-			"permissions": cloneApprovalPermissions(request.Permissions),
-			"scope":       "session",
+	switch request.Kind {
+	case "permissions":
+		if strings.TrimSpace(decision) == "accept" {
+			return map[string]any{
+				"permissions": cloneApprovalPermissions(request.Permissions),
+				"scope":       "session",
+			}
 		}
-	}
 
-	return map[string]any{
-		"permissions": map[string]any{},
-		"scope":       "turn",
+		return map[string]any{
+			"permissions": map[string]any{},
+			"scope":       "turn",
+		}
+	case "tool_user_input":
+		if strings.TrimSpace(decision) != "accept" {
+			return map[string]any{"answers": map[string]any{}}
+		}
+		return map[string]any{"answers": buildToolUserInputAnswers(request.UserInputQuestions)}
+	default:
+		return map[string]any{"decision": decision}
 	}
 }
 
@@ -99,4 +114,23 @@ func cloneApprovalPermissions(permissions map[string]any) map[string]any {
 		cloned[key] = value
 	}
 	return cloned
+}
+
+func buildToolUserInputAnswers(questions []approvalQuestion) map[string]any {
+	if len(questions) == 0 {
+		return map[string]any{}
+	}
+
+	answers := make(map[string]any, len(questions))
+	for _, question := range questions {
+		if strings.TrimSpace(question.Key) == "" {
+			continue
+		}
+		if len(question.Options) == 0 {
+			answers[question.Key] = ""
+			continue
+		}
+		answers[question.Key] = question.Options[0]
+	}
+	return answers
 }

@@ -123,7 +123,56 @@ test("submits a prompt and renders turn deltas for the current thread", async ()
   expect(await screen.findByText("hello from gateway")).toBeInTheDocument();
 });
 
-test("renders approval controls for approval.required events on the current thread", async () => {
+test("renders a turn-started message for the current thread", async () => {
+  vi.stubGlobal("fetch", vi.fn(async () =>
+    new Response(
+      JSON.stringify({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "idle",
+          title: "Investigate flaky test"
+        },
+        pendingApprovals: []
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json"
+        }
+      },
+    ),
+  ));
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <Routes>
+        <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
+      </Routes>
+    </MemoryRouter>,
+  );
+
+  const socket = FakeWebSocket.instances[0];
+  await act(async () => {
+    socket.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "turn.started",
+        timestamp: "2026-04-08T14:00:01Z",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1"
+        }
+      }),
+    );
+  });
+
+  expect(await screen.findByText("Turn started: turn-1")).toBeInTheDocument();
+});
+
+test("renders tool-user-input approval controls for approval.required events on the current thread", async () => {
   vi.stubGlobal("fetch", vi.fn(async () =>
     new Response(
       JSON.stringify({
@@ -167,15 +216,15 @@ test("renders approval controls for approval.required events on the current thre
           threadId: "thread-1",
           turnId: "turn-1",
           itemId: "item-1",
-          kind: "command",
-          command: "go test ./..."
+          kind: "tool_user_input",
+          reason: "Pick an option"
         }
       }),
     );
   });
 
   expect(await screen.findByText("Approval required")).toBeInTheDocument();
-  expect(screen.getByText("go test ./...")).toBeInTheDocument();
+  expect(screen.getByText("Pick an option")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();

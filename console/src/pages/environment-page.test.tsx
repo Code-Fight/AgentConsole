@@ -98,8 +98,10 @@ test("renders fetched skills and plugins from environment endpoints", async () =
   expect(screen.getByText("Plugins")).toBeInTheDocument();
 });
 
-test("clicking a skill action sends machineId", async () => {
+test("clicking a skill action sends the path-based resource id and machineId", async () => {
   connectConsoleSocketMock.mockReturnValue(() => {});
+  const skillPath = "/tmp/project/.codex/skills/skill-1/SKILL.md";
+  const encodedSkillPath = encodeURIComponent(skillPath);
 
   const fetchMock = vi.fn<
     (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
@@ -111,7 +113,7 @@ test("clicking a skill action sends machineId", async () => {
         JSON.stringify({
           items: [
             {
-              resourceId: "skill-1",
+              resourceId: skillPath,
               machineId: "machine-9",
               kind: "skill",
               displayName: "Debugger",
@@ -142,7 +144,7 @@ test("clicking a skill action sends machineId", async () => {
       );
     }
 
-    if (path.endsWith("/environment/skills/skill-1/disable")) {
+    if (path.endsWith(`/environment/skills/${encodedSkillPath}/disable`)) {
       const body = typeof init?.body === "string" ? init.body : "";
       return new Response(body, {
         status: 200,
@@ -162,7 +164,7 @@ test("clicking a skill action sends machineId", async () => {
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/skills/skill-1/disable",
+      `/environment/skills/${encodedSkillPath}/disable`,
       expect.objectContaining({
         body: JSON.stringify({ machineId: "machine-9" }),
         method: "POST"

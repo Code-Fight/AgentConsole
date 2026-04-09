@@ -129,6 +129,42 @@ func TestConsoleHubFiltersEventsBySubscribedThreadID(t *testing.T) {
 	}
 }
 
+func TestConsoleHubFiltersTurnStartedEventsBySubscribedThreadID(t *testing.T) {
+	hub := NewConsoleHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	thread1URL := "ws" + server.URL[4:] + "/ws?threadId=" + url.QueryEscape("thread-01")
+	thread2URL := "ws" + server.URL[4:] + "/ws?threadId=" + url.QueryEscape("thread-02")
+
+	thread1Conn, _, err := cws.Dial(context.Background(), thread1URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thread1Conn.Close(cws.StatusNormalClosure, "done")
+
+	thread2Conn, _, err := cws.Dial(context.Background(), thread2URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer thread2Conn.Close(cws.StatusNormalClosure, "done")
+	waitForConsoleClientCount(t, hub, 2)
+
+	if err := hub.Broadcast(protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "turn.started",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-08T14:00:00Z",
+		Payload:   []byte(`{"threadId":"thread-01","turnId":"turn-01"}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	assertConsoleEnvelopeName(t, thread1Conn, "turn.started")
+	assertConsoleReadTimeout(t, thread2Conn)
+}
+
 func TestConsoleHubFiltersApprovalEventsBySubscribedThreadID(t *testing.T) {
 	hub := NewConsoleHub()
 	server := httptest.NewServer(hub.Handler())

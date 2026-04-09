@@ -8,6 +8,7 @@ import type {
   EventEnvelope,
   ThreadDetailResponse,
   StartTurnResponse,
+  TurnStartedPayload,
   TurnCompletedPayload,
   TurnDeltaPayload
 } from "../common/api/types";
@@ -33,6 +34,10 @@ function parseEnvelope(raw: string): EventEnvelope | null {
 function getEnvelopeThreadId(envelope: EventEnvelope): string | null {
   if (envelope.name === "turn.delta") {
     return (envelope.payload as TurnDeltaPayload).threadId;
+  }
+
+  if (envelope.name === "turn.started") {
+    return (envelope.payload as TurnStartedPayload).threadId;
   }
 
   if (envelope.name === "turn.completed") {
@@ -151,6 +156,18 @@ export function ThreadWorkspacePage() {
           {
             id: `${payload.turnId}:${payload.sequence}`,
             text: payload.delta
+          }
+        ]);
+        return;
+      }
+
+      if (envelope.name === "turn.started") {
+        const payload = envelope.payload as TurnStartedPayload;
+        setMessages((current) => [
+          ...current,
+          {
+            id: `started:${payload.turnId}`,
+            text: `Turn started: ${payload.turnId}`
           }
         ]);
         return;

@@ -208,8 +208,11 @@ func TestClientListEnvironment(t *testing.T) {
 			if len(environment) != 3 {
 				t.Fatalf("unexpected environment count: %d", len(environment))
 			}
-			if environment[0].ResourceID != "skill-a" || environment[0].Kind != domain.EnvironmentKindSkill {
+			if environment[0].ResourceID != "/tmp/project/.codex/skills/skill-a/SKILL.md" || environment[0].Kind != domain.EnvironmentKindSkill {
 				t.Fatalf("unexpected skill environment: %+v", environment[0])
+			}
+			if environment[0].DisplayName != "skill-a" {
+				t.Fatalf("unexpected skill display name: %+v", environment[0])
 			}
 			if environment[1].ResourceID != "github" || environment[1].Kind != domain.EnvironmentKindMCP {
 				t.Fatalf("unexpected mcp environment: %+v", environment[1])
@@ -223,21 +226,30 @@ func TestClientListEnvironment(t *testing.T) {
 
 func TestClientSetSkillEnabledUsesExpectedMethodAndPayload(t *testing.T) {
 	tests := []struct {
-		name       string
-		nameOrPath string
-		enabled    bool
-		callErr    error
+		name        string
+		nameOrPath  string
+		selectorKey string
+		enabled     bool
+		callErr     error
 	}{
 		{
-			name:       "enables a skill by name",
-			nameOrPath: "skill-a",
-			enabled:    true,
+			name:        "enables a skill by name",
+			nameOrPath:  "skill-a",
+			selectorKey: "name",
+			enabled:     true,
 		},
 		{
-			name:       "propagates runner error",
-			nameOrPath: "/tmp/project/.codex/skills/skill-a/SKILL.md",
-			enabled:    false,
-			callErr:    errors.New("skill update failed"),
+			name:        "disables a skill by path",
+			nameOrPath:  "/tmp/project/.codex/skills/skill-a/SKILL.md",
+			selectorKey: "path",
+			enabled:     false,
+		},
+		{
+			name:        "propagates runner error",
+			nameOrPath:  "/tmp/project/.codex/skills/skill-a/SKILL.md",
+			selectorKey: "path",
+			enabled:     false,
+			callErr:     errors.New("skill update failed"),
 		},
 	}
 
@@ -272,8 +284,11 @@ func TestClientSetSkillEnabledUsesExpectedMethodAndPayload(t *testing.T) {
 			if !ok {
 				t.Fatalf("unexpected payload type: %T", gotPayload)
 			}
-			if payloadMap["nameOrPath"] != tt.nameOrPath || payloadMap["enabled"] != tt.enabled {
+			if payloadMap[tt.selectorKey] != tt.nameOrPath || payloadMap["enabled"] != tt.enabled {
 				t.Fatalf("unexpected payload: %#v", payloadMap)
+			}
+			if len(payloadMap) != 2 {
+				t.Fatalf("unexpected payload keys: %#v", payloadMap)
 			}
 
 			if tt.callErr != nil {
@@ -284,6 +299,179 @@ func TestClientSetSkillEnabledUsesExpectedMethodAndPayload(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestAppServerClientSupportsToolUserInputApprovalRequests(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	var got agenttypes.RuntimeApprovalRequest
+	client.SetApprovalHandler(func(event agenttypes.RuntimeApprovalRequest) {
+		got = event
+	})
+
+	runner.emitServerRequest(t, "approval-1", "item/tool/requestUserInput", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "item-1",
+		"questions": []map[string]any{
+			{
+				"id":       "question-1",
+				"question": "Pick an option",
+				"options": []map[string]any{
+					{"value": "option-a", "label": "Option A"},
+					{"value": "option-b", "label": "Option B"},
+				},
+			},
+		},
+	})
+
+	if got.RequestID != "approval-1" {
+		t.Fatalf("unexpected approval request: %+v", got)
+	}
+	if got.ThreadID != "thread-1" || got.TurnID != "turn-1" || got.ItemID != "item-1" {
+		t.Fatalf("unexpected approval scope: %+v", got)
+	}
+	if got.Kind != "tool_user_input" {
+		t.Fatalf("unexpected approval kind: %+v", got)
+	}
+	if got.Reason != "Pick an option" {
+		t.Fatalf("unexpected approval reason: %+v", got)
+	}
+}
+
+func TestAppServerClientRespondApprovalMapsToolUserInputResponses(t *testing.T) {
+	tests := []struct {
+		name       string
+		decision   string
+		request    map[string]any
+		wantAnswer map[string]any
+	}{
+		{
+			name:     "accept chooses the first option",
+			decision: "accept",
+			request: map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+				"itemId":   "item-1",
+				"questions": []map[string]any{
+					{
+						"id":       "question-1",
+						"question": "Pick an option",
+						"options": []map[string]any{
+							{"value": "option-a", "label": "Option A"},
+							{"value": "option-b", "label": "Option B"},
+						},
+					},
+				},
+			},
+			wantAnswer: map[string]any{"question-1": "option-a"},
+		},
+		{
+			name:     "accept answers freeform questions with an empty string",
+			decision: "accept",
+			request: map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+				"itemId":   "item-1",
+				"questions": []map[string]any{
+					{
+						"id":       "question-1",
+						"question": "Why?",
+					},
+				},
+			},
+			wantAnswer: map[string]any{"question-1": ""},
+		},
+		{
+			name:     "decline sends an empty answers object",
+			decision: "decline",
+			request: map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+				"itemId":   "item-1",
+				"questions": []map[string]any{
+					{
+						"id":       "question-1",
+						"question": "Pick an option",
+						"options": []map[string]any{
+							{"value": "option-a", "label": "Option A"},
+						},
+					},
+				},
+			},
+			wantAnswer: map[string]any{},
+		},
+		{
+			name:     "cancel sends an empty answers object",
+			decision: "cancel",
+			request: map[string]any{
+				"threadId": "thread-1",
+				"turnId":   "turn-1",
+				"itemId":   "item-1",
+				"questions": []map[string]any{
+					{
+						"id":       "question-1",
+						"question": "Pick an option",
+						"options": []map[string]any{
+							{"value": "option-a", "label": "Option A"},
+						},
+					},
+				},
+			},
+			wantAnswer: map[string]any{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotID string
+			var gotResult map[string]any
+
+			runner := &fakeRunner{
+				respond: func(id json.RawMessage, result any, rpcErr *jsonRPCError) error {
+					if rpcErr != nil {
+						t.Fatalf("unexpected rpc error: %+v", rpcErr)
+					}
+					if err := json.Unmarshal(id, &gotID); err != nil {
+						t.Fatalf("unmarshal id failed: %v", err)
+					}
+
+					raw, err := json.Marshal(result)
+					if err != nil {
+						t.Fatalf("marshal result failed: %v", err)
+					}
+					if err := json.Unmarshal(raw, &gotResult); err != nil {
+						t.Fatalf("unmarshal result failed: %v", err)
+					}
+					return nil
+				},
+			}
+
+			client := NewAppServerClient(runner)
+			runner.emitServerRequest(t, "approval-1", "item/tool/requestUserInput", tt.request)
+
+			if err := client.RespondApproval("approval-1", tt.decision); err != nil {
+				t.Fatal(err)
+			}
+
+			if gotID != "approval-1" {
+				t.Fatalf("unexpected response id: %q", gotID)
+			}
+			gotAnswers, ok := gotResult["answers"].(map[string]any)
+			if !ok {
+				t.Fatalf("unexpected response payload: %#v", gotResult)
+			}
+			if len(gotAnswers) != len(tt.wantAnswer) {
+				t.Fatalf("unexpected response payload: %#v", gotResult)
+			}
+			for key, want := range tt.wantAnswer {
+				if gotAnswers[key] != want {
+					t.Fatalf("answers[%q] = %#v, want %#v", key, gotAnswers[key], want)
+				}
 			}
 		})
 	}
