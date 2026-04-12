@@ -1,40 +1,41 @@
 import { createBrowserRouter } from "react-router-dom";
-import { AppShell } from "./shell";
-import { EnvironmentPage } from "../pages/environment-page";
-import { MachinesPage } from "../pages/machines-page";
-import { OverviewPage } from "../pages/overview-page";
-import { SettingsPage } from "../pages/settings-page";
-import { ThreadWorkspacePage } from "../pages/thread-workspace-page";
-import { ThreadsPage } from "../pages/threads-page";
+import {
+  DesignAppShell,
+  EnvironmentPageView,
+  MachinesPageView,
+  SettingsPageView,
+  ThreadHubPage,
+  ThreadWorkspacePageView
+} from "../design";
 
 export const router = createBrowserRouter([
   {
     path: "/",
-    element: <AppShell />,
+    element: <DesignAppShell />,
     children: [
       {
         index: true,
-        element: <OverviewPage />
+        element: <ThreadHubPage />
       },
       {
         path: "machines",
-        element: <MachinesPage />
+        element: <MachinesPageView />
       },
       {
         path: "threads",
-        element: <ThreadsPage />
+        element: <ThreadHubPage />
       },
       {
         path: "threads/:threadId",
-        element: <ThreadWorkspacePage />
+        element: <ThreadWorkspacePageView />
       },
       {
         path: "environment",
-        element: <EnvironmentPage />
+        element: <EnvironmentPageView />
       },
       {
         path: "settings",
-        element: <SettingsPage />
+        element: <SettingsPageView />
       }
     ]
   }
