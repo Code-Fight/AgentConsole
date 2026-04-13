@@ -42,12 +42,14 @@ test("renders global default and machine override settings", async () => {
 
   render(<SettingsPage />);
 
+  expect(await screen.findByRole("heading", { name: "Settings" })).toBeInTheDocument();
   await waitFor(() => {
     expect(screen.getByLabelText("Global Default TOML")).toHaveValue("model = \"gpt-5.4\"\n");
   });
-  expect(await screen.findByText("Using Global Default")).toBeInTheDocument();
+  expect(await screen.findByText("Using global default")).toBeInTheDocument();
   expect(screen.getByText("Codex")).toBeInTheDocument();
   expect(screen.getByText("Machine 01")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Edit gateway endpoint" })).toBeDisabled();
 });
 
 test("saving global default sends put request", async () => {
@@ -194,6 +196,7 @@ test("invalid toml blocks saving", async () => {
   vi.stubGlobal("fetch", fetchMock);
 
   render(<SettingsPage />);
+  expect(await screen.findByText("Using global default")).toBeInTheDocument();
 
   fireEvent.change(await screen.findByLabelText("Global Default TOML"), {
     target: { value: "model = [" }
@@ -234,6 +237,7 @@ test("empty toml blocks saving", async () => {
   vi.stubGlobal("fetch", fetchMock);
 
   render(<SettingsPage />);
+  expect(await screen.findByText("Using global default")).toBeInTheDocument();
 
   fireEvent.change(await screen.findByLabelText("Global Default TOML"), {
     target: { value: "   " }
@@ -287,7 +291,7 @@ test("deleting machine override falls back to global default", async () => {
     );
   });
   expect(await screen.findByText("Machine override deleted.")).toBeInTheDocument();
-  expect(screen.getByText("Using Global Default")).toBeInTheDocument();
+  expect(screen.getByText("Using global default")).toBeInTheDocument();
 });
 
 test("shows load error when settings bootstrap fails", async () => {

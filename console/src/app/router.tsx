@@ -1,10 +1,8 @@
 import { createBrowserRouter } from "react-router-dom";
-import {
-  DesignAppShell,
-  EnvironmentPageView,
-  MachinesPageView,
-  SettingsPageView
-} from "../design";
+import { DesignAppShell } from "../design";
+import { EnvironmentPage } from "../pages/environment-page";
+import { MachinesPage } from "../pages/machines-page";
+import { SettingsPage } from "../pages/settings-page";
 import { ThreadWorkspacePage } from "../pages/thread-workspace-page";
 import { ThreadsPage } from "../pages/threads-page";
 
@@ -19,7 +17,7 @@ export const router = createBrowserRouter([
       },
       {
         path: "machines",
-        element: <MachinesPageView />
+        element: <MachinesPage />
       },
       {
         path: "threads",
@@ -31,11 +29,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "environment",
-        element: <EnvironmentPageView />
+        element: <EnvironmentPage />
       },
       {
         path: "settings",
-        element: <SettingsPageView />
+        element: <SettingsPage />
       }
     ]
   }

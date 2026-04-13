@@ -18,7 +18,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("renders fetched skills and plugins from environment endpoints", async () => {
+test("renders the design environment surface with fetched resources and disabled unsupported actions", async () => {
   connectConsoleSocketMock.mockReturnValue(() => {});
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = typeof input === "string" ? input : input.toString();
@@ -92,10 +92,12 @@ test("renders fetched skills and plugins from environment endpoints", async () =
 
   render(<EnvironmentPage />);
 
+  expect(await screen.findByRole("heading", { name: "Environment" })).toBeInTheDocument();
   expect(await screen.findByText("Debugger")).toBeInTheDocument();
   expect(await screen.findByText("Marketplace A")).toBeInTheDocument();
-  expect(screen.getByText("Skills")).toBeInTheDocument();
-  expect(screen.getByText("Plugins")).toBeInTheDocument();
+  expect(screen.getAllByText("Skills").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Plugins").length).toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: "Sync catalog" })).toBeDisabled();
 });
 
 test("clicking a skill action sends the path-based resource id and machineId", async () => {
