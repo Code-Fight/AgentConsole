@@ -86,11 +86,18 @@ type threadUpdateEmitter interface {
 	EmitThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string)
 }
 
-func resolveThreadMachineID(router *routing.Router, threadID string) (string, bool) {
-	if router == nil {
-		return "", false
+func resolveThreadMachineID(router *routing.Router, idx *runtimeindex.Store, threadID string) (string, bool) {
+	if router != nil {
+		if machineID, ok := router.ResolveThread(threadID); ok {
+			return machineID, true
+		}
 	}
-	return router.ResolveThread(threadID)
+	if idx != nil {
+		if thread, ok := findThread(idx, threadID); ok && strings.TrimSpace(thread.MachineID) != "" {
+			return thread.MachineID, true
+		}
+	}
+	return "", false
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -579,8 +586,8 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		}
 		activeTurnID := resolveActiveTurnID(sender, threadID)
 
-		if sender != nil {
-			if machineID, ok := resolveThreadMachineID(router, threadID); ok {
+		if sender != nil && router != nil {
+			if machineID, ok := router.ResolveThread(threadID); ok {
 				liveReadRequired := machineIsOnline(reg, machineID)
 				completed, err := sender.SendCommand(r.Context(), machineID, "thread.read", protocol.ThreadReadCommandPayload{
 					ThreadID: threadID,
@@ -591,8 +598,11 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 						if result.Thread.MachineID == "" {
 							result.Thread.MachineID = machineID
 						}
-						if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
+						if strings.TrimSpace(result.Thread.ThreadID) != "" {
 							router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+							if idx != nil {
+								idx.UpsertThread(result.Thread.MachineID, result.Thread)
+							}
 						}
 						clearDeleted(result.Thread.ThreadID)
 						writeJSON(w, http.StatusOK, threadDetailResponse{
@@ -607,7 +617,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 						return
 					}
 				}
-				if err != nil && liveReadRequired {
+				if liveReadRequired {
 					http.Error(w, err.Error(), http.StatusBadGateway)
 					return
 				}
@@ -661,6 +671,9 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
 		}
+		if idx != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
+			idx.UpsertThread(result.Thread.MachineID, result.Thread)
+		}
 		clearDeleted(result.Thread.ThreadID)
 
 		writeJSON(w, http.StatusCreated, map[string]any{"thread": result.Thread})
@@ -678,7 +691,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, threadID)
+		machineID, ok := resolveThreadMachineID(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
@@ -703,6 +716,9 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
 		}
+		if idx != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
+			idx.UpsertThread(result.Thread.MachineID, result.Thread)
+		}
 		clearDeleted(result.Thread.ThreadID)
 
 		writeJSON(w, http.StatusOK, map[string]any{"thread": result.Thread})
@@ -720,7 +736,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, threadID)
+		machineID, ok := resolveThreadMachineID(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
@@ -768,7 +784,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		archived := false
 		if sender != nil {
-			if machineID, ok := resolveThreadMachineID(router, threadID); ok {
+			if machineID, ok := resolveThreadMachineID(router, idx, threadID); ok {
 				completed, err := sender.SendCommand(r.Context(), machineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
 					ThreadID: threadID,
 				})
@@ -785,7 +801,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		if emitter, ok := sender.(threadUpdateEmitter); ok {
 			machineID := thread.MachineID
 			if machineID == "" {
-				machineID, _ = resolveThreadMachineID(router, threadID)
+				machineID, _ = resolveThreadMachineID(router, idx, threadID)
 			}
 			emitter.EmitThreadUpdated(protocol.ThreadUpdatedPayload{
 				MachineID: machineID,
@@ -811,7 +827,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, threadID)
+		machineID, ok := resolveThreadMachineID(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
@@ -854,7 +870,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, threadID)
+		machineID, ok := resolveThreadMachineID(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
@@ -898,7 +914,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, threadID)
+		machineID, ok := resolveThreadMachineID(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return

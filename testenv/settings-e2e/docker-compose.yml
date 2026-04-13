@@ -2,7 +2,7 @@ services:
   gateway:
     build:
       context: ../..
-      dockerfile: testenv/local-stack/Dockerfile.gateway
+      dockerfile: testenv/dev-integration/Dockerfile.gateway
     environment:
       HOST: 0.0.0.0
       PORT: 8080
@@ -21,7 +21,7 @@ services:
   client:
     build:
       context: ../..
-      dockerfile: testenv/local-stack/Dockerfile.client
+      dockerfile: testenv/dev-integration/Dockerfile.client
     environment:
       MACHINE_ID: "${CAG_MACHINE_ID:-machine-01}"
       GATEWAY_URL: "ws://gateway:8080/ws/client"
@@ -37,7 +37,7 @@ services:
   console:
     build:
       context: ../..
-      dockerfile: testenv/local-stack/Dockerfile.console
+      dockerfile: testenv/dev-integration/Dockerfile.console
       args:
         VITE_API_BASE_URL: /api
         VITE_WS_URL: /ws
@@ -46,4 +46,3 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
-

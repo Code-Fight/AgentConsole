@@ -1480,3 +1480,31 @@ func TestServerSettingsRejectInvalidTOML(t *testing.T) {
 		t.Fatalf("unexpected body: %q", body)
 	}
 }
+
+func TestServerThreadDetailFallsBackToRuntimeIndexWhenRouterHasNotTrackedThreadYet(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.UpsertThread("machine-01", domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Fallback thread",
+	})
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), &fakeCommandSender{}, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Thread domain.Thread `json:"thread"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Thread.ThreadID != "thread-01" || body.Thread.MachineID != "machine-01" {
+		t.Fatalf("unexpected body: %+v", body)
+	}
+}

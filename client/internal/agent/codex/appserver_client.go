@@ -160,6 +160,8 @@ type configWriteResponse struct {
 type AppServerClient struct {
 	runner                  Runner
 	now                     func() time.Time
+	threadMu                sync.RWMutex
+	threads                 map[string]domain.Thread
 	turnEventMu             sync.RWMutex
 	turnEventHandler        func(agenttypes.RuntimeTurnEvent)
 	approvalMu              sync.RWMutex
@@ -192,6 +194,7 @@ func NewAppServerClient(runner Runner) *AppServerClient {
 	client := &AppServerClient{
 		runner:           runner,
 		now:              time.Now,
+		threads:          make(map[string]domain.Thread),
 		pendingApprovals: make(map[string]pendingApprovalRequest),
 		deltaSequence:    make(map[string]int),
 		restartRequired:  make(map[string]bool),
@@ -224,8 +227,22 @@ func (c *AppServerClient) ListThreads() ([]domain.Thread, error) {
 	}
 
 	threads := make([]domain.Thread, 0, len(response.Data))
+	seen := make(map[string]struct{}, len(response.Data))
 	for _, record := range response.Data {
-		threads = append(threads, record.toDomain())
+		thread := record.toDomain()
+		if current, ok := c.threadByID(thread.ThreadID); ok {
+			thread = mergeRememberedThread(current, thread)
+		}
+		threads = append(threads, thread)
+		seen[thread.ThreadID] = struct{}{}
+		c.rememberThread(thread)
+	}
+
+	for _, thread := range c.cachedThreads() {
+		if _, ok := seen[thread.ThreadID]; ok {
+			continue
+		}
+		threads = append(threads, thread)
 	}
 	return threads, nil
 }
@@ -240,7 +257,12 @@ func (c *AppServerClient) CreateThread(params agenttypes.CreateThreadParams) (do
 		return domain.Thread{}, err
 	}
 
-	return response.Thread.toDomain(), nil
+	thread := response.Thread.toDomain()
+	if strings.TrimSpace(thread.Title) == "" {
+		thread.Title = strings.TrimSpace(params.Title)
+	}
+	c.rememberThread(thread)
+	return thread, nil
 }
 
 func (c *AppServerClient) StartTurn(params agenttypes.StartTurnParams) (agenttypes.StartTurnResult, error) {
@@ -297,6 +319,61 @@ func (r threadRecord) toDomain() domain.Thread {
 		Status:    status,
 		Title:     title,
 	}
+}
+
+func (c *AppServerClient) rememberThread(thread domain.Thread) {
+	if strings.TrimSpace(thread.ThreadID) == "" {
+		return
+	}
+	c.threadMu.Lock()
+	if current, ok := c.threads[thread.ThreadID]; ok {
+		thread = mergeRememberedThread(current, thread)
+	}
+	c.threads[thread.ThreadID] = thread
+	c.threadMu.Unlock()
+}
+
+func (c *AppServerClient) forgetThread(threadID string) {
+	if strings.TrimSpace(threadID) == "" {
+		return
+	}
+	c.threadMu.Lock()
+	delete(c.threads, threadID)
+	c.threadMu.Unlock()
+}
+
+func (c *AppServerClient) cachedThreads() []domain.Thread {
+	c.threadMu.RLock()
+	defer c.threadMu.RUnlock()
+
+	items := make([]domain.Thread, 0, len(c.threads))
+	for _, thread := range c.threads {
+		items = append(items, thread)
+	}
+	return items
+}
+
+func (c *AppServerClient) threadByID(threadID string) (domain.Thread, bool) {
+	if strings.TrimSpace(threadID) == "" {
+		return domain.Thread{}, false
+	}
+	c.threadMu.RLock()
+	defer c.threadMu.RUnlock()
+	thread, ok := c.threads[threadID]
+	return thread, ok
+}
+
+func mergeRememberedThread(current domain.Thread, next domain.Thread) domain.Thread {
+	if strings.TrimSpace(next.MachineID) == "" {
+		next.MachineID = current.MachineID
+	}
+	if strings.TrimSpace(next.Title) == "" {
+		next.Title = current.Title
+	}
+	if next.Status == "" {
+		next.Status = current.Status
+	}
+	return next
 }
 
 func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {

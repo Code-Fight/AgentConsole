@@ -27,6 +27,53 @@ func (s *Store) ReplaceSnapshot(machineID string, threads []domain.Thread, envir
 	s.environmentByMachine[machineID] = cloneEnvironment(environment)
 }
 
+func (s *Store) UpsertThread(machineID string, thread domain.Thread) {
+	if s == nil || machineID == "" || thread.ThreadID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if thread.MachineID == "" {
+		thread.MachineID = machineID
+	}
+
+	items := cloneThreads(s.threadsByMachine[machineID])
+	replaced := false
+	for idx := range items {
+		if items[idx].ThreadID != thread.ThreadID {
+			continue
+		}
+		items[idx] = thread
+		replaced = true
+		break
+	}
+	if !replaced {
+		items = append(items, thread)
+	}
+	s.threadsByMachine[machineID] = items
+}
+
+func (s *Store) RemoveThread(machineID string, threadID string) {
+	if s == nil || machineID == "" || threadID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	items := s.threadsByMachine[machineID]
+	filtered := make([]domain.Thread, 0, len(items))
+	for _, thread := range items {
+		if thread.ThreadID == threadID {
+			continue
+		}
+		filtered = append(filtered, thread)
+	}
+	s.threadsByMachine[machineID] = filtered
+}
+
 func (s *Store) ClearMachine(machineID string) {
 	if machineID == "" {
 		return

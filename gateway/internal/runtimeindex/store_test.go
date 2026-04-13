@@ -198,3 +198,53 @@ func TestStoreMarkMachineUnknownPreservesThreads(t *testing.T) {
 		t.Fatalf("expected machine-b thread to remain active, got %+v", threads)
 	}
 }
+
+func TestStoreUpsertAndRemoveThread(t *testing.T) {
+	store := NewStore()
+
+	store.UpsertThread("machine-a", domain.Thread{
+		ThreadID:  "thread-a-1",
+		MachineID: "machine-a",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "One",
+	})
+	store.UpsertThread("machine-a", domain.Thread{
+		ThreadID:  "thread-a-2",
+		MachineID: "machine-a",
+		Status:    domain.ThreadStatusActive,
+		Title:     "Two",
+	})
+
+	threads := store.Threads()
+	if len(threads) != 2 {
+		t.Fatalf("expected 2 threads after upsert, got %d", len(threads))
+	}
+
+	store.UpsertThread("machine-a", domain.Thread{
+		ThreadID:  "thread-a-2",
+		MachineID: "machine-a",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Two updated",
+	})
+	threads = store.Threads()
+	if len(threads) != 2 {
+		t.Fatalf("expected 2 threads after replacement, got %d", len(threads))
+	}
+
+	var updated domain.Thread
+	for _, thread := range threads {
+		if thread.ThreadID == "thread-a-2" {
+			updated = thread
+			break
+		}
+	}
+	if updated.Status != domain.ThreadStatusIdle || updated.Title != "Two updated" {
+		t.Fatalf("unexpected updated thread: %+v", updated)
+	}
+
+	store.RemoveThread("machine-a", "thread-a-1")
+	threads = store.Threads()
+	if len(threads) != 1 || threads[0].ThreadID != "thread-a-2" {
+		t.Fatalf("unexpected threads after remove: %+v", threads)
+	}
+}

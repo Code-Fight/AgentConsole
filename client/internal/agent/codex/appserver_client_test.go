@@ -135,6 +135,124 @@ func TestClientListThreads(t *testing.T) {
 	}
 }
 
+func TestClientListThreadsIncludesRecentlyCreatedThreadWhenListLagsBehind(t *testing.T) {
+	var calls []string
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			switch method {
+			case "thread/start":
+				response := out.(*threadStartResponse)
+				response.Thread = threadRecord{
+					ID:     "thread-1",
+					Name:   "Investigate flaky test",
+					Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+				}
+			case "thread/list":
+				response := out.(*threadListResponse)
+				response.Data = nil
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	thread, err := client.CreateThread(agenttypes.CreateThreadParams{Title: "Investigate flaky test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.ThreadID != "thread-1" {
+		t.Fatalf("unexpected created thread: %+v", thread)
+	}
+
+	threads, err := client.ListThreads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].ThreadID != "thread-1" {
+		t.Fatalf("expected cached thread to remain visible, got %+v", threads)
+	}
+	if len(calls) != 2 || calls[0] != "thread/start" || calls[1] != "thread/list" {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+}
+
+func TestClientCreateThreadFallsBackToRequestedTitleWhenResponseIsBlank(t *testing.T) {
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			if method != "thread/start" {
+				t.Fatalf("unexpected method: %s", method)
+			}
+			response := out.(*threadStartResponse)
+			response.Thread = threadRecord{
+				ID:     "thread-blank-title",
+				Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	thread, err := client.CreateThread(agenttypes.CreateThreadParams{Title: "Investigate flaky test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if thread.Title != "Investigate flaky test" {
+		t.Fatalf("expected requested title fallback, got %+v", thread)
+	}
+}
+
+func TestClientListThreadsPreservesCachedTitleWhenListEntryIsBlank(t *testing.T) {
+	var calls []string
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			switch method {
+			case "thread/start":
+				response := out.(*threadStartResponse)
+				response.Thread = threadRecord{
+					ID:     "thread-1",
+					Name:   "Investigate flaky test",
+					Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+				}
+			case "thread/list":
+				response := out.(*threadListResponse)
+				response.Data = []threadRecord{
+					{
+						ID:     "thread-1",
+						Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+					},
+				}
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	if _, err := client.CreateThread(agenttypes.CreateThreadParams{Title: "Investigate flaky test"}); err != nil {
+		t.Fatal(err)
+	}
+
+	threads, err := client.ListThreads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 {
+		t.Fatalf("unexpected thread count: %d", len(threads))
+	}
+	if threads[0].Title != "Investigate flaky test" {
+		t.Fatalf("expected cached title to be preserved, got %+v", threads[0])
+	}
+	if len(calls) != 2 || calls[0] != "thread/start" || calls[1] != "thread/list" {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+}
+
 func TestClientListEnvironment(t *testing.T) {
 	tests := []struct {
 		name    string

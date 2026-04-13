@@ -1,13 +1,30 @@
 .DS_Store
-node_modules
-dist
-coverage
-playwright-report
-.superpowers
-bin
+
+# Node / frontend artifacts
+node_modules/
+dist/
+coverage/
+playwright-report/
 *.tsbuildinfo
-console/node_modules
-console/dist
-console/coverage
-console/playwright-report
-testenv/settings-e2e/.tmp
+console/node_modules/
+console/dist/
+console/coverage/
+console/playwright-report/
+
+# Go build and coverage artifacts
+bin/
+*.coverprofile
+coverage.out
+cover.out
+
+# Local runtime data
+data/
+
+# Test environment temp outputs
+testenv/*/.tmp/
+
+# Local tool state
+.superpowers/
+
+# Misc generated logs
+*.log
