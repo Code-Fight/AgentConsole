@@ -1,9 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { AppProviders } from "./app/providers";
-import { appRouter } from "./app/router";
-import "./styles.css";
-import "./design/styles/index.css";
+import { DesignSourceAppRoot } from "./design-host/app-root";
+import "./design-source/styles/index.css";
 
 const rootElement = document.getElementById("root");
 
@@ -13,6 +11,6 @@ if (!rootElement) {
 
 createRoot(rootElement).render(
   <StrictMode>
-    <AppProviders router={appRouter} />
+    <DesignSourceAppRoot />
   </StrictMode>,
 );
