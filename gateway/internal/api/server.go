@@ -387,8 +387,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		preferences, _, _ := settingsStore.GetConsolePreferences()
-		writeJSON(w, http.StatusOK, map[string]any{"preferences": preferences})
+		writeJSON(w, http.StatusOK, map[string]any{"preferences": req.Preferences})
 	})
 
 	mux.HandleFunc("GET /settings/agents/{agentType}/global", func(w http.ResponseWriter, r *http.Request) {

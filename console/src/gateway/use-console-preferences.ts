@@ -16,6 +16,7 @@ const emptyPreferences: ConsolePreferences = {
 
 export function useConsolePreferences() {
   const [preferences, setPreferences] = useState<ConsolePreferences | null>(null);
+  const [hasLoaded, setHasLoaded] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +27,7 @@ export function useConsolePreferences() {
       const response = await http<ConsolePreferencesResponse>("/settings/console");
       setPreferences(response.preferences);
       setError(null);
+      setHasLoaded(true);
     } catch (loadError) {
       setError(
         loadError instanceof Error ? loadError.message : "Unable to load console preferences.",
@@ -53,6 +55,7 @@ export function useConsolePreferences() {
         });
         setPreferences(response.preferences);
         setError(null);
+        setHasLoaded(true);
         return response.preferences;
       } catch (saveError) {
         setError(
@@ -74,10 +77,15 @@ export function useConsolePreferences() {
     [preferences, savePreferences],
   );
 
-  const normalized = useMemo(
-    () => preferences ?? (isLoading ? null : emptyPreferences),
-    [preferences, isLoading],
-  );
+  const normalized = useMemo(() => {
+    if (preferences) {
+      return preferences;
+    }
+    if (error) {
+      return null;
+    }
+    return hasLoaded ? emptyPreferences : null;
+  }, [preferences, error, hasLoaded]);
 
   return {
     preferences: normalized,

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -1385,6 +1386,61 @@ func TestServerSettingsEndpointsManageGlobalAndMachineDocuments(t *testing.T) {
 	}
 	if fallbackAssignment.MachineOverride != nil || !fallbackAssignment.UsesGlobalDefault || fallbackAssignment.GlobalDefault == nil {
 		t.Fatalf("expected fallback to global default, got %+v", fallbackAssignment)
+	}
+}
+
+type consoleSettingsErrorStore struct {
+	*settings.MemoryStore
+	getErr error
+}
+
+func (s *consoleSettingsErrorStore) GetConsolePreferences() (domain.ConsolePreferences, bool, error) {
+	if s.getErr != nil {
+		return domain.ConsolePreferences{}, false, s.getErr
+	}
+	return s.MemoryStore.GetConsolePreferences()
+}
+
+func TestConsoleSettingsPutEchoesRequestWhenReadbackFails(t *testing.T) {
+	settingsStore := &consoleSettingsErrorStore{
+		MemoryStore: settings.NewMemoryStore([]domain.AgentDescriptor{
+			{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+		}),
+		getErr: errors.New("read failed"),
+	}
+	handler := NewServerWithSettings(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, settingsStore, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPut, "/settings/console", bytes.NewBufferString(`{
+  "preferences": {
+    "consoleUrl": "http://localhost:3100",
+    "apiKey": "test-key",
+    "profile": "dev",
+    "safetyPolicy": "strict",
+    "lastThreadId": "thread-123"
+  }
+}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("console settings put returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var putBody struct {
+		Preferences *struct {
+			ConsoleURL   string `json:"consoleUrl"`
+			APIKey       string `json:"apiKey"`
+			Profile      string `json:"profile"`
+			SafetyPolicy string `json:"safetyPolicy"`
+			LastThreadID string `json:"lastThreadId"`
+		} `json:"preferences"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &putBody); err != nil {
+		t.Fatalf("invalid console settings json: %v", err)
+	}
+	if putBody.Preferences == nil || putBody.Preferences.LastThreadID != "thread-123" {
+		t.Fatalf("unexpected console preferences: %+v", putBody.Preferences)
 	}
 }
 

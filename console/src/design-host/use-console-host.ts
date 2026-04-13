@@ -244,6 +244,7 @@ export function useConsoleHost({
           return;
         }
         if (restoredThreadId === threadId) {
+          await updatePreferences({ lastThreadId: "" });
           navigate("/");
         }
       }

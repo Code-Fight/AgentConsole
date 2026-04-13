@@ -178,6 +178,11 @@ test("does not rely on local mock assistant replies in the active workspace", as
 
   render(<DesignSourceAppRoot />);
 
+  await waitFor(() => {
+    const paths = fetchSpy.mock.calls.map(([input]) => String(input));
+    expect(paths).toContain("/capabilities");
+  });
+
   const [promptInput] = await screen.findAllByPlaceholderText(/发送指令/);
   fireEvent.change(promptInput, { target: { value: "Ping from test" } });
   fireEvent.keyDown(promptInput, { key: "Enter", code: "Enter", charCode: 13 });
@@ -306,4 +311,63 @@ test("surfaces system error thread status instead of treating it as completed", 
   render(<DesignSourceAppRoot />);
 
   expect((await screen.findAllByText("异常")).length).toBeGreaterThan(0);
+});
+
+test("clears persisted last thread when restore fails", async () => {
+  const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+
+    if (path === "/capabilities") {
+      return jsonResponse(capabilitySnapshot);
+    }
+
+    if (path === "/settings/console" && init?.method === "PUT") {
+      const body = init.body ? JSON.parse(String(init.body)) : { preferences: null };
+      return jsonResponse(body);
+    }
+
+    if (path === "/settings/console") {
+      return jsonResponse({
+        preferences: {
+          consoleUrl: "",
+          apiKey: "",
+          profile: "",
+          safetyPolicy: "",
+          lastThreadId: "missing-thread",
+        },
+      });
+    }
+
+    if (path === "/threads") {
+      return jsonResponse({ items: [] });
+    }
+
+    if (path === "/machines") {
+      return jsonResponse({ items: [] });
+    }
+
+    if (path === "/threads/missing-thread") {
+      return new Response("not found", { status: 404 });
+    }
+
+    throw new Error(`unexpected fetch: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchSpy);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(<DesignSourceAppRoot />);
+
+  await waitFor(() => {
+    const putCall = fetchSpy.mock.calls.find(
+      ([input, init]) => String(input) === "/settings/console" && init?.method === "PUT",
+    );
+    expect(putCall).toBeTruthy();
+    const body = putCall?.[1]?.body ? JSON.parse(String(putCall[1]?.body)) : null;
+    expect(body?.preferences?.lastThreadId).toBe("");
+  });
+
+  await waitFor(() => {
+    expect(window.location.pathname).toBe("/");
+  });
 });
