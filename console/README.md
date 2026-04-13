@@ -51,6 +51,34 @@ The desired workflow is:
 
 That is the core reason this structure exists.
 
+## Project Skill
+
+This repo includes a local skill for repeating the same update flow:
+
+- Path: [`../.codex/skills/design-source-sync/SKILL.md`](/Users/zfcode/Documents/DEV/CodingAgentGateway/.codex/skills/design-source-sync/SKILL.md)
+- Skill name: `design-source-sync`
+
+Use it whenever the latest generated design source needs to be pulled into `console/src/design-source/` again.
+
+## How To Use The Skill
+
+Typical prompts:
+
+```text
+Use the design-source-sync skill and refresh the latest design source into console/src/design-source
+```
+
+```text
+Use design-source-sync to sync the newest generated design code into the console
+```
+
+The skill captures the standard workflow:
+
+1. replace files under `src/design-source/`
+2. keep `src/design-host/` as the minimal compatibility layer
+3. avoid pushing Gateway logic into the imported design code
+4. rerun build and verification
+
 ## Capability Policy
 
 Gateway capability policy still belongs in [`src/gateway/capabilities.ts`](/Users/zfcode/Documents/DEV/CodingAgentGateway/console/src/gateway/capabilities.ts), but it should only control integration behavior outside the design source.
