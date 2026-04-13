@@ -28,12 +28,14 @@ export interface ConsoleMessage {
   terminalOutput?: string;
 }
 
+export type ConsoleThreadStatus = ThreadSummary["status"];
+
 export interface ConsoleSession {
   id: string;
   title: string;
   agentName: string;
   model: string;
-  status: "active" | "idle" | "completed";
+  status: ConsoleThreadStatus;
   lastActivity: string;
   messages: ConsoleMessage[];
 }
@@ -47,12 +49,13 @@ export interface ConsoleAgentInfo {
   port: number;
 }
 
+export type ConsoleMachineStatus = MachineSummary["status"];
+
 export interface ConsoleMachine {
   id: string;
   name: string;
-  host: string;
-  os: string;
-  status: "online" | "offline";
+  status: ConsoleMachineStatus;
+  runtimeStatus: MachineSummary["runtimeStatus"];
   agents: ConsoleAgentInfo[];
   sessions: ConsoleSession[];
 }
@@ -108,7 +111,6 @@ export interface ConsoleHostViewModel {
   onCloseMobilePanel: () => void;
   onToggleSidebar: () => void;
   onExpandSidebar: () => void;
-  onRenameSession: (sessionId: string, newTitle: string) => void;
   onDeleteSession: (sessionId: string) => void;
   onCreateThread: (
     machineId: string,
@@ -116,35 +118,22 @@ export interface ConsoleHostViewModel {
     title: string,
     workDir: string,
   ) => void;
-  onInstallAgent: (machineId: string, agentType: string, agentName: string) => void;
-  onDeleteAgent: (machineId: string, agentId: string) => void;
-  onUpdateAgentConfig: (machineId: string, agentId: string, config: string) => void;
-  onAddSkill: (machineId: string, agentId: string, name: string, description: string) => void;
-  onAddMCP: (machineId: string, agentId: string, name: string, serverUrl: string) => void;
-  onAddPlugin: (machineId: string, agentId: string, name: string, version: string) => void;
-  onDeleteSkill: (skillId: string) => void;
-  onDeleteMCP: (mcpId: string) => void;
-  onDeletePlugin: (pluginId: string) => void;
+  onRenameSession?: (sessionId: string, newTitle: string) => void;
+  onInstallAgent?: (machineId: string, agentType: string, agentName: string) => void;
+  onDeleteAgent?: (machineId: string, agentId: string) => void;
+  onUpdateAgentConfig?: (machineId: string, agentId: string, config: string) => void;
+  onAddSkill?: (machineId: string, agentId: string, name: string, description: string) => void;
+  onAddMCP?: (machineId: string, agentId: string, name: string, serverUrl: string) => void;
+  onAddPlugin?: (machineId: string, agentId: string, name: string, version: string) => void;
+  onDeleteSkill?: (skillId: string) => void;
+  onDeleteMCP?: (mcpId: string) => void;
+  onDeletePlugin?: (pluginId: string) => void;
 }
 
 interface UseConsoleHostOptions {
   activePage: AppPage;
   threadId: string | null;
   navigate: (path: string) => void;
-}
-
-function toConsoleSessionStatus(status: ThreadSummary["status"]): ConsoleSession["status"] {
-  if (status === "active") {
-    return "active";
-  }
-  if (status === "idle") {
-    return "idle";
-  }
-  return "completed";
-}
-
-function toConsoleMachineStatus(status: MachineSummary["status"]): ConsoleMachine["status"] {
-  return status === "online" ? "online" : "offline";
 }
 
 function formatTimestamp(): string {
@@ -166,16 +155,17 @@ export function useConsoleHost({
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   const loadHubData = useCallback(async () => {
-    try {
-      const [threadResponse, machineResponse] = await Promise.all([
-        http<ThreadListResponse>("/threads"),
-        http<MachineListResponse>("/machines"),
-      ]);
-      setThreads(threadResponse.items);
-      setMachines(machineResponse.items);
-    } catch {
-      setThreads([]);
-      setMachines([]);
+    const [threadResult, machineResult] = await Promise.allSettled([
+      http<ThreadListResponse>("/threads"),
+      http<MachineListResponse>("/machines"),
+    ]);
+
+    if (threadResult.status === "fulfilled") {
+      setThreads(threadResult.value.items);
+    }
+
+    if (machineResult.status === "fulfilled") {
+      setMachines(machineResult.value.items);
     }
   }, []);
 
@@ -236,7 +226,7 @@ export function useConsoleHost({
         title: thread.title || thread.threadId,
         agentName: agent.name,
         model: agent.model,
-        status: toConsoleSessionStatus(thread.status),
+        status: thread.status,
         lastActivity: formatThreadStatus(thread.status),
         messages: thread.threadId === threadId ? workspaceMessages : [],
       }));
@@ -244,9 +234,8 @@ export function useConsoleHost({
       return {
         id: machine.id,
         name: machine.name || machine.id,
-        host: `http://${machine.id}`,
-        os: machine.runtimeStatus ?? "unknown",
-        status: toConsoleMachineStatus(machine.status),
+        status: machine.status,
+        runtimeStatus: machine.runtimeStatus ?? "unknown",
         agents: [agent],
         sessions,
       };
@@ -369,17 +358,7 @@ export function useConsoleHost({
     onCloseMobilePanel: () => setMobilePanelOpen(false),
     onToggleSidebar: () => setSidebarCollapsed((current) => !current),
     onExpandSidebar: () => setSidebarCollapsed(false),
-    onRenameSession: () => {},
     onDeleteSession: handleDeleteSession,
     onCreateThread: handleCreateThread,
-    onInstallAgent: () => {},
-    onDeleteAgent: () => {},
-    onUpdateAgentConfig: () => {},
-    onAddSkill: () => {},
-    onAddMCP: () => {},
-    onAddPlugin: () => {},
-    onDeleteSkill: () => {},
-    onDeleteMCP: () => {},
-    onDeletePlugin: () => {},
   };
 }

@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
 import { DesignSourceAppRoot } from "../design-host/app-root";
 
@@ -12,6 +12,7 @@ class FakeWebSocket {
 }
 
 beforeEach(() => {
+  window.history.pushState({}, "", "/");
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
     value: vi.fn(),
     writable: true,
@@ -59,9 +60,7 @@ test("loads gateway thread and machine lists for the active console shell", asyn
 test("does not rely on local mock assistant replies in the active workspace", async () => {
   window.history.pushState({}, "", "/threads/thread-1");
 
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
 
       if (path === "/threads") {
@@ -154,20 +153,152 @@ test("does not rely on local mock assistant replies in the active workspace", as
       }
 
       throw new Error(`unexpected fetch: ${path}`);
+    });
+  vi.stubGlobal("fetch", fetchSpy);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(<DesignSourceAppRoot />);
+
+  const [promptInput] = await screen.findAllByPlaceholderText(/发送指令/);
+  fireEvent.change(promptInput, { target: { value: "Ping from test" } });
+  fireEvent.keyDown(promptInput, { key: "Enter", code: "Enter", charCode: 13 });
+
+  await waitFor(() => {
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/threads/thread-1/turns",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+  expect(screen.queryByText(/收到你的指令/)).not.toBeInTheDocument();
+});
+
+test("keeps thread list when machine load fails", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+
+      if (path === "/threads") {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                threadId: "thread-2",
+                machineId: "machine-2",
+                status: "idle",
+                title: "Partial load thread",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (path === "/machines") {
+        throw new Error("network down");
+      }
+
+      throw new Error(`unexpected fetch: ${path}`);
     }),
   );
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
   render(<DesignSourceAppRoot />);
 
-  const [promptInput] = await screen.findAllByPlaceholderText(/发送指令/);
-  vi.useFakeTimers();
-  fireEvent.change(promptInput, { target: { value: "Ping from test" } });
-  fireEvent.keyDown(promptInput, { key: "Enter", code: "Enter", charCode: 13 });
+  expect(await screen.findByText("Partial load thread")).toBeInTheDocument();
+});
 
-  act(() => {
-    vi.advanceTimersByTime(2000);
-  });
+test("surfaces system error thread status instead of treating it as completed", async () => {
+  window.history.pushState({}, "", "/threads/thread-3");
 
-  expect(screen.queryByText(/收到你的指令/)).not.toBeInTheDocument();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      const path = String(input);
+
+      if (path === "/threads") {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                threadId: "thread-3",
+                machineId: "machine-3",
+                status: "systemError",
+                title: "System error thread",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (path === "/machines") {
+        return new Response(
+          JSON.stringify({
+            items: [
+              {
+                id: "machine-3",
+                name: "Machine Three",
+                status: "reconnecting",
+                runtimeStatus: "running",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (path === "/threads/thread-3") {
+        return new Response(
+          JSON.stringify({
+            thread: {
+              threadId: "thread-3",
+              machineId: "machine-3",
+              status: "systemError",
+              title: "System error thread",
+            },
+            activeTurnId: null,
+            pendingApprovals: [],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (path === "/machines/machine-3") {
+        return new Response(
+          JSON.stringify({
+            machine: {
+              id: "machine-3",
+              name: "Machine Three",
+              status: "reconnecting",
+              runtimeStatus: "running",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      throw new Error(`unexpected fetch: ${path}`);
+    }),
+  );
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(<DesignSourceAppRoot />);
+
+  expect((await screen.findAllByText("异常")).length).toBeGreaterThan(0);
 });

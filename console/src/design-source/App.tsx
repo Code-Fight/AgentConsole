@@ -13,6 +13,7 @@ import Environment from "./components/Environment";
 import SessionChat from "./components/SessionChat";
 import MachinePanel from "./components/MachinePanel";
 import type { ConsoleHostViewModel } from "../design-host/use-console-host";
+import type { Machine as ManagementMachine } from "./data/mockData";
 
 type AppProps = ConsoleHostViewModel;
 
@@ -50,6 +51,27 @@ export default function App({
   onDeleteMCP,
   onDeletePlugin,
 }: AppProps) {
+  const managementMachines: ManagementMachine[] = machines.map((machine) => {
+    const statusLabel =
+      machine.status === "reconnecting"
+        ? "重连中"
+        : machine.status === "unknown"
+          ? "未知"
+          : "";
+    const name = statusLabel
+      ? `${machine.name || machine.id} (${statusLabel})`
+      : machine.name || machine.id;
+    const status: ManagementMachine["status"] =
+      machine.status === "online" || machine.status === "offline" ? machine.status : "offline";
+
+    return {
+      ...machine,
+      name,
+      status,
+      host: "未提供",
+      os: "未提供",
+    };
+  });
 
   const renderMainContent = () => {
     switch (activePage) {
@@ -81,7 +103,7 @@ export default function App({
       case "machines":
         return (
           <Machines
-            machines={machines}
+            machines={managementMachines}
             onInstallAgent={onInstallAgent}
             onDeleteAgent={onDeleteAgent}
             onUpdateAgentConfig={onUpdateAgentConfig}
@@ -90,7 +112,7 @@ export default function App({
       case "environment":
         return (
           <Environment
-            machines={machines}
+            machines={managementMachines}
             skills={skills}
             mcps={mcps}
             plugins={plugins}

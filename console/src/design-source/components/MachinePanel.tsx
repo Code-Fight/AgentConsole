@@ -40,6 +40,18 @@ const statusConfig = {
     label: "在线",
     icon: Wifi,
   },
+  reconnecting: {
+    dot: "bg-amber-400",
+    text: "text-amber-400",
+    label: "重连中",
+    icon: Wifi,
+  },
+  unknown: {
+    dot: "bg-zinc-500",
+    text: "text-zinc-500",
+    label: "未知",
+    icon: Server,
+  },
   offline: {
     dot: "bg-zinc-600",
     text: "text-zinc-500",
@@ -85,7 +97,7 @@ function MachineGroup({
           <div className="min-w-0 text-left">
             <div className="text-xs text-zinc-300 truncate leading-tight">{machine.name}</div>
             <div className="text-[10px] text-zinc-600 truncate leading-tight font-mono">
-              {machine.host.replace("http://", "")}
+              ID: {machine.id}
             </div>
           </div>
         </div>

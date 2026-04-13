@@ -16,6 +16,9 @@ const sessionStatusColor: Record<string, string> = {
   active: "bg-emerald-400",
   idle: "bg-zinc-600",
   completed: "bg-blue-400",
+  systemError: "bg-red-400",
+  notLoaded: "bg-amber-400",
+  unknown: "bg-zinc-500",
 };
 
 export default function ThreadItem({

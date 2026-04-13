@@ -244,11 +244,16 @@ export default function SessionChat({
     active: "text-emerald-400",
     idle: "text-zinc-500",
     completed: "text-blue-400",
+    systemError: "text-red-400",
+    notLoaded: "text-amber-400",
+    unknown: "text-zinc-500",
   }[session.status];
 
   const machineStatusDot = {
     online: "bg-emerald-400",
     offline: "bg-zinc-600",
+    reconnecting: "bg-amber-400",
+    unknown: "bg-zinc-500",
   }[machine.status];
 
   return (
@@ -275,9 +280,15 @@ export default function SessionChat({
               <span className={`text-xs ${statusColor}`}>
                 {session.status === "active"
                   ? "进行中"
-                  : session.status === "completed"
-                    ? "已完成"
-                    : "空闲"}
+                  : session.status === "idle"
+                    ? "空闲"
+                    : session.status === "completed"
+                      ? "已完成"
+                      : session.status === "systemError"
+                        ? "异常"
+                        : session.status === "notLoaded"
+                          ? "未加载"
+                          : "未知"}
               </span>
             </div>
             <span className="text-xs text-zinc-600 hidden md:block font-mono">{session.agentName}</span>
@@ -287,9 +298,9 @@ export default function SessionChat({
           </div>
         </div>
         <div className="hidden lg:flex items-center gap-4 mt-1.5">
-          <span className="text-xs text-zinc-600 font-mono">{machine.host}</span>
+          <span className="text-xs text-zinc-600 font-mono">ID: {machine.id}</span>
           <span className="text-zinc-700">·</span>
-          <span className="text-xs text-zinc-600">{machine.os}</span>
+          <span className="text-xs text-zinc-600">Runtime: {machine.runtimeStatus}</span>
           <span className="text-zinc-700">·</span>
           <span className="text-xs text-zinc-600">{machine.agents.length} agents</span>
         </div>
