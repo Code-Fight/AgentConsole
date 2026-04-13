@@ -58,10 +58,10 @@ test("shows the live load error without inventing a fallback thread", async () =
     expect(screen.queryByRole("link")).not.toBeInTheDocument();
   });
 
-  expect(screen.getByText("No threads available.")).toBeInTheDocument();
+  expect(screen.getByText("当前没有可用线程。")).toBeInTheDocument();
 });
 
-test("renders the thread status so stale threads remain explicit in the list", async () => {
+test("renders the design thread hub with live gateway thread data", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -114,8 +114,10 @@ test("renders the thread status so stale threads remain explicit in the list", a
     </MemoryRouter>,
   );
 
+  expect(await screen.findByRole("heading", { name: "Thread Hub" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Create thread" })).toBeInTheDocument();
   expect(await screen.findByRole("link", { name: "Investigate flaky test" })).toBeInTheDocument();
-  expect(screen.getByText("unknown")).toBeInTheDocument();
+  expect(screen.getByText("未知")).toBeInTheDocument();
 });
 
 test("refreshes threads when websocket thread.updated arrives", async () => {

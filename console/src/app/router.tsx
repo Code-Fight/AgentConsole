@@ -3,10 +3,10 @@ import {
   DesignAppShell,
   EnvironmentPageView,
   MachinesPageView,
-  SettingsPageView,
-  ThreadHubPage,
-  ThreadWorkspacePageView
+  SettingsPageView
 } from "../design";
+import { ThreadWorkspacePage } from "../pages/thread-workspace-page";
+import { ThreadsPage } from "../pages/threads-page";
 
 export const router = createBrowserRouter([
   {
@@ -15,7 +15,7 @@ export const router = createBrowserRouter([
     children: [
       {
         index: true,
-        element: <ThreadHubPage />
+        element: <ThreadsPage />
       },
       {
         path: "machines",
@@ -23,11 +23,11 @@ export const router = createBrowserRouter([
       },
       {
         path: "threads",
-        element: <ThreadHubPage />
+        element: <ThreadsPage />
       },
       {
         path: "threads/:threadId",
-        element: <ThreadWorkspacePageView />
+        element: <ThreadWorkspacePage />
       },
       {
         path: "environment",

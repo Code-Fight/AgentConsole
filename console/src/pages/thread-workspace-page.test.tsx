@@ -39,7 +39,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("submits a prompt and renders turn deltas for the current thread", async () => {
+test("maps gateway thread events into the design workspace view-model", async () => {
   const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") {
       return new Response(
@@ -87,6 +87,8 @@ test("submits a prompt and renders turn deltas for the current thread", async ()
       </Routes>
     </MemoryRouter>,
   );
+
+  expect(await screen.findByText("Waiting for live Gateway events.")).toBeInTheDocument();
 
   fireEvent.change(screen.getByRole("textbox", { name: "Prompt" }), {
     target: { value: "run tests" }
@@ -223,7 +225,7 @@ test("renders tool-user-input approval controls for approval.required events on 
     );
   });
 
-  expect(await screen.findByText("Approval required")).toBeInTheDocument();
+  expect(await screen.findByText("待处理审批")).toBeInTheDocument();
   expect(screen.getByText("Pick an option")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Accept" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Decline" })).toBeInTheDocument();
@@ -460,7 +462,7 @@ test("hydrates the active turn from thread detail so steer and interrupt remain 
     </MemoryRouter>,
   );
 
-  expect(await screen.findByText("Active turn: turn-active-1")).toBeInTheDocument();
+  expect(await screen.findByText("当前 Turn：turn-active-1")).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Send steer" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Interrupt turn" })).toBeInTheDocument();
 });
@@ -516,7 +518,7 @@ test("removes a pending approval when approval.resolved arrives for the current 
     );
   });
 
-  expect(await screen.findByText("Approval required")).toBeInTheDocument();
+  expect(await screen.findByText("待处理审批")).toBeInTheDocument();
 
   await act(async () => {
     socket.emitMessage(
@@ -536,7 +538,7 @@ test("removes a pending approval when approval.resolved arrives for the current 
   });
 
   await waitFor(() => {
-    expect(screen.queryByText("Approval required")).not.toBeInTheDocument();
+    expect(screen.queryByText("go test ./...")).not.toBeInTheDocument();
   });
 });
 
@@ -581,7 +583,7 @@ test("hydrates pending approvals from the initial thread detail fetch", async ()
     </MemoryRouter>,
   );
 
-  expect(await screen.findByText("Approval required")).toBeInTheDocument();
+  expect(await screen.findByText("待处理审批")).toBeInTheDocument();
   expect(screen.getByText("go test ./...")).toBeInTheDocument();
   expect(fetchMock).toHaveBeenCalledWith(
     "/threads/thread-1",
