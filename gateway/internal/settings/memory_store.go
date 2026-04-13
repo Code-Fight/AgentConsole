@@ -10,12 +10,13 @@ import (
 )
 
 type MemoryStore struct {
-	mu        sync.RWMutex
-	agents    []domain.AgentDescriptor
-	globals   map[domain.AgentType]domain.AgentConfigDocument
-	machines  map[string]map[domain.AgentType]domain.AgentConfigDocument
-	timeNow   func() time.Time
-	updatedBy string
+	mu                 sync.RWMutex
+	agents             []domain.AgentDescriptor
+	globals            map[domain.AgentType]domain.AgentConfigDocument
+	machines           map[string]map[domain.AgentType]domain.AgentConfigDocument
+	consolePreferences *domain.ConsolePreferences
+	timeNow            func() time.Time
+	updatedBy          string
 }
 
 func NewMemoryStore(agents []domain.AgentDescriptor) *MemoryStore {
@@ -106,13 +107,36 @@ func (s *MemoryStore) DeleteMachine(machineID string, agentType domain.AgentType
 	return nil
 }
 
+func (s *MemoryStore) GetConsolePreferences() (domain.ConsolePreferences, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.consolePreferences == nil {
+		return domain.ConsolePreferences{}, false, nil
+	}
+	return *s.consolePreferences, true, nil
+}
+
+func (s *MemoryStore) PutConsolePreferences(preferences domain.ConsolePreferences) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copyPreferences := preferences
+	s.consolePreferences = &copyPreferences
+	return nil
+}
+
 func (s *MemoryStore) snapshot() persistedState {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	var consolePreferences *domain.ConsolePreferences
+	if s.consolePreferences != nil {
+		copyPreferences := *s.consolePreferences
+		consolePreferences = &copyPreferences
+	}
 	return persistedState{
-		Agents:   append([]domain.AgentDescriptor(nil), s.agents...),
-		Globals:  cloneDocumentMap(s.globals),
-		Machines: cloneMachineDocumentMap(s.machines),
+		Agents:             append([]domain.AgentDescriptor(nil), s.agents...),
+		Globals:            cloneDocumentMap(s.globals),
+		Machines:           cloneMachineDocumentMap(s.machines),
+		ConsolePreferences: consolePreferences,
 	}
 }
 
@@ -122,6 +146,12 @@ func (s *MemoryStore) load(state persistedState) {
 	s.agents = append([]domain.AgentDescriptor(nil), state.Agents...)
 	s.globals = cloneDocumentMap(state.Globals)
 	s.machines = cloneMachineDocumentMap(state.Machines)
+	if state.ConsolePreferences != nil {
+		copyPreferences := *state.ConsolePreferences
+		s.consolePreferences = &copyPreferences
+	} else {
+		s.consolePreferences = nil
+	}
 }
 
 func (s *MemoryStore) stampDocument(agentType domain.AgentType, document domain.AgentConfigDocument, currentVersion int64) domain.AgentConfigDocument {
@@ -138,9 +168,10 @@ func (s *MemoryStore) stampDocument(agentType domain.AgentType, document domain.
 }
 
 type persistedState struct {
-	Agents   []domain.AgentDescriptor                                   `json:"agents"`
-	Globals  map[domain.AgentType]domain.AgentConfigDocument            `json:"globals"`
-	Machines map[string]map[domain.AgentType]domain.AgentConfigDocument `json:"machines"`
+	Agents             []domain.AgentDescriptor                                   `json:"agents"`
+	Globals            map[domain.AgentType]domain.AgentConfigDocument            `json:"globals"`
+	Machines           map[string]map[domain.AgentType]domain.AgentConfigDocument `json:"machines"`
+	ConsolePreferences *domain.ConsolePreferences                                 `json:"consolePreferences,omitempty"`
 }
 
 func cloneDocumentMap(source map[domain.AgentType]domain.AgentConfigDocument) map[domain.AgentType]domain.AgentConfigDocument {

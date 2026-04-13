@@ -9,4 +9,6 @@ type Store interface {
 	GetMachine(machineID string, agentType domain.AgentType) (domain.AgentConfigDocument, bool, error)
 	PutMachine(machineID string, agentType domain.AgentType, document domain.AgentConfigDocument) error
 	DeleteMachine(machineID string, agentType domain.AgentType) error
+	GetConsolePreferences() (domain.ConsolePreferences, bool, error)
+	PutConsolePreferences(preferences domain.ConsolePreferences) error
 }

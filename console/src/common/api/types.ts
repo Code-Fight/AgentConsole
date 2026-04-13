@@ -51,6 +51,46 @@ export interface AgentConfigDocument {
   version?: number;
 }
 
+export interface CapabilitySnapshot {
+  threadHub: boolean;
+  threadWorkspace: boolean;
+  approvals: boolean;
+  startTurn: boolean;
+  steerTurn: boolean;
+  interruptTurn: boolean;
+  machineInstallAgent: boolean;
+  machineRemoveAgent: boolean;
+  environmentSyncCatalog: boolean;
+  environmentRestartBridge: boolean;
+  environmentOpenMarketplace: boolean;
+  environmentMutateResources: boolean;
+  environmentWriteMcp: boolean;
+  settingsEditGatewayEndpoint: boolean;
+  settingsEditConsoleProfile: boolean;
+  settingsEditSafetyPolicy: boolean;
+  settingsGlobalDefault: boolean;
+  settingsMachineOverride: boolean;
+  settingsApplyMachine: boolean;
+  dashboardMetrics: boolean;
+  agentLifecycle: boolean;
+}
+
+export interface ConsolePreferences {
+  consoleUrl: string;
+  apiKey: string;
+  profile: string;
+  safetyPolicy: string;
+  lastThreadId: string;
+}
+
+export interface ConsolePreferencesResponse {
+  preferences: ConsolePreferences | null;
+}
+
+export interface ConsolePreferencesRequest {
+  preferences: ConsolePreferences;
+}
+
 export interface MachineAgentConfigAssignment {
   machineId: string;
   agentType: AgentType;

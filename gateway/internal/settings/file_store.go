@@ -50,6 +50,13 @@ func (s *FileStore) DeleteMachine(machineID string, agentType domain.AgentType) 
 	return s.persist()
 }
 
+func (s *FileStore) PutConsolePreferences(preferences domain.ConsolePreferences) error {
+	if err := s.MemoryStore.PutConsolePreferences(preferences); err != nil {
+		return err
+	}
+	return s.persist()
+}
+
 func (s *FileStore) loadFromFile() error {
 	if _, err := os.Stat(s.path); err != nil {
 		if os.IsNotExist(err) {

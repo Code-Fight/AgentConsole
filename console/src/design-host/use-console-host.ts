@@ -1,14 +1,17 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { http } from "../common/api/http";
+import { buildThreadApiPath, http } from "../common/api/http";
 import type {
   CreateThreadResponse,
   MachineListResponse,
   MachineSummary,
   ThreadDeleteResponse,
+  ThreadDetailResponse,
   ThreadListResponse,
   ThreadSummary,
 } from "../common/api/types";
+import { useCapabilities } from "../gateway/capabilities";
 import { formatThreadStatus } from "../gateway/thread-view-model";
+import { useConsolePreferences } from "../gateway/use-console-preferences";
 import { useThreadWorkspace } from "../gateway/use-thread-workspace";
 
 export type AppPage = "threads" | "machines" | "environment" | "settings";
@@ -153,6 +156,17 @@ export function useConsoleHost({
   const [machines, setMachines] = useState<MachineSummary[]>([]);
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [restoreAttempted, setRestoreAttempted] = useState(false);
+  const [restoredThreadId, setRestoredThreadId] = useState<string | null>(null);
+  const [lastVerifiedThreadId, setLastVerifiedThreadId] = useState<string | null>(null);
+
+  useCapabilities();
+  const {
+    preferences,
+    isLoading: preferencesLoading,
+    error: preferencesError,
+    updatePreferences,
+  } = useConsolePreferences();
 
   const loadHubData = useCallback(async () => {
     const [threadResult, machineResult] = await Promise.allSettled([
@@ -179,7 +193,76 @@ export function useConsoleHost({
     }
   }, [activePage]);
 
+  useEffect(() => {
+    if (threadId || restoreAttempted || preferencesLoading) {
+      return;
+    }
+
+    if (preferencesError) {
+      setRestoreAttempted(true);
+      return;
+    }
+
+    const lastThreadId = preferences?.lastThreadId?.trim();
+    if (!lastThreadId) {
+      setRestoreAttempted(true);
+      return;
+    }
+
+    setRestoreAttempted(true);
+    setRestoredThreadId(lastThreadId);
+    navigate(`/threads/${lastThreadId}`);
+  }, [
+    threadId,
+    restoreAttempted,
+    preferencesLoading,
+    preferencesError,
+    preferences,
+    navigate,
+  ]);
+
   const workspace = useThreadWorkspace(threadId ?? "");
+
+  useEffect(() => {
+    if (!threadId || lastVerifiedThreadId === threadId || preferencesLoading || preferencesError) {
+      return;
+    }
+
+    let active = true;
+    const verifyThread = async () => {
+      try {
+        await http<ThreadDetailResponse>(buildThreadApiPath(threadId));
+        if (!active) {
+          return;
+        }
+        setLastVerifiedThreadId(threadId);
+        if (preferences?.lastThreadId !== threadId) {
+          await updatePreferences({ lastThreadId: threadId });
+        }
+      } catch {
+        if (!active) {
+          return;
+        }
+        if (restoredThreadId === threadId) {
+          navigate("/");
+        }
+      }
+    };
+
+    void verifyThread();
+    return () => {
+      active = false;
+    };
+  }, [
+    threadId,
+    lastVerifiedThreadId,
+    preferencesLoading,
+    preferencesError,
+    preferences,
+    updatePreferences,
+    restoredThreadId,
+    navigate,
+  ]);
 
   const workspaceMessages = useMemo<ConsoleMessage[]>(() => {
     if (!threadId) {

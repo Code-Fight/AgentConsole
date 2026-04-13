@@ -71,6 +71,10 @@ type configDocumentRequest struct {
 	Content string `json:"content"`
 }
 
+type consoleSettingsRequest struct {
+	Preferences *domain.ConsolePreferences `json:"preferences"`
+}
+
 type settingsApplyResponse struct {
 	MachineID string `json:"machineId"`
 	AgentType string `json:"agentType"`
@@ -252,6 +256,50 @@ func validateTOMLContent(content string) error {
 	return toml.Unmarshal([]byte(content), &document)
 }
 
+func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store) domain.CapabilitySnapshot {
+	hasSender := sender != nil
+	hasRegistry := reg != nil
+	hasRuntimeIndex := idx != nil
+	hasRouter := router != nil
+	hasSettings := settingsStore != nil
+
+	approvals := false
+	if hasSender {
+		if _, ok := sender.(approvalRequestResolver); ok {
+			approvals = true
+		}
+	}
+
+	threadRouting := hasRouter || hasRuntimeIndex
+	threadHub := hasRuntimeIndex && hasRegistry
+	threadWorkspace := hasRuntimeIndex || (hasSender && hasRouter)
+	environmentMutate := hasSender && hasRuntimeIndex
+
+	return domain.CapabilitySnapshot{
+		ThreadHub:                   threadHub,
+		ThreadWorkspace:             threadWorkspace,
+		Approvals:                   approvals,
+		StartTurn:                   hasSender && threadRouting,
+		SteerTurn:                   hasSender && threadRouting,
+		InterruptTurn:               hasSender && threadRouting,
+		MachineInstallAgent:         false,
+		MachineRemoveAgent:          false,
+		EnvironmentSyncCatalog:      false,
+		EnvironmentRestartBridge:    false,
+		EnvironmentOpenMarketplace:  false,
+		EnvironmentMutateResources:  environmentMutate,
+		EnvironmentWriteMcp:         hasSender,
+		SettingsEditGatewayEndpoint: false,
+		SettingsEditConsoleProfile:  false,
+		SettingsEditSafetyPolicy:    false,
+		SettingsGlobalDefault:       hasSettings,
+		SettingsMachineOverride:     hasSettings,
+		SettingsApplyMachine:        hasSettings && hasSender,
+		DashboardMetrics:            false,
+		AgentLifecycle:              false,
+	}
+}
+
 func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, clientWS http.Handler, consoleWS http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	var deletedThreadsMu sync.RWMutex
@@ -295,8 +343,52 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 	})
 
+	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, http.StatusOK, buildCapabilitySnapshot(reg, idx, router, sender, settingsStore))
+	})
+
 	mux.HandleFunc("GET /settings/agents", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": settingsStore.ListAgentTypes()})
+	})
+
+	mux.HandleFunc("GET /settings/console", func(w http.ResponseWriter, _ *http.Request) {
+		preferences, ok, err := settingsStore.GetConsolePreferences()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			writeJSON(w, http.StatusOK, map[string]any{"preferences": nil})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"preferences": preferences})
+	})
+
+	mux.HandleFunc("PUT /settings/console", func(w http.ResponseWriter, r *http.Request) {
+		if r.Body == nil {
+			http.Error(w, "preferences is required", http.StatusBadRequest)
+			return
+		}
+
+		var req consoleSettingsRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err == io.EOF {
+				http.Error(w, "preferences is required", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if req.Preferences == nil {
+			http.Error(w, "preferences is required", http.StatusBadRequest)
+			return
+		}
+		if err := settingsStore.PutConsolePreferences(*req.Preferences); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		preferences, _, _ := settingsStore.GetConsolePreferences()
+		writeJSON(w, http.StatusOK, map[string]any{"preferences": preferences})
 	})
 
 	mux.HandleFunc("GET /settings/agents/{agentType}/global", func(w http.ResponseWriter, r *http.Request) {

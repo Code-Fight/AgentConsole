@@ -1388,6 +1388,210 @@ func TestServerSettingsEndpointsManageGlobalAndMachineDocuments(t *testing.T) {
 	}
 }
 
+func TestCapabilitiesEndpointReflectsDependencies(t *testing.T) {
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	handler := NewServerWithSettings(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		settingsStore,
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/capabilities", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capabilities returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		ThreadHub                   bool `json:"threadHub"`
+		ThreadWorkspace             bool `json:"threadWorkspace"`
+		Approvals                   bool `json:"approvals"`
+		StartTurn                   bool `json:"startTurn"`
+		SteerTurn                   bool `json:"steerTurn"`
+		InterruptTurn               bool `json:"interruptTurn"`
+		MachineInstallAgent         bool `json:"machineInstallAgent"`
+		MachineRemoveAgent          bool `json:"machineRemoveAgent"`
+		EnvironmentSyncCatalog      bool `json:"environmentSyncCatalog"`
+		EnvironmentRestartBridge    bool `json:"environmentRestartBridge"`
+		EnvironmentOpenMarketplace  bool `json:"environmentOpenMarketplace"`
+		EnvironmentMutateResources  bool `json:"environmentMutateResources"`
+		EnvironmentWriteMcp         bool `json:"environmentWriteMcp"`
+		SettingsEditGatewayEndpoint bool `json:"settingsEditGatewayEndpoint"`
+		SettingsEditConsoleProfile  bool `json:"settingsEditConsoleProfile"`
+		SettingsEditSafetyPolicy    bool `json:"settingsEditSafetyPolicy"`
+		SettingsGlobalDefault       bool `json:"settingsGlobalDefault"`
+		SettingsMachineOverride     bool `json:"settingsMachineOverride"`
+		SettingsApplyMachine        bool `json:"settingsApplyMachine"`
+		DashboardMetrics            bool `json:"dashboardMetrics"`
+		AgentLifecycle              bool `json:"agentLifecycle"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid capabilities json: %v", err)
+	}
+
+	if !body.ThreadHub || !body.ThreadWorkspace {
+		t.Fatalf("expected thread hub/workspace to be enabled: %+v", body)
+	}
+	if body.Approvals || body.StartTurn || body.SteerTurn || body.InterruptTurn {
+		t.Fatalf("expected command-driven capabilities to be disabled: %+v", body)
+	}
+	if body.EnvironmentMutateResources || body.EnvironmentWriteMcp {
+		t.Fatalf("expected environment write capabilities to be disabled: %+v", body)
+	}
+	if !body.SettingsGlobalDefault || !body.SettingsMachineOverride {
+		t.Fatalf("expected settings read/write capabilities to be enabled: %+v", body)
+	}
+	if body.SettingsApplyMachine {
+		t.Fatalf("expected settings apply to be disabled without sender: %+v", body)
+	}
+	if body.MachineInstallAgent || body.MachineRemoveAgent || body.DashboardMetrics || body.AgentLifecycle {
+		t.Fatalf("unexpected future capabilities enabled: %+v", body)
+	}
+}
+
+func TestCapabilitiesEndpointEnablesCommandBackedFeatures(t *testing.T) {
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	sender := &fakeCommandSender{
+		resolveApprovalMachine: func(requestID string) (string, bool) {
+			return "machine-01", true
+		},
+	}
+
+	handler := NewServerWithSettings(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		sender,
+		settingsStore,
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/capabilities", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("capabilities returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Approvals                  bool `json:"approvals"`
+		StartTurn                  bool `json:"startTurn"`
+		SteerTurn                  bool `json:"steerTurn"`
+		InterruptTurn              bool `json:"interruptTurn"`
+		EnvironmentMutateResources bool `json:"environmentMutateResources"`
+		EnvironmentWriteMcp        bool `json:"environmentWriteMcp"`
+		SettingsApplyMachine       bool `json:"settingsApplyMachine"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid capabilities json: %v", err)
+	}
+
+	if !body.Approvals || !body.StartTurn || !body.SteerTurn || !body.InterruptTurn {
+		t.Fatalf("expected command capabilities enabled: %+v", body)
+	}
+	if !body.EnvironmentMutateResources || !body.EnvironmentWriteMcp {
+		t.Fatalf("expected environment write capabilities enabled: %+v", body)
+	}
+	if !body.SettingsApplyMachine {
+		t.Fatalf("expected settings apply enabled: %+v", body)
+	}
+}
+
+func TestConsoleSettingsEndpointsPersistPreferences(t *testing.T) {
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	handler := NewServerWithSettings(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		settingsStore,
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/settings/console", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("console settings get returned %d", rec.Code)
+	}
+
+	var getBody struct {
+		Preferences *struct {
+			ConsoleURL   string `json:"consoleUrl"`
+			APIKey       string `json:"apiKey"`
+			Profile      string `json:"profile"`
+			SafetyPolicy string `json:"safetyPolicy"`
+			LastThreadID string `json:"lastThreadId"`
+		} `json:"preferences"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("invalid console settings json: %v", err)
+	}
+	if getBody.Preferences != nil {
+		t.Fatalf("expected empty console preferences, got %+v", getBody.Preferences)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/settings/console", bytes.NewBufferString(`{
+  "preferences": {
+    "consoleUrl": "http://localhost:3100",
+    "apiKey": "test-key",
+    "profile": "dev",
+    "safetyPolicy": "strict",
+    "lastThreadId": "thread-123"
+  }
+}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("console settings put returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var putBody struct {
+		Preferences *struct {
+			ConsoleURL   string `json:"consoleUrl"`
+			APIKey       string `json:"apiKey"`
+			Profile      string `json:"profile"`
+			SafetyPolicy string `json:"safetyPolicy"`
+			LastThreadID string `json:"lastThreadId"`
+		} `json:"preferences"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &putBody); err != nil {
+		t.Fatalf("invalid console settings json: %v", err)
+	}
+	if putBody.Preferences == nil || putBody.Preferences.LastThreadID != "thread-123" {
+		t.Fatalf("unexpected console preferences: %+v", putBody.Preferences)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/settings/console", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("console settings get returned %d", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &getBody); err != nil {
+		t.Fatalf("invalid console settings json: %v", err)
+	}
+	if getBody.Preferences == nil || getBody.Preferences.ConsoleURL != "http://localhost:3100" {
+		t.Fatalf("expected persisted console preferences, got %+v", getBody.Preferences)
+	}
+}
+
 func TestServerApplySettingsUsesMachineOverrideBeforeGlobalDefault(t *testing.T) {
 	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
 		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},

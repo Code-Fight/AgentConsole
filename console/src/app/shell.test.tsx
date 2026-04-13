@@ -11,6 +11,45 @@ class FakeWebSocket {
   removeEventListener() {}
 }
 
+const capabilitySnapshot = {
+  threadHub: true,
+  threadWorkspace: true,
+  approvals: true,
+  startTurn: true,
+  steerTurn: true,
+  interruptTurn: true,
+  machineInstallAgent: false,
+  machineRemoveAgent: false,
+  environmentSyncCatalog: false,
+  environmentRestartBridge: false,
+  environmentOpenMarketplace: false,
+  environmentMutateResources: true,
+  environmentWriteMcp: true,
+  settingsEditGatewayEndpoint: false,
+  settingsEditConsoleProfile: false,
+  settingsEditSafetyPolicy: false,
+  settingsGlobalDefault: true,
+  settingsMachineOverride: true,
+  settingsApplyMachine: true,
+  dashboardMetrics: false,
+  agentLifecycle: false,
+};
+
+function jsonResponse(payload: unknown) {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function handleConsoleSettings(init?: RequestInit) {
+  if (init?.method === "PUT") {
+    const body = init.body ? JSON.parse(String(init.body)) : { preferences: null };
+    return jsonResponse(body);
+  }
+  return jsonResponse({ preferences: null });
+}
+
 beforeEach(() => {
   window.history.pushState({}, "", "/");
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -28,18 +67,20 @@ test("loads gateway thread and machine lists for the active console shell", asyn
   const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
 
+    if (path === "/capabilities") {
+      return jsonResponse(capabilitySnapshot);
+    }
+
+    if (path === "/settings/console") {
+      return handleConsoleSettings();
+    }
+
     if (path === "/threads") {
-      return new Response(JSON.stringify({ items: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonResponse({ items: [] });
     }
 
     if (path === "/machines") {
-      return new Response(JSON.stringify({ items: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonResponse({ items: [] });
     }
 
     throw new Error(`unexpected fetch: ${path}`);
@@ -63,93 +104,71 @@ test("does not rely on local mock assistant replies in the active workspace", as
   const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
 
+      if (path === "/capabilities") {
+        return jsonResponse(capabilitySnapshot);
+      }
+
+      if (path === "/settings/console") {
+        return handleConsoleSettings(init);
+      }
+
       if (path === "/threads") {
-        return new Response(
-          JSON.stringify({
-            items: [
-              {
-                threadId: "thread-1",
-                machineId: "machine-1",
-                status: "active",
-                title: "Gateway Thread 1",
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }
-
-      if (path === "/machines") {
-        return new Response(
-          JSON.stringify({
-            items: [
-              {
-                id: "machine-1",
-                name: "Machine One",
-                status: "online",
-                runtimeStatus: "running",
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }
-
-      if (path === "/threads/thread-1") {
-        return new Response(
-          JSON.stringify({
-            thread: {
+        return jsonResponse({
+          items: [
+            {
               threadId: "thread-1",
               machineId: "machine-1",
               status: "active",
               title: "Gateway Thread 1",
             },
-            activeTurnId: null,
-            pendingApprovals: [],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+          ],
+        });
       }
 
-      if (path === "/machines/machine-1") {
-        return new Response(
-          JSON.stringify({
-            machine: {
+      if (path === "/machines") {
+        return jsonResponse({
+          items: [
+            {
               id: "machine-1",
               name: "Machine One",
               status: "online",
               runtimeStatus: "running",
             },
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
+          ],
+        });
+      }
+
+      if (path === "/threads/thread-1") {
+        return jsonResponse({
+          thread: {
+            threadId: "thread-1",
+            machineId: "machine-1",
+            status: "active",
+            title: "Gateway Thread 1",
           },
-        );
+          activeTurnId: null,
+          pendingApprovals: [],
+        });
+      }
+
+      if (path === "/machines/machine-1") {
+        return jsonResponse({
+          machine: {
+            id: "machine-1",
+            name: "Machine One",
+            status: "online",
+            runtimeStatus: "running",
+          },
+        });
       }
 
       if (path === "/threads/thread-1/turns" && init?.method === "POST") {
-        return new Response(
-          JSON.stringify({
-            turn: {
-              turnId: "turn-1",
-              threadId: "thread-1",
-            },
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
+        return jsonResponse({
+          turn: {
+            turnId: "turn-1",
+            threadId: "thread-1",
           },
-        );
+        });
       }
 
       throw new Error(`unexpected fetch: ${path}`);
@@ -178,23 +197,25 @@ test("keeps thread list when machine load fails", async () => {
     vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
 
+      if (path === "/capabilities") {
+        return jsonResponse(capabilitySnapshot);
+      }
+
+      if (path === "/settings/console") {
+        return handleConsoleSettings();
+      }
+
       if (path === "/threads") {
-        return new Response(
-          JSON.stringify({
-            items: [
-              {
-                threadId: "thread-2",
-                machineId: "machine-2",
-                status: "idle",
-                title: "Partial load thread",
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+        return jsonResponse({
+          items: [
+            {
+              threadId: "thread-2",
+              machineId: "machine-2",
+              status: "idle",
+              title: "Partial load thread",
+            },
+          ],
+        });
       }
 
       if (path === "/machines") {
@@ -219,78 +240,62 @@ test("surfaces system error thread status instead of treating it as completed", 
     vi.fn(async (input: RequestInfo | URL) => {
       const path = String(input);
 
+      if (path === "/capabilities") {
+        return jsonResponse(capabilitySnapshot);
+      }
+
+      if (path === "/settings/console") {
+        return handleConsoleSettings();
+      }
+
       if (path === "/threads") {
-        return new Response(
-          JSON.stringify({
-            items: [
-              {
-                threadId: "thread-3",
-                machineId: "machine-3",
-                status: "systemError",
-                title: "System error thread",
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }
-
-      if (path === "/machines") {
-        return new Response(
-          JSON.stringify({
-            items: [
-              {
-                id: "machine-3",
-                name: "Machine Three",
-                status: "reconnecting",
-                runtimeStatus: "running",
-              },
-            ],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }
-
-      if (path === "/threads/thread-3") {
-        return new Response(
-          JSON.stringify({
-            thread: {
+        return jsonResponse({
+          items: [
+            {
               threadId: "thread-3",
               machineId: "machine-3",
               status: "systemError",
               title: "System error thread",
             },
-            activeTurnId: null,
-            pendingApprovals: [],
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
+          ],
+        });
       }
 
-      if (path === "/machines/machine-3") {
-        return new Response(
-          JSON.stringify({
-            machine: {
+      if (path === "/machines") {
+        return jsonResponse({
+          items: [
+            {
               id: "machine-3",
               name: "Machine Three",
               status: "reconnecting",
               runtimeStatus: "running",
             },
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
+          ],
+        });
+      }
+
+      if (path === "/threads/thread-3") {
+        return jsonResponse({
+          thread: {
+            threadId: "thread-3",
+            machineId: "machine-3",
+            status: "systemError",
+            title: "System error thread",
           },
-        );
+          activeTurnId: null,
+          pendingApprovals: [],
+        });
+      }
+
+      if (path === "/machines/machine-3") {
+        return jsonResponse({
+          machine: {
+            id: "machine-3",
+            name: "Machine Three",
+            status: "reconnecting",
+            runtimeStatus: "running",
+          },
+        });
       }
 
       throw new Error(`unexpected fetch: ${path}`);
