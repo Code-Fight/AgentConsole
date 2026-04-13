@@ -2,8 +2,8 @@ import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, vi } from "vitest";
-import { AppShell } from "./shell";
 import { DesignAppShell } from "../design/shell/design-app-shell";
+import { ThreadsPage } from "../pages/threads-page";
 import { ThreadWorkspacePage } from "../pages/thread-workspace-page";
 
 class FakeWebSocket {
@@ -27,7 +27,11 @@ test("renders the design-driven thread hub shell", async () => {
 
   render(
     <MemoryRouter initialEntries={["/"]}>
-      <AppShell />
+      <Routes>
+        <Route element={<DesignAppShell />}>
+          <Route path="/" element={<ThreadsPage />} />
+        </Route>
+      </Routes>
     </MemoryRouter>,
   );
 
