@@ -336,7 +336,7 @@ export default function App() {
                   : activePage === "environment"
                     ? "环境资源"
                     : "设置"
-                : "Agent Gateway"}
+                : "Agent Console"}
             </span>
           </div>
           {activePage === "threads" && selectedSession ? (
@@ -382,7 +382,7 @@ export default function App() {
                   <div className="size-6 rounded-lg bg-gradient-to-br from-violet-600 to-blue-600 flex items-center justify-center flex-shrink-0">
                     <Bot className="size-3.5 text-white" />
                   </div>
-                  <span className="text-sm text-zinc-200 tracking-tight">Thread Hub</span>
+                  <span className="text-sm text-zinc-200 tracking-tight">Agent Console</span>
                 </div>
                 <button
                   onClick={() => setSidebarCollapsed(!sidebarCollapsed)}

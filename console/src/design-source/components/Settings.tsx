@@ -8,7 +8,7 @@ interface AgentDefaultConfig {
 }
 
 export default function Settings() {
-  const [apiUrl, setApiUrl] = useState("https://gateway.example.com");
+  const [apiUrl, setApiUrl] = useState("https://console.example.com");
   const [apiKey, setApiKey] = useState("sk_live_xxxxxxxxxxxxxxxxxxxxx");
   const [selectedAgentType, setSelectedAgentType] = useState<"claude-code" | "codex" | "custom">("claude-code");
 
@@ -91,7 +91,7 @@ max_tokens = 2048`,
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-zinc-400 mb-2">Gateway URL</label>
+                <label className="block text-sm text-zinc-400 mb-2">Console URL</label>
                 <input
                   type="text"
                   value={apiUrl}
