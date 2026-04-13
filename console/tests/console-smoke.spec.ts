@@ -69,12 +69,13 @@ test("navigates to thread workspace", async ({ page }) => {
 
   await page.goto("/");
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("link", { name: "Machines" })).toHaveAttribute("href", "/machines");
-  await expect(page.getByRole("link", { name: "Environment" })).toHaveAttribute("href", "/environment");
-  await expect(page.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
-  await page.getByRole("link", { name: "Gateway Thread 1", exact: true }).click();
+  await expect(page.getByRole("button", { name: "机器管理" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "环境资源" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "设置" })).toBeVisible();
+  await expect(page.getByText("Gateway Thread 1", { exact: true })).toBeVisible();
+  await expect(page.getByText("实现 CodexClient 线程缓存逻辑")).toHaveCount(0);
+
+  await page.getByText("Gateway Thread 1", { exact: true }).click();
   await expect(page).toHaveURL(/\/threads\/thread-1$/);
-  await expect(page.getByRole("textbox", { name: "Prompt" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Send prompt" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Gateway Thread 1Machine One" })).toHaveAttribute("href", "/threads/thread-1");
+  await expect(page.getByPlaceholder(/发送指令/).first()).toBeVisible();
 });

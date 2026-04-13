@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import * as Dialog from "@radix-ui/react-dialog";
 import ThreadItem from "./ThreadItem";
-import type { Machine, Session } from "../data/mockData";
+import type { ConsoleMachine as Machine, ConsoleSession as Session } from "../../design-host/use-console-host";
 
 interface MachinePanelProps {
   machines: Machine[];

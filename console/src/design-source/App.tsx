@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Menu,
   X,
@@ -13,240 +12,44 @@ import Machines from "./components/Machines";
 import Environment from "./components/Environment";
 import SessionChat from "./components/SessionChat";
 import MachinePanel from "./components/MachinePanel";
-import { machines } from "./data/mockData";
-import type {
-  Machine,
-  Session,
-  SkillResource,
-  MCPResource,
-  PluginResource,
-} from "./data/mockData";
+import type { ConsoleHostViewModel } from "../design-host/use-console-host";
 
-type AppPage = "threads" | "machines" | "environment" | "settings";
+type AppProps = ConsoleHostViewModel;
 
-export default function App() {
-  const [activePage, setActivePage] = useState<AppPage>("threads");
-  const [machinesData, setMachinesData] = useState<Machine[]>(machines);
-  const [selectedMachine, setSelectedMachine] = useState<Machine | null>(machines[0]);
-  const [selectedSession, setSelectedSession] = useState<Session | null>(machines[0].sessions[0]);
-  const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-
-  const [skills, setSkills] = useState<SkillResource[]>([]);
-  const [mcps, setMCPs] = useState<MCPResource[]>([]);
-  const [plugins, setPlugins] = useState<PluginResource[]>([]);
-
-  const handleSelectSession = (machine: Machine, session: Session) => {
-    setSelectedMachine(machine);
-    setSelectedSession(session);
-    setActivePage("threads");
-    setMobilePanelOpen(false);
-  };
-
-  const handleNavigate = (page: "machines" | "environment" | "settings") => {
-    setActivePage(page);
-    setMobilePanelOpen(false);
-  };
-
-  const handleBackToThreads = () => {
-    setActivePage("threads");
-  };
-
-  const handleRenameSession = (sessionId: string, newTitle: string) => {
-    setMachinesData((prevMachines) =>
-      prevMachines.map((machine) => ({
-        ...machine,
-        sessions: machine.sessions.map((session) =>
-          session.id === sessionId ? { ...session, title: newTitle } : session,
-        ),
-      })),
-    );
-
-    if (selectedSession?.id === sessionId) {
-      setSelectedSession((prev) => (prev ? { ...prev, title: newTitle } : null));
-    }
-  };
-
-  const handleDeleteSession = (sessionId: string) => {
-    setMachinesData((prevMachines) =>
-      prevMachines.map((machine) => ({
-        ...machine,
-        sessions: machine.sessions.filter((session) => session.id !== sessionId),
-      })),
-    );
-
-    if (selectedSession?.id === sessionId) {
-      setSelectedSession(null);
-    }
-  };
-
-  const handleInstallAgent = (machineId: string, agentType: string, agentName: string) => {
-    setMachinesData((prevMachines) =>
-      prevMachines.map((machine) => {
-        if (machine.id === machineId) {
-          const modelMap = {
-            "claude-code": "claude-sonnet-4-5",
-            codex: "claude-sonnet-4-5",
-            custom: "gpt-4-turbo",
-          };
-          const basePort = 18000;
-          const existingPorts = machine.agents.map((a) => a.port);
-          let newPort = basePort;
-          while (existingPorts.includes(newPort)) {
-            newPort++;
-          }
-
-          const newAgent = {
-            id: `agent-${Date.now()}`,
-            name: agentName,
-            type: agentType as "claude-code" | "codex" | "custom",
-            model: modelMap[agentType as keyof typeof modelMap],
-            status: "idle" as const,
-            port: newPort,
-          };
-          return {
-            ...machine,
-            agents: [...machine.agents, newAgent],
-          };
-        }
-        return machine;
-      }),
-    );
-  };
-
-  const handleUpdateAgentConfig = (machineId: string, agentId: string, config: string) => {
-    console.log(`Updated config for agent ${agentId} on machine ${machineId}:`, config);
-  };
-
-  const handleDeleteAgent = (machineId: string, agentId: string) => {
-    setMachinesData((prevMachines) =>
-      prevMachines.map((machine) => {
-        if (machine.id === machineId) {
-          return {
-            ...machine,
-            agents: machine.agents.filter((agent) => agent.id !== agentId),
-          };
-        }
-        return machine;
-      }),
-    );
-  };
-
-  const handleAddSkill = (
-    machineId: string,
-    agentId: string,
-    name: string,
-    description: string,
-  ) => {
-    const machine = machinesData.find((m) => m.id === machineId);
-    const agent = machine?.agents.find((a) => a.id === agentId);
-    if (!machine || !agent) return;
-
-    const newSkill: SkillResource = {
-      id: `skill-${Date.now()}`,
-      name,
-      machineId,
-      machineName: machine.name,
-      agentId,
-      agentName: agent.name,
-      description,
-    };
-    setSkills((prev) => [...prev, newSkill]);
-  };
-
-  const handleAddMCP = (
-    machineId: string,
-    agentId: string,
-    name: string,
-    serverUrl: string,
-  ) => {
-    const machine = machinesData.find((m) => m.id === machineId);
-    const agent = machine?.agents.find((a) => a.id === agentId);
-    if (!machine || !agent) return;
-
-    const newMCP: MCPResource = {
-      id: `mcp-${Date.now()}`,
-      name,
-      machineId,
-      machineName: machine.name,
-      agentId,
-      agentName: agent.name,
-      serverUrl,
-    };
-    setMCPs((prev) => [...prev, newMCP]);
-  };
-
-  const handleAddPlugin = (
-    machineId: string,
-    agentId: string,
-    name: string,
-    version: string,
-  ) => {
-    const machine = machinesData.find((m) => m.id === machineId);
-    const agent = machine?.agents.find((a) => a.id === agentId);
-    if (!machine || !agent) return;
-
-    const newPlugin: PluginResource = {
-      id: `plugin-${Date.now()}`,
-      name,
-      machineId,
-      machineName: machine.name,
-      agentId,
-      agentName: agent.name,
-      version,
-    };
-    setPlugins((prev) => [...prev, newPlugin]);
-  };
-
-  const handleDeleteSkill = (skillId: string) => {
-    setSkills((prev) => prev.filter((s) => s.id !== skillId));
-  };
-
-  const handleDeleteMCP = (mcpId: string) => {
-    setMCPs((prev) => prev.filter((m) => m.id !== mcpId));
-  };
-
-  const handleDeletePlugin = (pluginId: string) => {
-    setPlugins((prev) => prev.filter((p) => p.id !== pluginId));
-  };
-
-  const handleCreateThread = (
-    machineId: string,
-    agentId: string,
-    title: string,
-    workDir: string,
-  ) => {
-    const machine = machinesData.find((m) => m.id === machineId);
-    const agent = machine?.agents.find((a) => a.id === agentId);
-    if (!machine || !agent) return;
-
-    const newSession: Session = {
-      id: `sess-${Date.now()}`,
-      title,
-      agentName: agent.name,
-      model: agent.model,
-      status: "idle",
-      lastActivity: "刚刚",
-      messages: [],
-    };
-
-    setMachinesData((prevMachines) =>
-      prevMachines.map((m) => {
-        if (m.id === machineId) {
-          return {
-            ...m,
-            sessions: [...m.sessions, newSession],
-          };
-        }
-        return m;
-      }),
-    );
-
-    console.log("workDir", workDir);
-    setSelectedMachine(machine);
-    setSelectedSession(newSession);
-    setActivePage("threads");
-  };
+export default function App({
+  activePage,
+  machines,
+  selectedSession,
+  selectedMachine,
+  skills,
+  mcps,
+  plugins,
+  prompt,
+  isSubmitting,
+  mobilePanelOpen,
+  sidebarCollapsed,
+  onPromptChange,
+  onSendPrompt,
+  onSelectSession,
+  onNavigate,
+  onBackToThreads,
+  onToggleMobilePanel,
+  onCloseMobilePanel,
+  onToggleSidebar,
+  onExpandSidebar,
+  onRenameSession,
+  onDeleteSession,
+  onCreateThread,
+  onInstallAgent,
+  onDeleteAgent,
+  onUpdateAgentConfig,
+  onAddSkill,
+  onAddMCP,
+  onAddPlugin,
+  onDeleteSkill,
+  onDeleteMCP,
+  onDeletePlugin,
+}: AppProps) {
 
   const renderMainContent = () => {
     switch (activePage) {
@@ -257,6 +60,10 @@ export default function App() {
               key={selectedSession.id}
               session={selectedSession}
               machine={selectedMachine}
+              prompt={prompt}
+              isSubmitting={isSubmitting}
+              onPromptChange={onPromptChange}
+              onSendPrompt={onSendPrompt}
             />
           );
         }
@@ -274,25 +81,25 @@ export default function App() {
       case "machines":
         return (
           <Machines
-            machines={machinesData}
-            onInstallAgent={handleInstallAgent}
-            onDeleteAgent={handleDeleteAgent}
-            onUpdateAgentConfig={handleUpdateAgentConfig}
+            machines={machines}
+            onInstallAgent={onInstallAgent}
+            onDeleteAgent={onDeleteAgent}
+            onUpdateAgentConfig={onUpdateAgentConfig}
           />
         );
       case "environment":
         return (
           <Environment
-            machines={machinesData}
+            machines={machines}
             skills={skills}
             mcps={mcps}
             plugins={plugins}
-            onAddSkill={handleAddSkill}
-            onAddMCP={handleAddMCP}
-            onAddPlugin={handleAddPlugin}
-            onDeleteSkill={handleDeleteSkill}
-            onDeleteMCP={handleDeleteMCP}
-            onDeletePlugin={handleDeletePlugin}
+            onAddSkill={onAddSkill}
+            onAddMCP={onAddMCP}
+            onAddPlugin={onAddPlugin}
+            onDeleteSkill={onDeleteSkill}
+            onDeleteMCP={onDeleteMCP}
+            onDeletePlugin={onDeletePlugin}
           />
         );
       case "settings":
@@ -310,14 +117,14 @@ export default function App() {
       <header className="lg:hidden flex items-center gap-3 px-4 py-3 bg-zinc-900 border-b border-zinc-800 flex-shrink-0">
         {isManagementPage ? (
           <button
-            onClick={handleBackToThreads}
+            onClick={onBackToThreads}
             className="p-2 text-zinc-400 hover:text-zinc-50 rounded-lg hover:bg-zinc-800 transition-colors"
           >
             <ArrowLeft className="size-5" />
           </button>
         ) : (
           <button
-            onClick={() => setMobilePanelOpen(!mobilePanelOpen)}
+            onClick={onToggleMobilePanel}
             className="p-2 text-zinc-400 hover:text-zinc-50 rounded-lg hover:bg-zinc-800 transition-colors"
           >
             {mobilePanelOpen ? <X className="size-5" /> : <Menu className="size-5" />}
@@ -351,18 +158,18 @@ export default function App() {
         <>
           <div className="lg:hidden absolute top-[57px] left-0 bottom-0 w-[300px] bg-zinc-900 border-r border-zinc-800 z-50 shadow-2xl flex flex-col">
             <MachinePanel
-              machines={machinesData}
+              machines={machines}
               selectedSessionId={selectedSession?.id ?? null}
-              onSelectSession={handleSelectSession}
-              onNavigate={handleNavigate}
-              onRenameSession={handleRenameSession}
-              onDeleteSession={handleDeleteSession}
-              onCreateThread={handleCreateThread}
+              onSelectSession={onSelectSession}
+              onNavigate={onNavigate}
+              onRenameSession={onRenameSession}
+              onDeleteSession={onDeleteSession}
+              onCreateThread={onCreateThread}
             />
           </div>
           <div
             className="lg:hidden absolute inset-0 top-[57px] bg-black/50 z-40"
-            onClick={() => setMobilePanelOpen(false)}
+            onClick={onCloseMobilePanel}
           />
         </>
       ) : null}
@@ -385,7 +192,7 @@ export default function App() {
                   <span className="text-sm text-zinc-200 tracking-tight">Agent Console</span>
                 </div>
                 <button
-                  onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                  onClick={onToggleSidebar}
                   className="p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
                 >
                   <ChevronLeft className="size-4" />
@@ -393,13 +200,13 @@ export default function App() {
               </div>
               <div className="flex-1 overflow-hidden">
                 <MachinePanel
-                  machines={machinesData}
+                  machines={machines}
                   selectedSessionId={selectedSession?.id ?? null}
-                  onSelectSession={handleSelectSession}
-                  onNavigate={handleNavigate}
-                  onRenameSession={handleRenameSession}
-                  onDeleteSession={handleDeleteSession}
-                  onCreateThread={handleCreateThread}
+                  onSelectSession={onSelectSession}
+                  onNavigate={onNavigate}
+                  onRenameSession={onRenameSession}
+                  onDeleteSession={onDeleteSession}
+                  onCreateThread={onCreateThread}
                 />
               </div>
             </div>
@@ -409,7 +216,7 @@ export default function App() {
         {showThreadPanel && sidebarCollapsed ? (
           <div className="flex-shrink-0 flex items-start pt-4 border-r border-zinc-800 bg-zinc-900">
             <button
-              onClick={() => setSidebarCollapsed(false)}
+              onClick={onExpandSidebar}
               className="mx-1 p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
               title="展开线程面板"
             >
@@ -422,7 +229,7 @@ export default function App() {
           <div className="flex-shrink-0 flex flex-col bg-zinc-900 border-r border-zinc-800 w-16">
             <div className="flex items-center justify-center py-4 border-b border-zinc-800">
               <button
-                onClick={handleBackToThreads}
+                onClick={onBackToThreads}
                 className="size-10 rounded-xl bg-zinc-800 hover:bg-zinc-700 flex items-center justify-center transition-colors"
                 title="返回线程"
               >

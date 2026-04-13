@@ -15,11 +15,20 @@ import {
   Minus,
   ArrowUpRight,
 } from "lucide-react";
-import type { Session, Machine, Message, FileChange } from "../data/mockData";
+import type {
+  ConsoleSession as Session,
+  ConsoleMachine as Machine,
+  ConsoleMessage as Message,
+  ConsoleFileChange as FileChange,
+} from "../../design-host/use-console-host";
 
 interface SessionChatProps {
   session: Session;
   machine: Machine;
+  prompt: string;
+  isSubmitting: boolean;
+  onPromptChange: (value: string) => void;
+  onSendPrompt: () => void;
 }
 
 function FileChangesBadge({ changes }: { changes: FileChange[] }) {
@@ -184,59 +193,37 @@ const MODEL_OPTIONS = [
 
 const PERMISSION_OPTIONS = ["本地", "完全访问权限", "只读模式"];
 
-export default function SessionChat({ session, machine }: SessionChatProps) {
-  const [messages, setMessages] = useState<Message[]>(session.messages);
-  const [inputValue, setInputValue] = useState("");
+export default function SessionChat({
+  session,
+  machine,
+  prompt,
+  isSubmitting,
+  onPromptChange,
+  onSendPrompt,
+}: SessionChatProps) {
   const [selectedModel, setSelectedModel] = useState(session.model);
   const [selectedPermission, setSelectedPermission] = useState("完全访问权限");
-  const [isTyping, setIsTyping] = useState(false);
   const [showModelDrop, setShowModelDrop] = useState(false);
   const [showPermDrop, setShowPermDrop] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    setMessages(session.messages);
-  }, [session.id, session.messages]);
+    setSelectedModel(session.model);
+  }, [session.model]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isTyping]);
+  }, [session.messages, isSubmitting]);
 
   const handleSend = () => {
-    const trimmed = inputValue.trim();
+    if (isSubmitting) {
+      return;
+    }
+
+    const trimmed = prompt.trim();
     if (!trimmed) return;
-
-    const userMsg: Message = {
-      id: `msg-${Date.now()}`,
-      role: "user",
-      content: trimmed,
-      timestamp: new Date().toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-        second: "2-digit",
-      }),
-    };
-    setMessages((prev) => [...prev, userMsg]);
-    setInputValue("");
-    setIsTyping(true);
-
-    setTimeout(() => {
-      const agentMsg: Message = {
-        id: `msg-${Date.now() + 1}`,
-        role: "agent",
-        content: `收到你的指令。我正在处理：「${trimmed.slice(0, 60)}${
-          trimmed.length > 60 ? "..." : ""
-        }」\n\n让我分析一下当前代码库的相关部分，然后给出具体的实施方案。请稍候...`,
-        timestamp: new Date().toLocaleTimeString("zh-CN", {
-          hour: "2-digit",
-          minute: "2-digit",
-          second: "2-digit",
-        }),
-      };
-      setMessages((prev) => [...prev, agentMsg]);
-      setIsTyping(false);
-    }, 1800);
+    onSendPrompt();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -247,7 +234,7 @@ export default function SessionChat({ session, machine }: SessionChatProps) {
   };
 
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setInputValue(e.target.value);
+    onPromptChange(e.target.value);
     const ta = e.target;
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
@@ -309,11 +296,11 @@ export default function SessionChat({ session, machine }: SessionChatProps) {
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 lg:px-8 py-6 space-y-6">
-        {messages.map((msg) => (
+        {session.messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {isTyping ? (
+        {isSubmitting ? (
           <div className="flex gap-3">
             <div className="size-8 rounded-full bg-gradient-to-br from-violet-600 to-blue-600 flex items-center justify-center flex-shrink-0">
               <Bot className="size-4 text-white" />
@@ -334,7 +321,7 @@ export default function SessionChat({ session, machine }: SessionChatProps) {
         <div className="bg-zinc-800/60 border border-zinc-700/60 rounded-xl focus-within:border-zinc-600 transition-colors overflow-visible">
           <textarea
             ref={textareaRef}
-            value={inputValue}
+            value={prompt}
             onChange={handleTextareaInput}
             onKeyDown={handleKeyDown}
             placeholder={`向 ${session.agentName} 发送指令...`}
@@ -414,7 +401,7 @@ export default function SessionChat({ session, machine }: SessionChatProps) {
 
             <button
               onClick={handleSend}
-              disabled={!inputValue.trim() || isTyping}
+              disabled={!prompt.trim() || isSubmitting}
               className="size-8 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white flex items-center justify-center transition-colors flex-shrink-0"
             >
               <Send className="size-3.5" />

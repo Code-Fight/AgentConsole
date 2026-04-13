@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from "react";
 import { Pencil, Trash2, Check, X } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import type { Machine, Session } from "../data/mockData";
+import type { ConsoleMachine as Machine, ConsoleSession as Session } from "../../design-host/use-console-host";
 
 interface ThreadItemProps {
   session: Session;

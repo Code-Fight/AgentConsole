@@ -1,10 +1,7 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { afterEach, vi } from "vitest";
-import { DesignAppShell } from "../design/shell/design-app-shell";
-import { ThreadsPage } from "../pages/threads-page";
-import { ThreadWorkspacePage } from "../pages/thread-workspace-page";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { afterEach, beforeEach, vi } from "vitest";
+import { DesignSourceAppRoot } from "../design-host/app-root";
 
 class FakeWebSocket {
   readonly close = vi.fn();
@@ -14,37 +11,57 @@ class FakeWebSocket {
   removeEventListener() {}
 }
 
+beforeEach(() => {
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    value: vi.fn(),
+    writable: true,
+  });
+});
+
 afterEach(() => {
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-test("renders the design-driven thread hub shell", async () => {
-  vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ items: [] }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  })));
+test("loads gateway thread and machine lists for the active console shell", async () => {
+  const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+    const path = String(input);
+
+    if (path === "/threads") {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (path === "/machines") {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    throw new Error(`unexpected fetch: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchSpy);
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
-  render(
-    <MemoryRouter initialEntries={["/"]}>
-      <Routes>
-        <Route element={<DesignAppShell />}>
-          <Route path="/" element={<ThreadsPage />} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
-  );
+  render(<DesignSourceAppRoot />);
 
-  expect(screen.getAllByText("Thread Hub").length).toBeGreaterThan(0);
-  expect(screen.queryByText("上下文面板")).not.toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "Machines" })).toHaveAttribute("href", "/machines");
-  expect(screen.getByRole("link", { name: "Settings" })).toHaveAttribute("href", "/settings");
+  await waitFor(() => {
+    const paths = fetchSpy.mock.calls.map(([input]) => String(input));
+    expect(paths).toContain("/threads");
+    expect(paths).toContain("/machines");
+  });
 });
 
-test("renders live gateway threads in the design shell left rail for workspace routes", async () => {
+test("does not rely on local mock assistant replies in the active workspace", async () => {
+  window.history.pushState({}, "", "/threads/thread-1");
+
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const path = String(input);
 
       if (path === "/threads") {
@@ -55,7 +72,7 @@ test("renders live gateway threads in the design shell left rail for workspace r
                 threadId: "thread-1",
                 machineId: "machine-1",
                 status: "active",
-                title: "Investigate flaky test",
+                title: "Gateway Thread 1",
               },
             ],
           }),
@@ -72,7 +89,7 @@ test("renders live gateway threads in the design shell left rail for workspace r
             items: [
               {
                 id: "machine-1",
-                name: "machine-1",
+                name: "Machine One",
                 status: "online",
                 runtimeStatus: "running",
               },
@@ -92,8 +109,9 @@ test("renders live gateway threads in the design shell left rail for workspace r
               threadId: "thread-1",
               machineId: "machine-1",
               status: "active",
-              title: "Investigate flaky test",
+              title: "Gateway Thread 1",
             },
+            activeTurnId: null,
             pendingApprovals: [],
           }),
           {
@@ -108,9 +126,24 @@ test("renders live gateway threads in the design shell left rail for workspace r
           JSON.stringify({
             machine: {
               id: "machine-1",
-              name: "machine-1",
+              name: "Machine One",
               status: "online",
               runtimeStatus: "running",
+            },
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      if (path === "/threads/thread-1/turns" && init?.method === "POST") {
+        return new Response(
+          JSON.stringify({
+            turn: {
+              turnId: "turn-1",
+              threadId: "thread-1",
             },
           }),
           {
@@ -125,16 +158,16 @@ test("renders live gateway threads in the design shell left rail for workspace r
   );
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
-  render(
-    <MemoryRouter initialEntries={["/threads/thread-1"]}>
-      <Routes>
-        <Route element={<DesignAppShell />}>
-          <Route path="/threads/:threadId" element={<ThreadWorkspacePage />} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
-  );
+  render(<DesignSourceAppRoot />);
 
-  expect((await screen.findAllByText("Investigate flaky test")).length).toBeGreaterThan(1);
-  expect(screen.queryByText("Gateway rollout checks")).not.toBeInTheDocument();
+  const [promptInput] = await screen.findAllByPlaceholderText(/发送指令/);
+  vi.useFakeTimers();
+  fireEvent.change(promptInput, { target: { value: "Ping from test" } });
+  fireEvent.keyDown(promptInput, { key: "Enter", code: "Enter", charCode: 13 });
+
+  act(() => {
+    vi.advanceTimersByTime(2000);
+  });
+
+  expect(screen.queryByText(/收到你的指令/)).not.toBeInTheDocument();
 });
