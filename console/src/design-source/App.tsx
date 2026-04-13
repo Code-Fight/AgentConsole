@@ -52,6 +52,7 @@ export default function App({
   onDeletePlugin,
 }: AppProps) {
   const managementMachines: ManagementMachine[] = machines.map((machine) => {
+    const { runtimeStatus: _runtimeStatus, ...restMachine } = machine;
     const statusLabel =
       machine.status === "reconnecting"
         ? "重连中"
@@ -63,13 +64,37 @@ export default function App({
       : machine.name || machine.id;
     const status: ManagementMachine["status"] =
       machine.status === "online" || machine.status === "offline" ? machine.status : "offline";
+    const sessions = machine.sessions.map((session) => {
+      const sessionStatusLabel =
+        session.status === "active"
+          ? "进行中"
+          : session.status === "idle"
+            ? ""
+            : session.status === "systemError"
+              ? "异常"
+              : session.status === "notLoaded"
+                ? "未加载"
+                : session.status === "unknown"
+                  ? "未知"
+                  : "";
+      const normalizedStatus: ManagementMachine["sessions"][number]["status"] =
+        session.status === "active" || session.status === "idle" ? session.status : "idle";
+      const title = sessionStatusLabel ? `${session.title} (${sessionStatusLabel})` : session.title;
+
+      return {
+        ...session,
+        title,
+        status: normalizedStatus,
+      };
+    });
 
     return {
-      ...machine,
+      ...restMachine,
       name,
       status,
       host: "未提供",
       os: "未提供",
+      sessions,
     };
   });
 

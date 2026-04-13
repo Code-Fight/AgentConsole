@@ -8,8 +8,8 @@ interface ThreadItemProps {
   machine: Machine;
   isSelected: boolean;
   onSelect: (machine: Machine, session: Session) => void;
-  onRename: (sessionId: string, newTitle: string) => void;
-  onDelete: (sessionId: string) => void;
+  onRename?: (sessionId: string, newTitle: string) => void;
+  onDelete?: (sessionId: string) => void;
 }
 
 const sessionStatusColor: Record<string, string> = {
@@ -48,13 +48,16 @@ export default function ThreadItem({
   }, [isRenaming]);
 
   const handleRenameStart = () => {
+    if (!onRename) {
+      return;
+    }
     setIsRenaming(true);
     setRenameValue(session.title);
   };
 
   const handleRenameConfirm = () => {
     if (renameValue.trim() && renameValue !== session.title) {
-      onRename(session.id, renameValue.trim());
+      onRename?.(session.id, renameValue.trim());
     }
     setIsRenaming(false);
   };
@@ -65,7 +68,7 @@ export default function ThreadItem({
   };
 
   const handleDelete = () => {
-    onDelete(session.id);
+    onDelete?.(session.id);
   };
 
   const handleTouchStart = (e: React.TouchEvent) => {
@@ -107,18 +110,22 @@ export default function ThreadItem({
           transition: isSwiping ? "none" : "transform 0.3s ease",
         }}
       >
-        <button
-          onClick={handleRenameStart}
-          className="flex items-center justify-center size-12 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
-        >
-          <Pencil className="size-4 text-white" />
-        </button>
-        <button
-          onClick={handleDelete}
-          className="flex items-center justify-center size-12 bg-red-600 hover:bg-red-500 rounded-lg transition-colors"
-        >
-          <Trash2 className="size-4 text-white" />
-        </button>
+        {onRename ? (
+          <button
+            onClick={handleRenameStart}
+            className="flex items-center justify-center size-12 bg-blue-600 hover:bg-blue-500 rounded-lg transition-colors"
+          >
+            <Pencil className="size-4 text-white" />
+          </button>
+        ) : null}
+        {onDelete ? (
+          <button
+            onClick={handleDelete}
+            className="flex items-center justify-center size-12 bg-red-600 hover:bg-red-500 rounded-lg transition-colors"
+          >
+            <Trash2 className="size-4 text-white" />
+          </button>
+        ) : null}
       </div>
 
       <button
@@ -160,18 +167,22 @@ export default function ThreadItem({
               }}
               className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-blue-500"
             />
-            <button
-              onClick={handleRenameConfirm}
-              className="p-1 text-emerald-400 hover:bg-zinc-700 rounded transition-colors"
-            >
-              <Check className="size-3.5" />
-            </button>
-            <button
-              onClick={handleRenameCancel}
-              className="p-1 text-zinc-500 hover:bg-zinc-700 rounded transition-colors"
-            >
-              <X className="size-3.5" />
-            </button>
+            {onRename ? (
+              <>
+                <button
+                  onClick={handleRenameConfirm}
+                  className="p-1 text-emerald-400 hover:bg-zinc-700 rounded transition-colors"
+                >
+                  <Check className="size-3.5" />
+                </button>
+                <button
+                  onClick={handleRenameCancel}
+                  className="p-1 text-zinc-500 hover:bg-zinc-700 rounded transition-colors"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </>
+            ) : null}
           </div>
         ) : (
           <div className="flex-1 min-w-0">
@@ -187,30 +198,38 @@ export default function ThreadItem({
     </div>
   );
 
-  return (
+  return onRename || onDelete ? (
     <ContextMenu.Root>
       <ContextMenu.Trigger asChild>{ThreadContent}</ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content
           className="hidden lg:block min-w-[180px] bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl py-1.5 z-50"
         >
-          <ContextMenu.Item
-            onClick={handleRenameStart}
-            className="flex items-center gap-2.5 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-50 cursor-pointer outline-none"
-          >
-            <Pencil className="size-3.5" />
-            <span>重命名</span>
-          </ContextMenu.Item>
-          <ContextMenu.Separator className="h-px bg-zinc-700 my-1" />
-          <ContextMenu.Item
-            onClick={handleDelete}
-            className="flex items-center gap-2.5 px-3 py-2 text-xs text-red-400 hover:bg-zinc-700 hover:text-red-300 cursor-pointer outline-none"
-          >
-            <Trash2 className="size-3.5" />
-            <span>删除</span>
-          </ContextMenu.Item>
+          {onRename ? (
+            <ContextMenu.Item
+              onClick={handleRenameStart}
+              className="flex items-center gap-2.5 px-3 py-2 text-xs text-zinc-300 hover:bg-zinc-700 hover:text-zinc-50 cursor-pointer outline-none"
+            >
+              <Pencil className="size-3.5" />
+              <span>重命名</span>
+            </ContextMenu.Item>
+          ) : null}
+          {onRename && onDelete ? (
+            <ContextMenu.Separator className="h-px bg-zinc-700 my-1" />
+          ) : null}
+          {onDelete ? (
+            <ContextMenu.Item
+              onClick={handleDelete}
+              className="flex items-center gap-2.5 px-3 py-2 text-xs text-red-400 hover:bg-zinc-700 hover:text-red-300 cursor-pointer outline-none"
+            >
+              <Trash2 className="size-3.5" />
+              <span>删除</span>
+            </ContextMenu.Item>
+          ) : null}
         </ContextMenu.Content>
       </ContextMenu.Portal>
     </ContextMenu.Root>
+  ) : (
+    ThreadContent
   );
 }

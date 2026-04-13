@@ -129,8 +129,8 @@ function MachineGroup({
                 machine={machine}
                 isSelected={isSelected}
                 onSelect={onSelectSession}
-                onRename={onRenameSession || (() => {})}
-                onDelete={onDeleteSession || (() => {})}
+                onRename={onRenameSession}
+                onDelete={onDeleteSession}
               />
             );
           })}

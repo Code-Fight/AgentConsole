@@ -243,7 +243,6 @@ export default function SessionChat({
   const statusColor = {
     active: "text-emerald-400",
     idle: "text-zinc-500",
-    completed: "text-blue-400",
     systemError: "text-red-400",
     notLoaded: "text-amber-400",
     unknown: "text-zinc-500",
@@ -282,13 +281,11 @@ export default function SessionChat({
                   ? "进行中"
                   : session.status === "idle"
                     ? "空闲"
-                    : session.status === "completed"
-                      ? "已完成"
-                      : session.status === "systemError"
-                        ? "异常"
-                        : session.status === "notLoaded"
-                          ? "未加载"
-                          : "未知"}
+                    : session.status === "systemError"
+                      ? "异常"
+                      : session.status === "notLoaded"
+                        ? "未加载"
+                        : "未知"}
               </span>
             </div>
             <span className="text-xs text-zinc-600 hidden md:block font-mono">{session.agentName}</span>

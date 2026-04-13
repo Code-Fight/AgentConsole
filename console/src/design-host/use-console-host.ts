@@ -181,16 +181,21 @@ export function useConsoleHost({
 
   const workspace = useThreadWorkspace(threadId ?? "");
 
-  const workspaceMessages = useMemo(() => {
+  const workspaceMessages = useMemo<ConsoleMessage[]>(() => {
     if (!threadId) {
       return [];
     }
-    return workspace.messages.map((message) => ({
-      id: message.id,
-      role: message.kind === "user" ? "user" : "agent",
-      content: message.text,
-      timestamp: formatTimestamp(),
-    }));
+    return workspace.messages
+      .filter(
+        (message): message is typeof message & { kind: "user" | "agent" } =>
+          message.kind === "user" || message.kind === "agent",
+      )
+      .map((message) => ({
+        id: message.id,
+        role: message.kind,
+        content: message.text,
+        timestamp: formatTimestamp(),
+      }));
   }, [threadId, workspace.messages]);
 
   const machineById = useMemo(() => {
