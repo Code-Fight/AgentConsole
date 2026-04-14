@@ -113,6 +113,12 @@ test("renders the active environment surface with gateway resources and disabled
   expect(scope.getAllByText("Skills").length).toBeGreaterThan(0);
   expect(scope.getAllByText("Plugins").length).toBeGreaterThan(0);
   expect(scope.getByRole("button", { name: "Sync catalog" })).toBeDisabled();
+  expect(scope.getByRole("button", { name: "Add skill" })).toBeDisabled();
+  expect(scope.getByRole("button", { name: "Add plugin record" })).toBeDisabled();
+
+  const skillCard = scope.getByText("Debugger");
+  const skillActions = within(skillCard.closest("article") ?? skillCard.parentElement ?? skillCard);
+  expect(skillActions.getByRole("button", { name: "Delete skill" })).toBeDisabled();
 });
 
 test("clicking a skill action sends the path-based resource id and machineId", async () => {

@@ -248,6 +248,14 @@ function renderEnvironmentSection(
                       Edit
                     </button>
                   ) : null}
+                  {item.kind === "skill" ? (
+                    <>
+                      <button type="button" aria-label="Delete skill" disabled>
+                        Delete skill
+                      </button>
+                      <span className="meta-pill">Not connected</span>
+                    </>
+                  ) : null}
                   {mutations.map((mutation) => {
                     const actionKey = `${resourceKey}:${mutation.label}`;
                     return (
@@ -367,7 +375,18 @@ export function EnvironmentPageView(props: EnvironmentPageViewProps) {
 
       {!props.isLoading && !props.error ? (
         <div className="environment-grid">
-          {renderEnvironmentSection("Skills", props.sections.skills, "No skills reported.", props)}
+          {renderEnvironmentSection(
+            "Skills",
+            props.sections.skills,
+            "No skills reported.",
+            props,
+            <div className="settings-actions">
+              <button type="button" aria-label="Add skill" disabled>
+                Add skill
+              </button>
+              <span className="meta-pill">Not connected</span>
+            </div>,
+          )}
           {renderEnvironmentSection(
             "MCPs",
             props.sections.mcps,
@@ -382,7 +401,18 @@ export function EnvironmentPageView(props: EnvironmentPageViewProps) {
               Add MCP
             </button>,
           )}
-          {renderEnvironmentSection("Plugins", props.sections.plugins, "No plugins reported.", props)}
+          {renderEnvironmentSection(
+            "Plugins",
+            props.sections.plugins,
+            "No plugins reported.",
+            props,
+            <div className="settings-actions">
+              <button type="button" aria-label="Add plugin record" disabled>
+                Add plugin record
+              </button>
+              <span className="meta-pill">Not connected</span>
+            </div>,
+          )}
         </div>
       ) : null}
     </section>
