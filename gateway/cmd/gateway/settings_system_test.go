@@ -97,7 +97,7 @@ func TestSettingsSystemScenarios(t *testing.T) {
 				if rec.Code != http.StatusOK {
 					t.Fatalf("apply returned %d: %s", rec.Code, rec.Body)
 				}
-				if got := system.readConfigFile(t); got != "model = \"gpt-5.4\"\n" {
+				if got := system.readAppliedConfigFile(t, rec.Body); got != "model = \"gpt-5.4\"\n" {
 					t.Fatalf("unexpected config file: %q", got)
 				}
 			},
@@ -111,7 +111,7 @@ func TestSettingsSystemScenarios(t *testing.T) {
 				if rec.Code != http.StatusOK {
 					t.Fatalf("apply returned %d: %s", rec.Code, rec.Body)
 				}
-				if got := system.readConfigFile(t); got != "model = \"gpt-5.2\"\n" {
+				if got := system.readAppliedConfigFile(t, rec.Body); got != "model = \"gpt-5.2\"\n" {
 					t.Fatalf("unexpected config file: %q", got)
 				}
 			},
@@ -310,9 +310,18 @@ func (s *liveSettingsSystem) mustStoreMachine(t *testing.T, machineID string, co
 	}
 }
 
-func (s *liveSettingsSystem) readConfigFile(t *testing.T) string {
+func (s *liveSettingsSystem) readAppliedConfigFile(t *testing.T, responseBody string) string {
 	t.Helper()
-	content, err := os.ReadFile(filepath.Join(s.clientHome, ".codex", "config.toml"))
+	var body struct {
+		FilePath string `json:"filePath"`
+	}
+	if err := json.Unmarshal([]byte(responseBody), &body); err != nil {
+		t.Fatalf("decode apply response failed: %v\nbody:\n%s", err, responseBody)
+	}
+	if strings.TrimSpace(body.FilePath) == "" {
+		t.Fatalf("apply response missing filePath:\n%s", responseBody)
+	}
+	content, err := os.ReadFile(body.FilePath)
 	if err != nil {
 		t.Fatalf("read config file failed: %v\nclient output:\n%s", err, s.clientOutput.String())
 	}
@@ -322,7 +331,7 @@ func (s *liveSettingsSystem) readConfigFile(t *testing.T) string {
 func buildClientBinary(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "client")
-	command := exec.Command("go", "build", "-o", path, "./client/cmd/client")
+	command := exec.Command("/opt/homebrew/bin/go", "build", "-o", path, "./client/cmd/client")
 	command.Dir = repoRoot(t)
 	output, err := command.CombinedOutput()
 	if err != nil {
