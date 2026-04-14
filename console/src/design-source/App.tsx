@@ -22,9 +22,6 @@ export default function App({
   machines,
   selectedSession,
   selectedMachine,
-  skills,
-  mcps,
-  plugins,
   workspace,
   mobilePanelOpen,
   sidebarCollapsed,
@@ -39,12 +36,6 @@ export default function App({
   onInstallAgent,
   onDeleteAgent,
   onUpdateAgentConfig,
-  onAddSkill,
-  onAddMCP,
-  onAddPlugin,
-  onDeleteSkill,
-  onDeleteMCP,
-  onDeletePlugin,
   onRenameSession,
   onDeleteSession,
 }: AppProps) {
@@ -129,20 +120,7 @@ export default function App({
           />
         );
       case "environment":
-        return (
-          <Environment
-            machines={managementMachines}
-            skills={skills}
-            mcps={mcps}
-            plugins={plugins}
-            onAddSkill={onAddSkill}
-            onAddMCP={onAddMCP}
-            onAddPlugin={onAddPlugin}
-            onDeleteSkill={onDeleteSkill}
-            onDeleteMCP={onDeleteMCP}
-            onDeletePlugin={onDeletePlugin}
-          />
-        );
+        return <Environment />;
       case "settings":
         return <Settings />;
       default:

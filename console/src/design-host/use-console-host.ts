@@ -60,45 +60,12 @@ export interface ConsoleMachine {
   sessions: ConsoleSession[];
 }
 
-export interface ConsoleSkillResource {
-  id: string;
-  name: string;
-  machineId: string;
-  machineName: string;
-  agentId: string;
-  agentName: string;
-  description: string;
-}
-
-export interface ConsoleMCPResource {
-  id: string;
-  name: string;
-  machineId: string;
-  machineName: string;
-  agentId: string;
-  agentName: string;
-  serverUrl: string;
-}
-
-export interface ConsolePluginResource {
-  id: string;
-  name: string;
-  machineId: string;
-  machineName: string;
-  agentId: string;
-  agentName: string;
-  version: string;
-}
-
 export interface ConsoleHostViewModel {
   activePage: AppPage;
   machines: ConsoleMachine[];
   selectedSession: ConsoleSession | null;
   selectedMachine: ConsoleMachine | null;
   workspace: ThreadWorkspaceViewModel;
-  skills: ConsoleSkillResource[];
-  mcps: ConsoleMCPResource[];
-  plugins: ConsolePluginResource[];
   mobilePanelOpen: boolean;
   sidebarCollapsed: boolean;
   onSelectSession: (machine: ConsoleMachine, session: ConsoleSession) => void;
@@ -119,12 +86,6 @@ export interface ConsoleHostViewModel {
   onInstallAgent?: (machineId: string, agentType: string, agentName: string) => void;
   onDeleteAgent?: (machineId: string, agentId: string) => void;
   onUpdateAgentConfig?: (machineId: string, agentId: string, config: string) => void;
-  onAddSkill?: (machineId: string, agentId: string, name: string, description: string) => void;
-  onAddMCP?: (machineId: string, agentId: string, name: string, serverUrl: string) => void;
-  onAddPlugin?: (machineId: string, agentId: string, name: string, version: string) => void;
-  onDeleteSkill?: (skillId: string) => void;
-  onDeleteMCP?: (mcpId: string) => void;
-  onDeletePlugin?: (pluginId: string) => void;
 }
 
 interface UseConsoleHostOptions {
@@ -370,9 +331,6 @@ export function useConsoleHost({
     selectedSession,
     selectedMachine,
     workspace,
-    skills: [],
-    mcps: [],
-    plugins: [],
     mobilePanelOpen,
     sidebarCollapsed,
     onSelectSession: handleSelectSession,
