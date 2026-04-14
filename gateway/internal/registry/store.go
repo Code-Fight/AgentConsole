@@ -148,3 +148,9 @@ func (s *Store) PendingApprovalsForThread(threadID string) []protocol.ApprovalRe
 	})
 	return items
 }
+
+func (s *Store) PendingApprovalCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return len(s.pendingApprovals)
+}

@@ -2073,8 +2073,11 @@ func TestCapabilitiesEndpointReflectsDependencies(t *testing.T) {
 	if body.SettingsApplyMachine {
 		t.Fatalf("expected settings apply to be disabled without sender: %+v", body)
 	}
-	if body.MachineInstallAgent || body.MachineRemoveAgent || body.DashboardMetrics || body.AgentLifecycle {
+	if body.MachineInstallAgent || body.MachineRemoveAgent || body.AgentLifecycle {
 		t.Fatalf("unexpected future capabilities enabled: %+v", body)
+	}
+	if !body.DashboardMetrics {
+		t.Fatalf("expected dashboard metrics enabled when registry and runtime index exist: %+v", body)
 	}
 }
 
@@ -2211,6 +2214,76 @@ func TestConsoleSettingsEndpointsPersistPreferences(t *testing.T) {
 	}
 	if getBody.Preferences == nil || getBody.Preferences.ConsoleURL != "http://localhost:3100" {
 		t.Fatalf("expected persisted console preferences, got %+v", getBody.Preferences)
+	}
+}
+
+func TestOverviewMetricsEndpointReturnsAggregatedSnapshot(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:            "machine-01",
+		Name:          "Machine One",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusRunning,
+		Agents: []domain.AgentInstance{
+			{AgentID: "agent-01", AgentType: domain.AgentTypeCodex, DisplayName: "Codex", Status: domain.AgentInstanceStatusRunning},
+		},
+	})
+	reg.UpsertPendingApproval("machine-01", protocol.ApprovalRequiredPayload{
+		RequestID: "approval-01",
+		ThreadID:  "thread-01",
+		Kind:      "command",
+	})
+
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot(
+		"machine-01",
+		[]domain.Thread{
+			{ThreadID: "thread-01", MachineID: "machine-01", AgentID: "agent-01", Status: domain.ThreadStatusActive},
+			{ThreadID: "thread-02", MachineID: "machine-01", AgentID: "agent-01", Status: domain.ThreadStatusIdle},
+		},
+		[]domain.EnvironmentResource{
+			{ResourceID: "skill-01", MachineID: "machine-01", AgentID: "agent-01", Kind: domain.EnvironmentKindSkill},
+			{ResourceID: "plugin-01", MachineID: "machine-01", AgentID: "agent-01", Kind: domain.EnvironmentKindPlugin},
+		},
+	)
+
+	handler := NewServerWithSettings(
+		reg,
+		idx,
+		routing.NewRouter(),
+		nil,
+		settings.NewMemoryStore([]domain.AgentDescriptor{{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"}}),
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/overview/metrics", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("overview metrics returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body domain.OverviewMetrics
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid overview metrics json: %v", err)
+	}
+
+	if body.OnlineMachines != 1 {
+		t.Fatalf("expected 1 online machine, got %d", body.OnlineMachines)
+	}
+	if body.RunningAgents != 1 {
+		t.Fatalf("expected 1 running agent, got %d", body.RunningAgents)
+	}
+	if body.ActiveThreads != 1 {
+		t.Fatalf("expected 1 active thread, got %d", body.ActiveThreads)
+	}
+	if body.PendingApprovals != 1 {
+		t.Fatalf("expected 1 pending approval, got %d", body.PendingApprovals)
+	}
+	if body.EnvironmentItems != 2 {
+		t.Fatalf("expected 2 environment items, got %d", body.EnvironmentItems)
 	}
 }
 

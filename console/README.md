@@ -55,7 +55,7 @@ That is the core reason this structure exists.
 
 This repo includes a local skill for repeating the same update flow:
 
-- Path: [`../.codex/skills/design-source-sync/SKILL.md`](/Users/zfcode/Documents/DEV/CodingAgentGateway/.codex/skills/design-source-sync/SKILL.md)
+- Path: [`../skills/design-source-sync/SKILL.md`](/Users/zfcode/Documents/DEV/CodingAgentGateway/skills/design-source-sync/SKILL.md)
 - Skill name: `design-source-sync`
 
 Use it whenever the latest generated design source needs to be pulled into `console/src/design-source/` again.
@@ -93,8 +93,9 @@ Do not fake local success paths inside the imported design layer.
 
 ## Current Phase
 
-This repo is currently in the `1:1 design import` phase:
+This repo is now in the `gateway-backed active console` phase:
 
-- the runtime entrypoint renders the imported design source
-- the priority is visual fidelity and future re-import speed
-- full Gateway reattachment happens in later steps, on top of this imported design base
+- the runtime entrypoint still renders the imported design source through `src/design-host/`
+- thread hub, workspace, environment, settings, managed agents, and overview metrics are all backed by Gateway APIs
+- `src/design-source/` remains presentation-first, while `src/design-host/` and `src/gateway/` own routing, state, and protocol wiring
+- remaining intentionally disconnected controls should be treated as explicit product gaps, not mock local behavior

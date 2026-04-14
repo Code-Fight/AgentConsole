@@ -248,3 +248,36 @@ func TestStoreUpsertAndRemoveThread(t *testing.T) {
 		t.Fatalf("unexpected threads after remove: %+v", threads)
 	}
 }
+
+func TestStoreOverviewMetrics(t *testing.T) {
+	store := NewStore()
+
+	store.ReplaceSnapshot(
+		"machine-a",
+		[]domain.Thread{
+			{ThreadID: "thread-a-1", MachineID: "machine-a", Status: domain.ThreadStatusActive},
+			{ThreadID: "thread-a-2", MachineID: "machine-a", Status: domain.ThreadStatusIdle},
+		},
+		[]domain.EnvironmentResource{
+			{ResourceID: "skill-a-1", MachineID: "machine-a", Kind: domain.EnvironmentKindSkill},
+			{ResourceID: "plugin-a-1", MachineID: "machine-a", Kind: domain.EnvironmentKindPlugin},
+		},
+	)
+	store.ReplaceSnapshot(
+		"machine-b",
+		[]domain.Thread{
+			{ThreadID: "thread-b-1", MachineID: "machine-b", Status: domain.ThreadStatusActive},
+		},
+		[]domain.EnvironmentResource{
+			{ResourceID: "mcp-b-1", MachineID: "machine-b", Kind: domain.EnvironmentKindMCP},
+		},
+	)
+
+	metrics := store.OverviewMetrics()
+	if metrics.ActiveThreads != 2 {
+		t.Fatalf("expected 2 active threads, got %d", metrics.ActiveThreads)
+	}
+	if metrics.EnvironmentItems != 3 {
+		t.Fatalf("expected 3 environment items, got %d", metrics.EnvironmentItems)
+	}
+}

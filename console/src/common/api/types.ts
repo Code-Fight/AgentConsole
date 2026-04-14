@@ -84,6 +84,14 @@ export interface CapabilitySnapshot {
   agentLifecycle: boolean;
 }
 
+export interface OverviewMetrics {
+  onlineMachines: number;
+  activeThreads: number;
+  pendingApprovals: number;
+  runningAgents: number;
+  environmentItems: number;
+}
+
 export interface ConsolePreferences {
   consoleUrl: string;
   apiKey: string;

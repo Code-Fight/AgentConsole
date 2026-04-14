@@ -1,6 +1,7 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
+import { resetConsolePreferencesStoreForTests } from "../gateway/use-console-preferences";
 import { DesignSourceAppRoot } from "../design-host/app-root";
 
 class FakeWebSocket {
@@ -57,6 +58,7 @@ beforeEach(() => {
     value: vi.fn(),
     writable: true,
   });
+  resetConsolePreferencesStoreForTests();
 });
 
 afterEach(() => {

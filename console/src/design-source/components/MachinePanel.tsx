@@ -1,5 +1,6 @@
 import { useState } from "react";
 import {
+  Activity,
   ChevronDown,
   ChevronRight,
   Plus,
@@ -22,7 +23,7 @@ interface MachinePanelProps {
   machines: Machine[];
   selectedSessionId: string | null;
   onSelectSession: (machine: Machine, session: Session) => void;
-  onNavigate?: (page: "machines" | "environment" | "settings") => void;
+  onNavigate?: (page: "overview" | "machines" | "environment" | "settings") => void;
   onRenameSession?: (sessionId: string, newTitle: string) => void;
   onDeleteSession?: (sessionId: string) => void;
   onCreateThread?: (
@@ -350,6 +351,13 @@ export default function MachinePanel({
       {onNavigate ? (
         <div className="flex-shrink-0 border-t border-zinc-800/60 px-2 py-2">
           <div className="space-y-0.5">
+            <button
+              onClick={() => onNavigate("overview")}
+              className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"
+            >
+              <Activity className="size-4 flex-shrink-0" />
+              <span className="text-xs">概览</span>
+            </button>
             <button
               onClick={() => onNavigate("machines")}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 transition-colors"

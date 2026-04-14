@@ -3,6 +3,9 @@ import App from "../design-source/App";
 import { type AppPage, useConsoleHost } from "./use-console-host";
 
 function resolveActivePage(pathname: string): AppPage {
+  if (pathname.startsWith("/overview")) {
+    return "overview";
+  }
   if (pathname.startsWith("/machines")) {
     return "machines";
   }
@@ -33,6 +36,7 @@ export function ConsoleHostRouter() {
   return (
     <Routes>
       <Route path="/" element={<ConsoleHostEntry />} />
+      <Route path="/overview" element={<ConsoleHostEntry />} />
       <Route path="/threads/:threadId" element={<ConsoleHostEntry />} />
       <Route path="/machines" element={<ConsoleHostEntry />} />
       <Route path="/environment" element={<ConsoleHostEntry />} />

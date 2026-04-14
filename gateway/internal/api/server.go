@@ -437,13 +437,13 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 		EnvironmentMutateResources:  environmentMutate,
 		EnvironmentWriteMcp:         hasSender,
 		EnvironmentWriteSkills:      hasSender,
-		SettingsEditGatewayEndpoint: false,
-		SettingsEditConsoleProfile:  false,
-		SettingsEditSafetyPolicy:    false,
+		SettingsEditGatewayEndpoint: hasSettings,
+		SettingsEditConsoleProfile:  hasSettings,
+		SettingsEditSafetyPolicy:    hasSettings,
 		SettingsGlobalDefault:       hasSettings,
 		SettingsMachineOverride:     hasSettings,
 		SettingsApplyMachine:        hasSettings && hasSender,
-		DashboardMetrics:            false,
+		DashboardMetrics:            hasRegistry && hasRuntimeIndex,
 		AgentLifecycle:              hasSender && hasRegistry,
 	}
 }
@@ -493,6 +493,27 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 	mux.HandleFunc("GET /capabilities", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, buildCapabilitySnapshot(reg, idx, router, sender, settingsStore))
+	})
+
+	mux.HandleFunc("GET /overview/metrics", func(w http.ResponseWriter, _ *http.Request) {
+		metrics := domain.OverviewMetrics{}
+		if idx != nil {
+			metrics = idx.OverviewMetrics()
+		}
+		if reg != nil {
+			for _, machine := range reg.List() {
+				if machine.Status == domain.MachineStatusOnline {
+					metrics.OnlineMachines++
+				}
+				for _, agent := range machine.Agents {
+					if agent.Status == domain.AgentInstanceStatusRunning {
+						metrics.RunningAgents++
+					}
+				}
+			}
+			metrics.PendingApprovals = reg.PendingApprovalCount()
+		}
+		writeJSON(w, http.StatusOK, metrics)
 	})
 
 	mux.HandleFunc("GET /settings/agents", func(w http.ResponseWriter, _ *http.Request) {

@@ -3,6 +3,7 @@ import { buildThreadApiPath, http } from "../common/api/http";
 import type {
   CreateThreadResponse,
   MachineSummary,
+  OverviewMetrics,
   ThreadDetailResponse,
   ThreadSummary,
 } from "../common/api/types";
@@ -12,7 +13,7 @@ import { useConsolePreferences } from "../gateway/use-console-preferences";
 import { useThreadHub } from "../gateway/use-thread-hub";
 import { useThreadWorkspace, type ThreadWorkspaceViewModel } from "../gateway/use-thread-workspace";
 
-export type AppPage = "threads" | "machines" | "environment" | "settings";
+export type AppPage = "threads" | "overview" | "machines" | "environment" | "settings";
 
 export interface ConsoleFileChange {
   path: string;
@@ -66,6 +67,9 @@ export interface ConsoleHostViewModel {
   machines: ConsoleMachine[];
   selectedSession: ConsoleSession | null;
   selectedMachine: ConsoleMachine | null;
+  overviewMetrics: OverviewMetrics | null;
+  overviewLoading: boolean;
+  overviewError: string | null;
   workspace: ThreadWorkspaceViewModel;
   mobilePanelOpen: boolean;
   sidebarCollapsed: boolean;
@@ -105,6 +109,9 @@ export function useConsoleHost({
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [restoredThreadId, setRestoredThreadId] = useState<string | null>(null);
   const [lastVerifiedThreadId, setLastVerifiedThreadId] = useState<string | null>(null);
+  const [overviewMetrics, setOverviewMetrics] = useState<OverviewMetrics | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
 
   useCapabilities();
   const hub = useThreadHub({ enabled: activePage !== "settings" });
@@ -120,6 +127,41 @@ export function useConsoleHost({
     if (activePage !== "threads") {
       setMobilePanelOpen(false);
     }
+  }, [activePage]);
+
+  useEffect(() => {
+    if (activePage !== "overview") {
+      return;
+    }
+
+    let active = true;
+    setOverviewLoading(true);
+    setOverviewError(null);
+
+    void http<OverviewMetrics>("/overview/metrics")
+      .then((metrics) => {
+        if (!active) {
+          return;
+        }
+        setOverviewMetrics(metrics);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setOverviewError(
+          error instanceof Error ? error.message : "Unable to load overview metrics.",
+        );
+      })
+      .finally(() => {
+        if (active) {
+          setOverviewLoading(false);
+        }
+      });
+
+    return () => {
+      active = false;
+    };
   }, [activePage]);
 
   useEffect(() => {
@@ -187,6 +229,8 @@ export function useConsoleHost({
           return;
         }
         if (restoredThreadId === threadId) {
+          setLastVerifiedThreadId(threadId);
+          setRestoredThreadId(null);
           await updatePreferences({ lastThreadId: "" });
           navigate("/");
         }
@@ -422,6 +466,9 @@ export function useConsoleHost({
     machines: consoleMachines,
     selectedSession,
     selectedMachine,
+    overviewMetrics,
+    overviewLoading,
+    overviewError,
     workspace,
     mobilePanelOpen,
     sidebarCollapsed,

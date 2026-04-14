@@ -1,6 +1,20 @@
 import { expect, test } from "@playwright/test";
 
 test("navigates to thread workspace", async ({ page }) => {
+  await page.route("**/overview/metrics", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        onlineMachines: 1,
+        activeThreads: 1,
+        pendingApprovals: 0,
+        runningAgents: 1,
+        environmentItems: 3,
+      })
+    });
+  });
+
   await page.route("**/threads", async (route) => {
     await route.fulfill({
       status: 200,
@@ -69,6 +83,13 @@ test("navigates to thread workspace", async ({ page }) => {
 
   await page.goto("/");
   await expect(page).toHaveURL(/\/$/);
+  await page.getByRole("button", { name: "概览" }).click();
+  await expect(page).toHaveURL(/\/overview$/);
+  await expect(page.getByText("Online Machines").first()).toBeVisible();
+  await expect(page.getByText("Running Agents").first()).toBeVisible();
+  await expect(page.getByText("Active Threads").first()).toBeVisible();
+
+  await page.goto("/");
   await expect(page.getByRole("button", { name: "机器管理" })).toBeVisible();
   await expect(page.getByRole("button", { name: "环境资源" })).toBeVisible();
   await expect(page.getByRole("button", { name: "设置" })).toBeVisible();

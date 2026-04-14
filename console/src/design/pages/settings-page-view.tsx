@@ -37,16 +37,28 @@ interface SettingsPageViewProps {
   onApplyToMachine: () => void;
   onConsolePreferencesChange?: (patch: Partial<ConsolePreferences>) => void;
   onSaveConsolePreferences?: () => void;
+  onFocusConsolePreferenceField?: (field: "consoleUrl" | "profile" | "safetyPolicy") => void;
 }
 
-function CapabilityCard(props: { title: string; description: string; action: string; connected: boolean }) {
+function CapabilityCard(props: {
+  title: string;
+  description: string;
+  action: string;
+  connected: boolean;
+  onAction?: () => void;
+}) {
   return (
     <article className="settings-section-card">
       <h2>{props.title}</h2>
       <p>{props.description}</p>
       <div className="settings-actions">
         <span className="hub-thread-chip">{props.connected ? "connected" : "not connected"}</span>
-        <button type="button" disabled={!props.connected} aria-label={props.action}>
+        <button
+          type="button"
+          disabled={!props.connected}
+          aria-label={props.action}
+          onClick={props.onAction}
+        >
           {props.action}
         </button>
       </div>
@@ -65,6 +77,7 @@ export function SettingsPageView(props: SettingsPageViewProps) {
   const onConsolePreferencesChange = props.onConsolePreferencesChange ?? (() => {});
   const onSaveConsolePreferences = props.onSaveConsolePreferences ?? (() => {});
   const isConsoleSaving = props.isConsoleSaving ?? false;
+  const onFocusConsolePreferenceField = props.onFocusConsolePreferenceField ?? (() => {});
 
   return (
     <section className="page settings-page">
@@ -80,21 +93,24 @@ export function SettingsPageView(props: SettingsPageViewProps) {
       <div className="settings-section-list">
         <CapabilityCard
           title="Gateway Endpoint"
-          description="The endpoint card is design-visible only. Endpoint editing is not connected through Gateway."
+          description="Jump to the persisted Console URL setting managed through Gateway preferences."
           action="Edit gateway endpoint"
           connected={props.capabilities.editGatewayEndpoint}
+          onAction={() => onFocusConsolePreferenceField("consoleUrl")}
         />
         <CapabilityCard
           title="Console Profile"
-          description="Profile switching remains out of scope for the Gateway-backed management surface."
+          description="Jump to the persisted Console Profile preference."
           action="Edit console profile"
           connected={props.capabilities.editConsoleProfile}
+          onAction={() => onFocusConsolePreferenceField("profile")}
         />
         <CapabilityCard
           title="Safety Policy"
-          description="Policy inspection is visible, but policy editing is intentionally not wired as a fake local success."
+          description="Jump to the persisted Safety Policy preference."
           action="Edit safety policy"
           connected={props.capabilities.editSafetyPolicy}
+          onAction={() => onFocusConsolePreferenceField("safetyPolicy")}
         />
       </div>
 
@@ -113,6 +129,7 @@ export function SettingsPageView(props: SettingsPageViewProps) {
             <label>
               <span>Console URL</span>
               <input
+                id="console-url"
                 aria-label="Console URL"
                 type="text"
                 value={consolePreferences.consoleUrl}
@@ -135,6 +152,7 @@ export function SettingsPageView(props: SettingsPageViewProps) {
             <label>
               <span>Console Profile</span>
               <input
+                id="console-profile"
                 aria-label="Console Profile"
                 type="text"
                 value={consolePreferences.profile}
@@ -146,6 +164,7 @@ export function SettingsPageView(props: SettingsPageViewProps) {
             <label>
               <span>Safety Policy</span>
               <input
+                id="console-safety-policy"
                 aria-label="Safety Policy"
                 type="text"
                 value={consolePreferences.safetyPolicy}

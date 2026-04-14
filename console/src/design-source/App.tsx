@@ -1,4 +1,5 @@
 import {
+  Activity,
   Menu,
   X,
   Bot,
@@ -10,6 +11,7 @@ import {
 import Settings from "./components/Settings";
 import Machines from "./components/Machines";
 import Environment from "./components/Environment";
+import Overview from "./components/Overview";
 import SessionChat from "./components/SessionChat";
 import MachinePanel from "./components/MachinePanel";
 import type { ConsoleHostViewModel } from "../design-host/use-console-host";
@@ -22,6 +24,9 @@ export default function App({
   machines,
   selectedSession,
   selectedMachine,
+  overviewMetrics,
+  overviewLoading,
+  overviewError,
   workspace,
   mobilePanelOpen,
   sidebarCollapsed,
@@ -119,6 +124,14 @@ export default function App({
             onUpdateAgentConfig={onUpdateAgentConfig}
           />
         );
+      case "overview":
+        return (
+          <Overview
+            metrics={overviewMetrics}
+            isLoading={overviewLoading}
+            error={overviewError}
+          />
+        );
       case "environment":
         return <Environment />;
       case "settings":
@@ -157,7 +170,9 @@ export default function App({
             </div>
             <span className="text-sm text-zinc-50 tracking-tight">
               {isManagementPage
-                ? activePage === "machines"
+                ? activePage === "overview"
+                  ? "概览"
+                  : activePage === "machines"
                   ? "机器管理"
                   : activePage === "environment"
                     ? "环境资源"

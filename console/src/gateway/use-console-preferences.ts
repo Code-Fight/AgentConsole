@@ -74,13 +74,14 @@ export function useConsolePreferences() {
     if (loadPromise) {
       return loadPromise;
     }
-    setStoreState({ isLoading: true });
+    setStoreState({ isLoading: true, loadError: null });
     loadPromise = (async () => {
       try {
         const response = await http<ConsolePreferencesResponse>("/settings/console");
         setStoreState({
           preferences: response.preferences,
           loadError: null,
+          saveError: null,
           hasAttempted: true,
           hasLoadedSuccessfully: true,
         });
@@ -109,7 +110,7 @@ export function useConsolePreferences() {
 
   const savePreferences = useCallback(
     async (next: ConsolePreferences) => {
-      setStoreState({ isSaving: true });
+      setStoreState({ isSaving: true, saveError: null });
       try {
         const payload: ConsolePreferencesRequest = { preferences: next };
         const response = await http<ConsolePreferencesResponse>("/settings/console", {
@@ -121,10 +122,7 @@ export function useConsolePreferences() {
         });
         setStoreState({
           preferences: response.preferences,
-          loadError: null,
           saveError: null,
-          hasAttempted: true,
-          hasLoadedSuccessfully: true,
         });
         return response.preferences;
       } catch (saveError) {

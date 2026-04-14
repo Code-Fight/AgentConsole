@@ -174,6 +174,24 @@ func (s *Store) ThreadRoute(threadID string) (domain.ThreadRoute, bool) {
 	return route, ok
 }
 
+func (s *Store) OverviewMetrics() domain.OverviewMetrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	metrics := domain.OverviewMetrics{}
+	for _, threads := range s.threadsByMachine {
+		for _, thread := range threads {
+			if thread.Status == domain.ThreadStatusActive {
+				metrics.ActiveThreads++
+			}
+		}
+	}
+	for _, items := range s.environmentByMachine {
+		metrics.EnvironmentItems += len(items)
+	}
+	return metrics
+}
+
 func cloneThreads(threads []domain.Thread) []domain.Thread {
 	return append([]domain.Thread(nil), threads...)
 }

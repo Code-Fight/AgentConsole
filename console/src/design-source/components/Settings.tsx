@@ -57,6 +57,18 @@ export default function Settings() {
     }
   };
 
+  const handleFocusConsolePreferenceField = (
+    field: "consoleUrl" | "profile" | "safetyPolicy",
+  ) => {
+    const id =
+      field === "consoleUrl"
+        ? "console-url"
+        : field === "profile"
+          ? "console-profile"
+          : "console-safety-policy";
+    document.getElementById(id)?.focus();
+  };
+
   return (
     <SettingsPageView
       agents={vm.agents}
@@ -82,6 +94,7 @@ export default function Settings() {
       onApplyToMachine={() => void vm.applyToMachine()}
       onConsolePreferencesChange={handleConsolePreferenceChange}
       onSaveConsolePreferences={() => void handleSaveConsolePreferences()}
+      onFocusConsolePreferenceField={handleFocusConsolePreferenceField}
     />
   );
 }
