@@ -255,3 +255,73 @@ test("install and delete actions call the managed agent lifecycle APIs", async (
     );
   });
 });
+
+test("runtime control buttons call the machine runtime endpoints", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+
+    if (path === "/capabilities") {
+      return jsonResponse(capabilities);
+    }
+    if (path === "/settings/console") {
+      return jsonResponse({ preferences: null });
+    }
+    if (path === "/threads") {
+      return jsonResponse({ items: [] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [
+          {
+            id: "machine-01",
+            name: "Machine 01",
+            status: "online",
+            runtimeStatus: "running",
+            agents: [],
+          },
+          {
+            id: "machine-02",
+            name: "Machine 02",
+            status: "offline",
+            runtimeStatus: "stopped",
+            agents: [],
+          },
+        ],
+      });
+    }
+    if (path === "/machines/machine-01/runtime/stop" && method === "POST") {
+      return jsonResponse({ machineId: "machine-01" });
+    }
+    if (path === "/machines/machine-02/runtime/start" && method === "POST") {
+      return jsonResponse({ machineId: "machine-02" });
+    }
+
+    throw new Error(`Unexpected request: ${method} ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/machines"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  expect((await screen.findAllByText("Machine 01")).length).toBeGreaterThan(0);
+
+  fireEvent.click(screen.getAllByRole("button", { name: "Stop runtime" })[0]);
+  fireEvent.click(screen.getAllByRole("button", { name: "Start runtime" })[0]);
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/machines/machine-01/runtime/stop",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/machines/machine-02/runtime/start",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+});

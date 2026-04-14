@@ -208,6 +208,10 @@ func (a *FakeAdapter) SetMCPServerEnabled(serverID string, enabled bool) error {
 	return fmt.Errorf("mcp server %q not found", serverID)
 }
 
+func (a *FakeAdapter) ReloadMCPServers() error {
+	return nil
+}
+
 func (a *FakeAdapter) InstallPlugin(params agenttypes.InstallPluginParams) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()

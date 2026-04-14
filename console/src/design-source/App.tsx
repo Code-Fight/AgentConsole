@@ -41,6 +41,8 @@ export default function App({
   onInstallAgent,
   onDeleteAgent,
   onUpdateAgentConfig,
+  onStartRuntime,
+  onStopRuntime,
   onRenameSession,
   onDeleteSession,
 }: AppProps) {
@@ -122,6 +124,8 @@ export default function App({
             onInstallAgent={onInstallAgent}
             onDeleteAgent={onDeleteAgent}
             onUpdateAgentConfig={onUpdateAgentConfig}
+            onStartRuntime={onStartRuntime}
+            onStopRuntime={onStopRuntime}
           />
         );
       case "overview":

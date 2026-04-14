@@ -1370,6 +1370,40 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return err
 		}
 		return refreshEnvironmentSnapshot(session, mgr, registry)
+	case "environment.refresh":
+		var payload protocol.EnvironmentRefreshCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentRefreshCommandResult{}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, registry)
+	case "environment.mcp.reload":
+		var payload protocol.EnvironmentMCPReloadCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if registry == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "agent runtime registry is not configured", "")
+		}
+		for _, agentID := range registry.Names() {
+			runtime, ok := registry.Get(agentID)
+			if !ok {
+				continue
+			}
+			reloader, ok := runtime.(agenttypes.RuntimeMCPManager)
+			if !ok {
+				continue
+			}
+			if err := reloader.ReloadMCPServers(); err != nil {
+				return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+			}
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentMCPReloadCommandResult{}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.plugin.install":
 		var payload protocol.EnvironmentPluginInstallCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {

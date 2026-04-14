@@ -10,6 +10,8 @@ interface MachinesProps {
   onInstallAgent?: (machineId: string, agentType: string, agentName: string) => void;
   onDeleteAgent?: (machineId: string, agentId: string) => void;
   onUpdateAgentConfig?: (machineId: string, agentId: string, config: string) => void;
+  onStartRuntime?: (machineId: string) => void;
+  onStopRuntime?: (machineId: string) => void;
 }
 
 const statusConfig = {
@@ -361,6 +363,8 @@ export default function Machines({
   onInstallAgent,
   onDeleteAgent,
   onUpdateAgentConfig,
+  onStartRuntime,
+  onStopRuntime,
 }: MachinesProps) {
   const [installDialogMachine, setInstallDialogMachine] = useState<Machine | null>(null);
   const [editingAgent, setEditingAgent] = useState<{ machine: Machine; agent: AgentInfo } | null>(null);
@@ -432,6 +436,23 @@ export default function Machines({
                       <p className="text-xs text-zinc-500 font-mono">{machine.host}</p>
                       <p className="text-xs text-zinc-600 mt-0.5">{machine.os}</p>
                     </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {machine.status === "online" ? (
+                      <button
+                        onClick={() => onStopRuntime?.(machine.id)}
+                        className="px-3 py-1.5 text-xs rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition-colors"
+                      >
+                        Stop runtime
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => onStartRuntime?.(machine.id)}
+                        className="px-3 py-1.5 text-xs rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors"
+                      >
+                        Start runtime
+                      </button>
+                    )}
                   </div>
                 </div>
 

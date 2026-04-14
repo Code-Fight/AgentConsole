@@ -229,7 +229,7 @@ func (c *AppServerClient) UpsertMCPServer(serverID string, config map[string]any
 		return err
 	}
 
-	return c.reloadMCPServers()
+	return c.ReloadMCPServers()
 }
 
 func (c *AppServerClient) RemoveMCPServer(serverID string) error {
@@ -252,7 +252,7 @@ func (c *AppServerClient) RemoveMCPServer(serverID string) error {
 		return err
 	}
 
-	return c.reloadMCPServers()
+	return c.ReloadMCPServers()
 }
 
 func (c *AppServerClient) SetMCPServerEnabled(serverID string, enabled bool) error {
@@ -277,7 +277,7 @@ func (c *AppServerClient) SetMCPServerEnabled(serverID string, enabled bool) err
 		return err
 	}
 
-	return c.reloadMCPServers()
+	return c.ReloadMCPServers()
 }
 
 func (c *AppServerClient) InstallPlugin(params agenttypes.InstallPluginParams) error {
@@ -437,7 +437,7 @@ func (c *AppServerClient) writeConfigValue(keyPath string, value any, mergeStrat
 	}, &response)
 }
 
-func (c *AppServerClient) reloadMCPServers() error {
+func (c *AppServerClient) ReloadMCPServers() error {
 	var response map[string]any
 	return c.runner.Call("config/mcpServer/reload", map[string]any{}, &response)
 }

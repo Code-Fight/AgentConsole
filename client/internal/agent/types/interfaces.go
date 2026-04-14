@@ -111,6 +111,7 @@ type RuntimeMCPManager interface {
 	UpsertMCPServer(serverID string, config map[string]any) error
 	RemoveMCPServer(serverID string) error
 	SetMCPServerEnabled(serverID string, enabled bool) error
+	ReloadMCPServers() error
 }
 
 type RuntimePluginManager interface {

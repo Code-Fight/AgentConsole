@@ -50,6 +50,9 @@ interface EnvironmentPageViewProps {
   onMcpSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onSkillSubmit: (event: FormEvent<HTMLFormElement>) => void;
   onPluginInstallSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSyncCatalog: () => void;
+  onRestartBridge: () => void;
+  onOpenMarketplace: () => void;
 }
 
 interface ResourceMutation {
@@ -209,13 +212,24 @@ function renderDetailsPanel(resource: EnvironmentResource) {
   );
 }
 
-function CapabilityCard(props: { title: string; detail: string; action: string; connected: boolean }) {
+function CapabilityCard(props: {
+  title: string;
+  detail: string;
+  action: string;
+  connected: boolean;
+  onAction?: () => void;
+}) {
   return (
     <article className="resource-card-main">
       <h2>{props.title}</h2>
       <p>{props.detail}</p>
       <div className="settings-actions">
-        <button type="button" disabled={!props.connected} aria-label={props.action}>
+        <button
+          type="button"
+          disabled={!props.connected}
+          aria-label={props.action}
+          onClick={props.onAction}
+        >
           {props.action}
         </button>
         {!props.connected ? <span className="meta-pill">Not connected</span> : null}
@@ -344,18 +358,21 @@ export function EnvironmentPageView(props: EnvironmentPageViewProps) {
           detail="Gateway can mutate reported skill state, but catalog sync is not connected in this console."
           action="Sync catalog"
           connected={props.capabilities.syncCatalog}
+          onAction={props.onSyncCatalog}
         />
         <CapabilityCard
           title="MCP"
           detail="MCP resources are editable, while bridge lifecycle controls remain outside the connected surface."
           action="Restart bridge"
           connected={props.capabilities.restartBridge}
+          onAction={props.onRestartBridge}
         />
         <CapabilityCard
           title="Plugins"
           detail="Plugin install and uninstall stay Gateway-backed; marketplace browsing is not wired here."
           action="Open marketplace"
           connected={props.capabilities.openMarketplace}
+          onAction={props.onOpenMarketplace}
         />
       </div>
 

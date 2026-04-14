@@ -2067,6 +2067,12 @@ func TestCapabilitiesEndpointReflectsDependencies(t *testing.T) {
 	if body.EnvironmentMutateResources || body.EnvironmentWriteMcp || body.EnvironmentWriteSkills {
 		t.Fatalf("expected environment write capabilities to be disabled: %+v", body)
 	}
+	if body.EnvironmentSyncCatalog || body.EnvironmentRestartBridge {
+		t.Fatalf("expected sync/restart capabilities disabled without sender: %+v", body)
+	}
+	if !body.EnvironmentOpenMarketplace {
+		t.Fatalf("expected open marketplace capability enabled: %+v", body)
+	}
 	if !body.SettingsGlobalDefault || !body.SettingsMachineOverride {
 		t.Fatalf("expected settings read/write capabilities to be enabled: %+v", body)
 	}
@@ -2114,6 +2120,9 @@ func TestCapabilitiesEndpointEnablesCommandBackedFeatures(t *testing.T) {
 		StartTurn                  bool `json:"startTurn"`
 		SteerTurn                  bool `json:"steerTurn"`
 		InterruptTurn              bool `json:"interruptTurn"`
+		EnvironmentSyncCatalog     bool `json:"environmentSyncCatalog"`
+		EnvironmentRestartBridge   bool `json:"environmentRestartBridge"`
+		EnvironmentOpenMarketplace bool `json:"environmentOpenMarketplace"`
 		EnvironmentMutateResources bool `json:"environmentMutateResources"`
 		EnvironmentWriteMcp        bool `json:"environmentWriteMcp"`
 		EnvironmentWriteSkills     bool `json:"environmentWriteSkills"`
@@ -2129,8 +2138,84 @@ func TestCapabilitiesEndpointEnablesCommandBackedFeatures(t *testing.T) {
 	if !body.EnvironmentMutateResources || !body.EnvironmentWriteMcp || !body.EnvironmentWriteSkills {
 		t.Fatalf("expected environment write capabilities enabled: %+v", body)
 	}
+	if !body.EnvironmentSyncCatalog || !body.EnvironmentRestartBridge || !body.EnvironmentOpenMarketplace {
+		t.Fatalf("expected environment management capabilities enabled: %+v", body)
+	}
 	if !body.SettingsApplyMachine {
 		t.Fatalf("expected settings apply enabled: %+v", body)
+	}
+}
+
+func TestServerEnvironmentManagementUtilityEndpointsUseExpectedCommands(t *testing.T) {
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:            "machine-01",
+		Name:          "Machine One",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusRunning,
+	})
+	reg.Upsert(domain.Machine{
+		ID:            "machine-02",
+		Name:          "Machine Two",
+		Status:        domain.MachineStatusOffline,
+		RuntimeStatus: domain.MachineRuntimeStatusStopped,
+	})
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{machineID: machineID, name: name, payload: payload})
+			return protocol.CommandCompletedPayload{
+				CommandName: name,
+				Result:      mustMarshalJSON(t, map[string]any{}),
+			}, nil
+		},
+	}
+
+	handler := NewServerWithSettings(
+		reg,
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		sender,
+		settings.NewMemoryStore([]domain.AgentDescriptor{{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"}}),
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+
+	req := httptest.NewRequest(http.MethodPost, "/environment/sync", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sync returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/environment/mcps/restart-bridge", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restart bridge returned %d with %s", rec.Code, rec.Body.String())
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	if calls[0].machineID != "machine-01" || calls[0].name != "environment.refresh" {
+		t.Fatalf("unexpected sync call: %+v", calls[0])
+	}
+	if _, ok := calls[0].payload.(protocol.EnvironmentRefreshCommandPayload); !ok {
+		t.Fatalf("unexpected environment.refresh payload type: %T", calls[0].payload)
+	}
+	if calls[1].machineID != "machine-01" || calls[1].name != "environment.mcp.reload" {
+		t.Fatalf("unexpected restart call: %+v", calls[1])
+	}
+	if _, ok := calls[1].payload.(protocol.EnvironmentMCPReloadCommandPayload); !ok {
+		t.Fatalf("unexpected environment.mcp.reload payload type: %T", calls[1].payload)
 	}
 }
 

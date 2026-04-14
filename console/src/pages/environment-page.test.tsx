@@ -6,9 +6,9 @@ import { ConsoleHostRouter } from "../design-host/console-host-router";
 
 const connectConsoleSocketMock = vi.fn();
 const capabilitySnapshot = vi.hoisted(() => ({
-  environmentSyncCatalog: false,
-  environmentRestartBridge: false,
-  environmentOpenMarketplace: false,
+  environmentSyncCatalog: true,
+  environmentRestartBridge: true,
+  environmentOpenMarketplace: true,
   environmentMutateResources: true,
   environmentWriteMcp: true,
   environmentWriteSkills: true,
@@ -113,13 +113,63 @@ test("renders the active environment surface with gateway resources and enabled 
   expect(await scope.findByText("Marketplace A")).toBeInTheDocument();
   expect(scope.getAllByText("Skills").length).toBeGreaterThan(0);
   expect(scope.getAllByText("Plugins").length).toBeGreaterThan(0);
-  expect(scope.getByRole("button", { name: "Sync catalog" })).toBeDisabled();
+  expect(scope.getByRole("button", { name: "Sync catalog" })).toBeEnabled();
   expect(scope.getByRole("button", { name: "Add skill" })).toBeEnabled();
   expect(scope.getByRole("button", { name: "Add plugin record" })).toBeEnabled();
 
   const skillCard = scope.getByText("Debugger");
   const skillActions = within(skillCard.closest("article") ?? skillCard.parentElement ?? skillCard);
   expect(skillActions.getByRole("button", { name: "Delete skill" })).toBeEnabled();
+});
+
+test("sync catalog, restart bridge, and open marketplace are wired in the active environment surface", async () => {
+  connectConsoleSocketMock.mockReturnValue(() => {});
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+    const bootstrap = bootstrapResponse(path);
+    if (bootstrap) {
+      return bootstrap;
+    }
+
+    if (path === "/environment/sync" && init?.method === "POST") {
+      return jsonResponse({ targetedMachines: 1 });
+    }
+    if (path === "/environment/mcps/restart-bridge" && init?.method === "POST") {
+      return jsonResponse({ targetedMachines: 1 });
+    }
+    if (path.endsWith("/environment/skills") || path.endsWith("/environment/mcps") || path.endsWith("/environment/plugins")) {
+      return jsonResponse({ items: [] });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/environment"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  fireEvent.click(await scope.findByRole("button", { name: "Sync catalog" }));
+  fireEvent.click(scope.getByRole("button", { name: "Restart bridge" }));
+  fireEvent.click(scope.getByRole("button", { name: "Open marketplace" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/environment/sync",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/environment/mcps/restart-bridge",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  expect(scope.getByLabelText("Plugin ID")).toBeInTheDocument();
+  expect(scope.getByLabelText("Plugin name")).toBeInTheDocument();
+  expect(scope.getByLabelText("Marketplace path")).toBeInTheDocument();
 });
 
 test("clicking a skill action sends the path-based resource id and machineId", async () => {

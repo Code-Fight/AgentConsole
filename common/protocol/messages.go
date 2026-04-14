@@ -150,6 +150,14 @@ type EnvironmentPluginUninstallCommandPayload struct {
 	AgentID  string `json:"agentId,omitempty"`
 }
 
+type EnvironmentRefreshCommandPayload struct{}
+
+type EnvironmentRefreshCommandResult struct{}
+
+type EnvironmentMCPReloadCommandPayload struct{}
+
+type EnvironmentMCPReloadCommandResult struct{}
+
 type MachineAgentInstallCommandPayload struct {
 	AgentType   string `json:"agentType"`
 	DisplayName string `json:"displayName"`

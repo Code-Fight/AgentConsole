@@ -70,7 +70,7 @@ cd ..
 
 本项目已经沉淀了一个用于同步设计源码的 skill：
 
-- 路径：[`../.codex/skills/design-source-sync/SKILL.md`](/Users/zfcode/Documents/DEV/CodingAgentGateway/.codex/skills/design-source-sync/SKILL.md)
+- 路径：[`../skills/design-source-sync/SKILL.md`](/Users/zfcode/Documents/DEV/CodingAgentGateway/skills/design-source-sync/SKILL.md)
 - 名称：`design-source-sync`
 
 它的职责是指导你如何：
@@ -104,8 +104,9 @@ Use the design-source-sync skill and refresh the latest design source into conso
 
 ## 当前阶段说明
 
-当前仓库处在 `1:1 design import` 阶段：
+当前仓库已经进入 `gateway-backed active console` 阶段：
 
-- 运行入口优先渲染上游设计源码
-- 目标是视觉还原和后续快速再同步能力
-- 完整 Gateway 业务接入放在后续阶段，在此基础上继续叠加
+- 运行入口仍然通过 `src/design-host/` 挂载上游设计源码
+- Thread Hub、Workspace、Environment、Settings、Managed Agents 和 Overview Metrics 都已经接入 Gateway
+- `src/design-source/` 继续保持展示优先，路由、状态和协议接入仍由 `src/design-host/` 与 `src/gateway/` 承担
+- 仍然保留为显式断开态的控件，应视为后续产品缺口，而不是本地 mock 行为

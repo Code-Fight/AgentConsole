@@ -91,6 +91,8 @@ export interface ConsoleHostViewModel {
   onInstallAgent?: (machineId: string, agentType: string, agentName: string) => void;
   onDeleteAgent?: (machineId: string, agentId: string) => void;
   onUpdateAgentConfig?: (machineId: string, agentId: string, config: string) => void;
+  onStartRuntime?: (machineId: string) => void;
+  onStopRuntime?: (machineId: string) => void;
 }
 
 interface UseConsoleHostOptions {
@@ -461,6 +463,32 @@ export function useConsoleHost({
     [hub],
   );
 
+  const handleStartRuntime = useCallback(
+    async (machineId: string) => {
+      if (!machineId) {
+        return;
+      }
+      await http(`/machines/${encodeURIComponent(machineId)}/runtime/start`, {
+        method: "POST",
+      });
+      await hub.reload();
+    },
+    [hub],
+  );
+
+  const handleStopRuntime = useCallback(
+    async (machineId: string) => {
+      if (!machineId) {
+        return;
+      }
+      await http(`/machines/${encodeURIComponent(machineId)}/runtime/stop`, {
+        method: "POST",
+      });
+      await hub.reload();
+    },
+    [hub],
+  );
+
   return {
     activePage,
     machines: consoleMachines,
@@ -485,5 +513,7 @@ export function useConsoleHost({
     onInstallAgent: handleInstallAgent,
     onDeleteAgent: handleDeleteAgent,
     onUpdateAgentConfig: handleUpdateAgentConfig,
+    onStartRuntime: handleStartRuntime,
+    onStopRuntime: handleStopRuntime,
   };
 }

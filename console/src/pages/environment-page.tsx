@@ -30,6 +30,9 @@ export function EnvironmentPage() {
       onMcpSubmit={(event) => void vm.handleMCPSubmit(event)}
       onSkillSubmit={(event) => void vm.handleSkillSubmit(event)}
       onPluginInstallSubmit={(event) => void vm.handlePluginInstallSubmit(event)}
+      onSyncCatalog={() => void vm.handleSyncCatalog()}
+      onRestartBridge={() => void vm.handleRestartBridge()}
+      onOpenMarketplace={vm.openInstallPluginForm}
     />
   );
 }

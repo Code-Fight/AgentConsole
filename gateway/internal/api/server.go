@@ -431,9 +431,9 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 		InterruptTurn:               hasSender && threadRouting,
 		MachineInstallAgent:         hasSender && hasRegistry,
 		MachineRemoveAgent:          hasSender && hasRegistry,
-		EnvironmentSyncCatalog:      false,
-		EnvironmentRestartBridge:    false,
-		EnvironmentOpenMarketplace:  false,
+		EnvironmentSyncCatalog:      hasSender && hasRegistry,
+		EnvironmentRestartBridge:    hasSender && hasRegistry,
+		EnvironmentOpenMarketplace:  true,
 		EnvironmentMutateResources:  environmentMutate,
 		EnvironmentWriteMcp:         hasSender,
 		EnvironmentWriteSkills:      hasSender,
@@ -514,6 +514,48 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			metrics.PendingApprovals = reg.PendingApprovalCount()
 		}
 		writeJSON(w, http.StatusOK, metrics)
+	})
+
+	mux.HandleFunc("POST /environment/sync", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil || reg == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		targeted := 0
+		for _, machine := range reg.List() {
+			if machine.Status != domain.MachineStatusOnline {
+				continue
+			}
+			if _, err := sender.SendCommand(r.Context(), machine.ID, "environment.refresh", protocol.EnvironmentRefreshCommandPayload{}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			targeted++
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"targetedMachines": targeted})
+	})
+
+	mux.HandleFunc("POST /environment/mcps/restart-bridge", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil || reg == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		targeted := 0
+		for _, machine := range reg.List() {
+			if machine.Status != domain.MachineStatusOnline {
+				continue
+			}
+			if _, err := sender.SendCommand(r.Context(), machine.ID, "environment.mcp.reload", protocol.EnvironmentMCPReloadCommandPayload{}); err != nil {
+				http.Error(w, err.Error(), http.StatusBadGateway)
+				return
+			}
+			targeted++
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"targetedMachines": targeted})
 	})
 
 	mux.HandleFunc("GET /settings/agents", func(w http.ResponseWriter, _ *http.Request) {

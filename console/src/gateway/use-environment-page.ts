@@ -330,6 +330,36 @@ export function useEnvironmentPage() {
     }
   }
 
+  async function handleSyncCatalog() {
+    setError(null);
+    setPendingActionKey("sync-catalog");
+    try {
+      await http<void>("/environment/sync", {
+        method: "POST",
+      });
+      setRefreshNonce((current) => current + 1);
+    } catch {
+      setError("Unable to sync environment catalog.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handleRestartBridge() {
+    setError(null);
+    setPendingActionKey("restart-bridge");
+    try {
+      await http<void>("/environment/mcps/restart-bridge", {
+        method: "POST",
+      });
+      setRefreshNonce((current) => current + 1);
+    } catch {
+      setError("Unable to restart MCP bridge.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
   return {
     sections,
     isLoading,
@@ -354,6 +384,8 @@ export function useEnvironmentPage() {
     handleMCPSubmit,
     handleSkillSubmit,
     handlePluginInstallSubmit,
+    handleSyncCatalog,
+    handleRestartBridge,
     capabilities: {
       syncCatalog: supportsCapability("environmentSyncCatalog"),
       restartBridge: supportsCapability("environmentRestartBridge"),
