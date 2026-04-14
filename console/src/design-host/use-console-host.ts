@@ -111,7 +111,7 @@ export function useConsoleHost({
   const {
     preferences,
     isLoading: preferencesLoading,
-    hasLoaded: preferencesLoaded,
+    hasAttempted: preferencesAttempted,
     error: preferencesError,
     updatePreferences,
   } = useConsolePreferences();
@@ -123,7 +123,7 @@ export function useConsoleHost({
   }, [activePage]);
 
   useEffect(() => {
-    if (threadId || restoreAttempted || preferencesLoading || !preferencesLoaded) {
+    if (threadId || restoreAttempted || preferencesLoading || !preferencesAttempted) {
       return;
     }
 
@@ -145,7 +145,7 @@ export function useConsoleHost({
     threadId,
     restoreAttempted,
     preferencesLoading,
-    preferencesLoaded,
+    preferencesAttempted,
     preferencesError,
     preferences,
     navigate,
@@ -158,7 +158,7 @@ export function useConsoleHost({
       !threadId ||
       lastVerifiedThreadId === threadId ||
       preferencesLoading ||
-      !preferencesLoaded ||
+      !preferencesAttempted ||
       preferencesError
     ) {
       return;
@@ -171,9 +171,16 @@ export function useConsoleHost({
         if (!active) {
           return;
         }
-        setLastVerifiedThreadId(threadId);
-        if (preferences?.lastThreadId !== threadId) {
-          await updatePreferences({ lastThreadId: threadId });
+        if (preferences?.lastThreadId === threadId) {
+          setLastVerifiedThreadId(threadId);
+          return;
+        }
+        const updated = await updatePreferences({ lastThreadId: threadId });
+        if (!active) {
+          return;
+        }
+        if (updated) {
+          setLastVerifiedThreadId(threadId);
         }
       } catch {
         if (!active) {
@@ -194,7 +201,7 @@ export function useConsoleHost({
     threadId,
     lastVerifiedThreadId,
     preferencesLoading,
-    preferencesLoaded,
+    preferencesAttempted,
     preferencesError,
     preferences,
     updatePreferences,

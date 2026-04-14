@@ -19,6 +19,7 @@ export default function Settings() {
     isLoading: preferencesLoading,
     isSaving: preferencesSaving,
     error: preferencesError,
+    hasAttempted: preferencesAttempted,
     savePreferences,
   } = useConsolePreferences();
   const [draftPreferences, setDraftPreferences] = useState<ConsolePreferences>(
@@ -33,11 +34,11 @@ export default function Settings() {
       setHasDraftPreferences(true);
       return;
     }
-    if (!preferencesLoading && !preferencesError) {
+    if (preferencesAttempted) {
       setDraftPreferences(emptyConsolePreferences);
       setHasDraftPreferences(true);
     }
-  }, [preferences, preferencesLoading, preferencesError]);
+  }, [preferences, preferencesAttempted]);
 
   const combinedError = vm.error ?? preferencesError;
   const combinedStatusMessage = consoleStatusMessage ?? vm.statusMessage;

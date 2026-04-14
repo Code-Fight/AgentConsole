@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { http } from "../common/api/http";
 import type {
   ConsolePreferences,
@@ -16,7 +16,8 @@ const emptyPreferences: ConsolePreferences = {
 
 interface ConsolePreferencesState {
   preferences: ConsolePreferences | null;
-  hasLoaded: boolean;
+  hasAttempted: boolean;
+  hasLoadedSuccessfully: boolean;
   isLoading: boolean;
   isSaving: boolean;
   error: string | null;
@@ -24,8 +25,9 @@ interface ConsolePreferencesState {
 
 const initialState: ConsolePreferencesState = {
   preferences: null,
-  hasLoaded: false,
-  isLoading: true,
+  hasAttempted: false,
+  hasLoadedSuccessfully: false,
+  isLoading: false,
   isSaving: false,
   error: null,
 };
@@ -53,6 +55,10 @@ function subscribe(listener: () => void) {
   };
 }
 
+function getSnapshot() {
+  return store.state;
+}
+
 export function resetConsolePreferencesStoreForTests() {
   store.state = { ...initialState };
   loadPromise = null;
@@ -60,9 +66,7 @@ export function resetConsolePreferencesStoreForTests() {
 }
 
 export function useConsolePreferences() {
-  const [snapshot, setSnapshot] = useState(store.state);
-
-  useEffect(() => subscribe(() => setSnapshot(store.state)), []);
+  const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   const loadPreferences = useCallback(async () => {
     if (loadPromise) {
@@ -75,7 +79,8 @@ export function useConsolePreferences() {
         setStoreState({
           preferences: response.preferences,
           error: null,
-          hasLoaded: true,
+          hasAttempted: true,
+          hasLoadedSuccessfully: true,
         });
       } catch (loadError) {
         setStoreState({
@@ -83,6 +88,8 @@ export function useConsolePreferences() {
             loadError instanceof Error
               ? loadError.message
               : "Unable to load console preferences.",
+          hasAttempted: true,
+          hasLoadedSuccessfully: false,
         });
       } finally {
         loadPromise = null;
@@ -93,7 +100,7 @@ export function useConsolePreferences() {
   }, []);
 
   useEffect(() => {
-    if (!store.state.hasLoaded) {
+    if (!store.state.hasAttempted && !store.state.isLoading) {
       void loadPreferences();
     }
   }, [loadPreferences]);
@@ -113,7 +120,8 @@ export function useConsolePreferences() {
         setStoreState({
           preferences: response.preferences,
           error: null,
-          hasLoaded: true,
+          hasAttempted: true,
+          hasLoadedSuccessfully: true,
         });
         return response.preferences;
       } catch (saveError) {
@@ -146,15 +154,16 @@ export function useConsolePreferences() {
     if (snapshot.error) {
       return null;
     }
-    return snapshot.hasLoaded ? emptyPreferences : null;
-  }, [snapshot.preferences, snapshot.error, snapshot.hasLoaded]);
+    return snapshot.hasAttempted ? emptyPreferences : null;
+  }, [snapshot.preferences, snapshot.error, snapshot.hasAttempted]);
 
   return {
     preferences: normalized,
     isLoading: snapshot.isLoading,
     isSaving: snapshot.isSaving,
     error: snapshot.error,
-    hasLoaded: snapshot.hasLoaded,
+    hasAttempted: snapshot.hasAttempted,
+    hasLoadedSuccessfully: snapshot.hasLoadedSuccessfully,
     reload: loadPreferences,
     savePreferences,
     updatePreferences,
