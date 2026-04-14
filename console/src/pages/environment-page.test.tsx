@@ -730,6 +730,48 @@ test("submits plugin install requests for add plugin record", async () => {
   });
 });
 
+test("opening one environment form closes the others", async () => {
+  connectConsoleSocketMock.mockReturnValue(() => {});
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = typeof input === "string" ? input : input.toString();
+    const bootstrap = bootstrapResponse(path);
+    if (bootstrap) {
+      return bootstrap;
+    }
+
+    if (path.endsWith("/environment/skills") || path.endsWith("/environment/mcps")) {
+      return jsonResponse({ items: [] });
+    }
+
+    if (path.endsWith("/environment/plugins")) {
+      return jsonResponse({ items: [] });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/environment"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+
+  fireEvent.click(await scope.findByRole("button", { name: "Add skill" }));
+  expect(scope.getByRole("button", { name: "Create skill" })).toBeInTheDocument();
+
+  fireEvent.click(scope.getByRole("button", { name: "Add MCP" }));
+  expect(scope.getByRole("button", { name: "Save MCP" })).toBeInTheDocument();
+  expect(scope.queryByRole("button", { name: "Create skill" })).not.toBeInTheDocument();
+
+  fireEvent.click(scope.getByRole("button", { name: "Add plugin record" }));
+  expect(scope.getByRole("button", { name: "Install plugin" })).toBeInTheDocument();
+  expect(scope.queryByRole("button", { name: "Save MCP" })).not.toBeInTheDocument();
+});
+
 async function getMainScope() {
   const mains = await screen.findAllByRole("main");
   return within(mains[0]);

@@ -476,7 +476,7 @@ func TestClientCreateSkillScaffoldWritesDefaultFile(t *testing.T) {
 
 	skillID, err := client.CreateSkill(agenttypes.CreateSkillParams{
 		Name:        "Debug Helper!!",
-		Description: "Assists debugging",
+		Description: "Assists debugging\nHandles tricky cases",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -493,13 +493,14 @@ func TestClientCreateSkillScaffoldWritesDefaultFile(t *testing.T) {
 	}
 
 	expected := `---
-name: Debug Helper!!
-description: Assists debugging
+name: "Debug Helper!!"
+description: "Assists debugging\nHandles tricky cases"
 ---
 
 # Debug Helper!!
 
 Assists debugging
+Handles tricky cases
 
 ## Usage
 
@@ -507,6 +508,40 @@ Add task-specific instructions here.
 `
 	if string(contents) != expected {
 		t.Fatalf("unexpected scaffold contents:\n%s", string(contents))
+	}
+}
+
+func TestClientCreateSkillScaffoldDoesNotOverwriteExistingSkill(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+	tmpDir := t.TempDir()
+	client.homeDir = func() (string, error) {
+		return tmpDir, nil
+	}
+
+	skillDir := filepath.Join(tmpDir, ".codex", "skills", "debug-helper")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte("original"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	_, err := client.CreateSkill(agenttypes.CreateSkillParams{
+		Name:        "Debug Helper",
+		Description: "Updated",
+	})
+	if err == nil {
+		t.Fatal("expected error when skill scaffold exists")
+	}
+
+	contents, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if string(contents) != "original" {
+		t.Fatalf("expected original contents preserved, got %q", string(contents))
 	}
 }
 

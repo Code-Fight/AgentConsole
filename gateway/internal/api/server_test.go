@@ -888,6 +888,90 @@ func TestServerEnvironmentMutationTargetsRequestedMachine(t *testing.T) {
 	}
 }
 
+func TestServerEnvironmentPluginInstallValidatesMarketplacePath(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", nil, []domain.EnvironmentResource{
+		{
+			ResourceID:  "plugin-a",
+			MachineID:   "machine-01",
+			Kind:        domain.EnvironmentKindPlugin,
+			DisplayName: "Plugin A",
+			Status:      domain.EnvironmentResourceStatusUnknown,
+			Details: map[string]any{
+				"marketplacePath": "/tmp/codex/marketplace",
+				"pluginName":      "plugin-a",
+			},
+		},
+	})
+
+	var called bool
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			called = true
+			return protocol.CommandCompletedPayload{}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/environment/plugins/install",
+		bytes.NewBufferString(`{"machineId":"machine-01","pluginName":"plugin-a","marketplacePath":"/tmp/other"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if called {
+		t.Fatal("expected no command send for invalid marketplace path")
+	}
+}
+
+func TestServerEnvironmentPluginInstallRejectsMismatchedPluginID(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", nil, []domain.EnvironmentResource{
+		{
+			ResourceID:  "gmail@openai-curated",
+			MachineID:   "machine-01",
+			Kind:        domain.EnvironmentKindPlugin,
+			DisplayName: "Gmail",
+			Status:      domain.EnvironmentResourceStatusUnknown,
+			Details: map[string]any{
+				"marketplacePath": "/tmp/codex/marketplace",
+				"pluginName":      "Gmail",
+			},
+		},
+	})
+
+	var called bool
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			called = true
+			return protocol.CommandCompletedPayload{}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/environment/plugins/gmail%40openai-curated/install",
+		bytes.NewBufferString(`{"machineId":"machine-01","pluginId":"other","pluginName":"Gmail","marketplacePath":"/tmp/codex/marketplace"}`),
+	)
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+	if called {
+		t.Fatal("expected no command send for mismatched pluginId")
+	}
+}
+
 func TestServerRoutesApprovalResponseToResolvedMachine(t *testing.T) {
 	reg := registry.NewStore()
 	reg.UpsertPendingApproval("machine-01", protocol.ApprovalRequiredPayload{

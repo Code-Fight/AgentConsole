@@ -136,6 +136,8 @@ export function useEnvironmentPage() {
   );
 
   function openCreateMCPForm() {
+    setSkillForm(null);
+    setPluginForm(null);
     setMcpForm({
       machineId: defaultMachineId(sections),
       resourceId: "",
@@ -145,6 +147,8 @@ export function useEnvironmentPage() {
   }
 
   function openCreateSkillForm() {
+    setMcpForm(null);
+    setPluginForm(null);
     setSkillForm({
       machineId: defaultMachineId(sections),
       name: "",
@@ -154,6 +158,8 @@ export function useEnvironmentPage() {
   }
 
   function openInstallPluginForm() {
+    setMcpForm(null);
+    setSkillForm(null);
     setPluginForm({
       machineId: defaultMachineId(sections),
       pluginId: "",
@@ -164,6 +170,8 @@ export function useEnvironmentPage() {
   }
 
   function openEditMCPForm(resource: EnvironmentResource) {
+    setSkillForm(null);
+    setPluginForm(null);
     setMcpForm({
       machineId: resource.machineId,
       resourceId: resource.resourceId,

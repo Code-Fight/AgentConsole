@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	agenttypes "code-agent-gateway/client/internal/agent/types"
@@ -158,7 +159,18 @@ func (c *AppServerClient) CreateSkill(params agenttypes.CreateSkillParams) (stri
 	}
 	skillPath := filepath.Join(skillDir, "SKILL.md")
 	content := buildSkillScaffoldContents(name, description)
-	if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
+	file, err := os.OpenFile(skillPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return "", fmt.Errorf("skill scaffold already exists")
+		}
+		return "", err
+	}
+	if _, err := file.Write([]byte(content)); err != nil {
+		_ = file.Close()
+		return "", err
+	}
+	if err := file.Close(); err != nil {
 		return "", err
 	}
 
@@ -168,7 +180,7 @@ func (c *AppServerClient) CreateSkill(params agenttypes.CreateSkillParams) (stri
 func (c *AppServerClient) DeleteSkill(nameOrPath string) error {
 	selector := strings.TrimSpace(nameOrPath)
 	if selector == "" {
-		return fmt.Errorf("skill id is required")
+		return fmt.Errorf("skill name or path is required")
 	}
 
 	resolveHomeDir := c.homeDir
@@ -388,6 +400,8 @@ func normalizeSkillSlug(name string) string {
 }
 
 func buildSkillScaffoldContents(name string, description string) string {
+	escapedName := strconv.Quote(name)
+	escapedDescription := strconv.Quote(description)
 	return fmt.Sprintf(`---
 name: %s
 description: %s
@@ -400,7 +414,7 @@ description: %s
 ## Usage
 
 Add task-specific instructions here.
-`, name, description, name, description)
+`, escapedName, escapedDescription, name, description)
 }
 
 func (c *AppServerClient) readConfig() (map[string]any, error) {

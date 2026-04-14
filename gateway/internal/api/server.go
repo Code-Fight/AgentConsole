@@ -254,6 +254,25 @@ func stringDetail(resource domain.EnvironmentResource, key string) string {
 	return strings.TrimSpace(stringValue)
 }
 
+func allowedMarketplacePaths(idx *runtimeindex.Store, machineID string) map[string]struct{} {
+	if idx == nil || strings.TrimSpace(machineID) == "" {
+		return nil
+	}
+
+	allowed := map[string]struct{}{}
+	for _, resource := range idx.Environment(domain.EnvironmentKindPlugin) {
+		if resource.MachineID != machineID {
+			continue
+		}
+		path := stringDetail(resource, "marketplacePath")
+		if path == "" {
+			continue
+		}
+		allowed[path] = struct{}{}
+	}
+	return allowed
+}
+
 func machineIsOnline(reg *registry.Store, machineID string) bool {
 	if reg == nil || strings.TrimSpace(machineID) == "" {
 		return false
@@ -1290,6 +1309,10 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			Description: req.Description,
 		})
 		if err != nil {
+			if strings.Contains(err.Error(), "skill scaffold already exists") {
+				http.Error(w, "skill scaffold already exists", http.StatusConflict)
+				return
+			}
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
 		}
@@ -1589,22 +1612,41 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		}
 
 		pluginID := r.PathValue("id")
+		if strings.TrimSpace(req.PluginID) != "" && req.PluginID != pluginID {
+			http.Error(w, "pluginId does not match path", http.StatusBadRequest)
+			return
+		}
 		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, req.MachineID, pluginID)
 		if !ok {
 			http.Error(w, "plugin not found", http.StatusNotFound)
 			return
 		}
-		pluginInstallID := strings.TrimSpace(req.PluginID)
-		if pluginInstallID == "" {
-			pluginInstallID = pluginID
-		}
+		pluginInstallID := pluginID
 		marketplacePath := strings.TrimSpace(req.MarketplacePath)
 		pluginName := strings.TrimSpace(req.PluginName)
+		allowedMarketplaces := allowedMarketplacePaths(idx, req.MachineID)
+		if marketplacePath != "" {
+			if _, ok := allowedMarketplaces[marketplacePath]; !ok {
+				http.Error(w, "marketplacePath is not recognized", http.StatusBadRequest)
+				return
+			}
+			resourceMarketplace := stringDetail(resource, "marketplacePath")
+			if resourceMarketplace != "" && resourceMarketplace != marketplacePath {
+				http.Error(w, "marketplacePath does not match plugin", http.StatusBadRequest)
+				return
+			}
+		}
 		if marketplacePath == "" {
 			marketplacePath = stringDetail(resource, "marketplacePath")
 		}
 		if pluginName == "" {
 			pluginName = stringDetail(resource, "pluginName")
+		}
+		if marketplacePath != "" {
+			if _, ok := allowedMarketplaces[marketplacePath]; !ok {
+				http.Error(w, "marketplacePath is not recognized", http.StatusBadRequest)
+				return
+			}
 		}
 		if marketplacePath == "" || pluginName == "" {
 			http.Error(w, "plugin install details unavailable", http.StatusConflict)
@@ -1644,6 +1686,12 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		}
 		if strings.TrimSpace(req.MarketplacePath) == "" {
 			http.Error(w, "marketplacePath is required", http.StatusBadRequest)
+			return
+		}
+
+		allowedMarketplaces := allowedMarketplacePaths(idx, req.MachineID)
+		if _, ok := allowedMarketplaces[strings.TrimSpace(req.MarketplacePath)]; !ok {
+			http.Error(w, "marketplacePath is not recognized", http.StatusBadRequest)
 			return
 		}
 
