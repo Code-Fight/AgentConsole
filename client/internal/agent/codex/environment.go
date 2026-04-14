@@ -2,6 +2,8 @@ package codex
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	agenttypes "code-agent-gateway/client/internal/agent/types"
@@ -127,6 +129,82 @@ func (c *AppServerClient) SetSkillEnabled(nameOrPath string, enabled bool) error
 
 	var response skillsConfigWriteResponse
 	return c.runner.Call("skills/config/write", payload, &response)
+}
+
+func (c *AppServerClient) CreateSkill(params agenttypes.CreateSkillParams) (string, error) {
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return "", fmt.Errorf("skill name is required")
+	}
+
+	description := strings.TrimSpace(params.Description)
+	slug := normalizeSkillSlug(name)
+	if slug == "" {
+		return "", fmt.Errorf("skill name is invalid")
+	}
+
+	resolveHomeDir := c.homeDir
+	if resolveHomeDir == nil {
+		resolveHomeDir = resolveUserHomeDir
+	}
+	homeDir, err := resolveHomeDir()
+	if err != nil {
+		return "", err
+	}
+
+	skillDir := filepath.Join(homeDir, ".codex", "skills", slug)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		return "", err
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	content := buildSkillScaffoldContents(name, description)
+	if err := os.WriteFile(skillPath, []byte(content), 0o644); err != nil {
+		return "", err
+	}
+
+	return skillPath, nil
+}
+
+func (c *AppServerClient) DeleteSkill(nameOrPath string) error {
+	selector := strings.TrimSpace(nameOrPath)
+	if selector == "" {
+		return fmt.Errorf("skill id is required")
+	}
+
+	resolveHomeDir := c.homeDir
+	if resolveHomeDir == nil {
+		resolveHomeDir = resolveUserHomeDir
+	}
+	homeDir, err := resolveHomeDir()
+	if err != nil {
+		return err
+	}
+
+	skillsRoot := filepath.Join(homeDir, ".codex", "skills")
+	var skillDir string
+	if isPathLikeResourceID(selector) {
+		cleaned := filepath.Clean(selector)
+		if !filepath.IsAbs(cleaned) {
+			cleaned = filepath.Join(skillsRoot, cleaned)
+		}
+		skillDir = filepath.Dir(cleaned)
+	} else {
+		slug := normalizeSkillSlug(selector)
+		if slug == "" {
+			return fmt.Errorf("skill name is invalid")
+		}
+		skillDir = filepath.Join(skillsRoot, slug)
+	}
+
+	rel, err := filepath.Rel(skillsRoot, skillDir)
+	if err != nil {
+		return err
+	}
+	if rel == "." || strings.HasPrefix(rel, "..") || strings.Contains(rel, string(filepath.Separator)) {
+		return fmt.Errorf("skill path is outside skills directory")
+	}
+
+	return os.RemoveAll(skillDir)
 }
 
 func (c *AppServerClient) UpsertMCPServer(serverID string, config map[string]any) error {
@@ -290,6 +368,39 @@ func isPathLikeResourceID(resourceID string) bool {
 		return true
 	}
 	return len(trimmed) > 1 && trimmed[1] == ':'
+}
+
+func normalizeSkillSlug(name string) string {
+	var builder strings.Builder
+	lastDash := false
+	for _, runeValue := range strings.ToLower(name) {
+		if (runeValue >= 'a' && runeValue <= 'z') || (runeValue >= '0' && runeValue <= '9') {
+			builder.WriteRune(runeValue)
+			lastDash = false
+			continue
+		}
+		if !lastDash && builder.Len() > 0 {
+			builder.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(builder.String(), "-")
+}
+
+func buildSkillScaffoldContents(name string, description string) string {
+	return fmt.Sprintf(`---
+name: %s
+description: %s
+---
+
+# %s
+
+%s
+
+## Usage
+
+Add task-specific instructions here.
+`, name, description, name, description)
 }
 
 func (c *AppServerClient) readConfig() (map[string]any, error) {

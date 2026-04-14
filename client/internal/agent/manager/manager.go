@@ -117,6 +117,34 @@ func (m *Manager) SetSkillEnabled(runtimeName string, nameOrPath string, enabled
 	return configurator.SetSkillEnabled(nameOrPath, enabled)
 }
 
+func (m *Manager) CreateSkill(runtimeName string, params types.CreateSkillParams) (string, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return "", err
+	}
+
+	manager, ok := runtime.(types.RuntimeSkillManager)
+	if !ok {
+		return "", fmt.Errorf("runtime %q does not support skill scaffolding", runtimeName)
+	}
+
+	return manager.CreateSkill(params)
+}
+
+func (m *Manager) DeleteSkill(runtimeName string, nameOrPath string) error {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return err
+	}
+
+	manager, ok := runtime.(types.RuntimeSkillManager)
+	if !ok {
+		return fmt.Errorf("runtime %q does not support skill scaffolding", runtimeName)
+	}
+
+	return manager.DeleteSkill(nameOrPath)
+}
+
 func (m *Manager) UpsertMCPServer(runtimeName string, serverID string, config map[string]any) error {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {

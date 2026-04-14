@@ -20,6 +20,19 @@ export interface MCPFormState {
   configText: string;
 }
 
+export interface SkillFormState {
+  machineId: string;
+  name: string;
+  description: string;
+}
+
+export interface PluginFormState {
+  machineId: string;
+  pluginId: string;
+  pluginName: string;
+  marketplacePath: string;
+}
+
 export function defaultMachineId(sections: EnvironmentSections): string {
   const allResources = [...sections.skills, ...sections.mcps, ...sections.plugins];
   for (const resource of allResources) {
@@ -59,6 +72,8 @@ export function useEnvironmentPage() {
   const [refreshNonce, setRefreshNonce] = useState(0);
   const [expandedResourceKey, setExpandedResourceKey] = useState<string | null>(null);
   const [mcpForm, setMcpForm] = useState<MCPFormState | null>(null);
+  const [skillForm, setSkillForm] = useState<SkillFormState | null>(null);
+  const [pluginForm, setPluginForm] = useState<PluginFormState | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -129,6 +144,25 @@ export function useEnvironmentPage() {
     setError(null);
   }
 
+  function openCreateSkillForm() {
+    setSkillForm({
+      machineId: defaultMachineId(sections),
+      name: "",
+      description: "",
+    });
+    setError(null);
+  }
+
+  function openInstallPluginForm() {
+    setPluginForm({
+      machineId: defaultMachineId(sections),
+      pluginId: "",
+      pluginName: "",
+      marketplacePath: "",
+    });
+    setError(null);
+  }
+
   function openEditMCPForm(resource: EnvironmentResource) {
     setMcpForm({
       machineId: resource.machineId,
@@ -148,17 +182,22 @@ export function useEnvironmentPage() {
     actionKey: string,
     method: "POST" | "DELETE",
     path: string,
+    payload?: Record<string, unknown>,
   ) {
     setPendingActionKey(actionKey);
     setError(null);
 
     try {
+      const requestBody = {
+        machineId: resource.machineId,
+        ...(payload ?? {}),
+      };
       await http<void>(path, {
         method,
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ machineId: resource.machineId }),
+        body: JSON.stringify(requestBody),
       });
       setRefreshNonce((current) => current + 1);
     } catch {
@@ -209,6 +248,80 @@ export function useEnvironmentPage() {
     }
   }
 
+  async function handleSkillSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!skillForm) {
+      return;
+    }
+    if (!skillForm.name.trim()) {
+      setError("Skill name is required.");
+      return;
+    }
+
+    setError(null);
+    setPendingActionKey("skill-form");
+    try {
+      await http<void>("/environment/skills", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          machineId: skillForm.machineId.trim(),
+          name: skillForm.name.trim(),
+          description: skillForm.description.trim(),
+        }),
+      });
+      setSkillForm(null);
+      setRefreshNonce((current) => current + 1);
+    } catch {
+      setError("Unable to create skill scaffold.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
+  async function handlePluginInstallSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!pluginForm) {
+      return;
+    }
+    if (!pluginForm.pluginName.trim()) {
+      setError("Plugin name is required.");
+      return;
+    }
+    if (!pluginForm.marketplacePath.trim()) {
+      setError("Marketplace path is required.");
+      return;
+    }
+
+    const pluginName = pluginForm.pluginName.trim();
+    const pluginId = pluginForm.pluginId.trim() || pluginName;
+
+    setError(null);
+    setPendingActionKey("plugin-form");
+    try {
+      await http<void>("/environment/plugins/install", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          machineId: pluginForm.machineId.trim(),
+          pluginId,
+          pluginName,
+          marketplacePath: pluginForm.marketplacePath.trim(),
+        }),
+      });
+      setPluginForm(null);
+      setRefreshNonce((current) => current + 1);
+    } catch {
+      setError("Unable to install plugin.");
+    } finally {
+      setPendingActionKey(null);
+    }
+  }
+
   return {
     sections,
     isLoading,
@@ -216,19 +329,30 @@ export function useEnvironmentPage() {
     pendingActionKey,
     expandedResourceKey,
     mcpForm,
+    skillForm,
+    pluginForm,
     setMcpForm,
+    setSkillForm,
+    setPluginForm,
     setMcpFormClosed: () => setMcpForm(null),
+    setSkillFormClosed: () => setSkillForm(null),
+    setPluginFormClosed: () => setPluginForm(null),
     openCreateMCPForm,
+    openCreateSkillForm,
+    openInstallPluginForm,
     openEditMCPForm,
     toggleDetails,
     handleResourceMutation,
     handleMCPSubmit,
+    handleSkillSubmit,
+    handlePluginInstallSubmit,
     capabilities: {
       syncCatalog: supportsCapability("environmentSyncCatalog"),
       restartBridge: supportsCapability("environmentRestartBridge"),
       openMarketplace: supportsCapability("environmentOpenMarketplace"),
       mutateResources: supportsCapability("environmentMutateResources"),
       writeMcp: supportsCapability("environmentWriteMcp"),
+      writeSkills: supportsCapability("environmentWriteSkills"),
     },
   };
 }

@@ -187,6 +187,7 @@ var _ agenttypes.RuntimeTurnEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalResponder = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeSkillConfigurator = (*AppServerClient)(nil)
+var _ agenttypes.RuntimeSkillManager = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeMCPManager = (*AppServerClient)(nil)
 var _ agenttypes.RuntimePluginManager = (*AppServerClient)(nil)
 

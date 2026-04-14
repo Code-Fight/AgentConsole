@@ -2,6 +2,8 @@ package codex
 
 import (
 	"fmt"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	agenttypes "code-agent-gateway/client/internal/agent/types"
@@ -64,6 +66,85 @@ func (a *FakeAdapter) SetSkillEnabled(nameOrPath string, enabled bool) error {
 	}
 
 	return fmt.Errorf("skill %q not found", nameOrPath)
+}
+
+func (a *FakeAdapter) CreateSkill(params agenttypes.CreateSkillParams) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	name := strings.TrimSpace(params.Name)
+	if name == "" {
+		return "", fmt.Errorf("skill name is required")
+	}
+	slug := normalizeSkillSlug(name)
+	if slug == "" {
+		return "", fmt.Errorf("skill name is invalid")
+	}
+	homeDir, err := resolveUserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	resourceID := filepath.Join(homeDir, ".codex", "skills", slug, "SKILL.md")
+
+	resource := domain.EnvironmentResource{
+		ResourceID:  resourceID,
+		Kind:        domain.EnvironmentKindSkill,
+		DisplayName: name,
+		Status:      domain.EnvironmentResourceStatusDisabled,
+		Details: map[string]any{
+			"path":    resourceID,
+			"enabled": false,
+		},
+	}
+
+	for idx := range a.environment {
+		if a.environment[idx].Kind != domain.EnvironmentKindSkill || a.environment[idx].ResourceID != resourceID {
+			continue
+		}
+		a.environment[idx] = mergeFakeEnvironmentResource(a.environment[idx], resource)
+		return resourceID, nil
+	}
+
+	a.environment = append(a.environment, resource)
+	return resourceID, nil
+}
+
+func (a *FakeAdapter) DeleteSkill(nameOrPath string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	selector := strings.TrimSpace(nameOrPath)
+	if selector == "" {
+		return fmt.Errorf("skill id is required")
+	}
+
+	resourceID := selector
+	if !isPathLikeResourceID(selector) {
+		slug := normalizeSkillSlug(selector)
+		if slug == "" {
+			return fmt.Errorf("skill name is invalid")
+		}
+		homeDir, err := resolveUserHomeDir()
+		if err != nil {
+			return err
+		}
+		resourceID = filepath.Join(homeDir, ".codex", "skills", slug, "SKILL.md")
+	}
+
+	filtered := make([]domain.EnvironmentResource, 0, len(a.environment))
+	removed := false
+	for _, resource := range a.environment {
+		if resource.Kind == domain.EnvironmentKindSkill && resource.ResourceID == resourceID {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, resource)
+	}
+	if !removed {
+		return fmt.Errorf("skill %q not found", nameOrPath)
+	}
+	a.environment = filtered
+	return nil
 }
 
 func (a *FakeAdapter) UpsertMCPServer(serverID string, config map[string]any) error {

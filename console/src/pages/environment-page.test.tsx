@@ -11,6 +11,7 @@ const capabilitySnapshot = vi.hoisted(() => ({
   environmentOpenMarketplace: false,
   environmentMutateResources: true,
   environmentWriteMcp: true,
+  environmentWriteSkills: true,
   settingsEditGatewayEndpoint: false,
   settingsEditConsoleProfile: false,
   settingsEditSafetyPolicy: false,
@@ -37,7 +38,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("renders the active environment surface with gateway resources and disabled unsupported actions", async () => {
+test("renders the active environment surface with gateway resources and enabled environment write actions", async () => {
   connectConsoleSocketMock.mockReturnValue(() => {});
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const path = typeof input === "string" ? input : input.toString();
@@ -113,12 +114,12 @@ test("renders the active environment surface with gateway resources and disabled
   expect(scope.getAllByText("Skills").length).toBeGreaterThan(0);
   expect(scope.getAllByText("Plugins").length).toBeGreaterThan(0);
   expect(scope.getByRole("button", { name: "Sync catalog" })).toBeDisabled();
-  expect(scope.getByRole("button", { name: "Add skill" })).toBeDisabled();
-  expect(scope.getByRole("button", { name: "Add plugin record" })).toBeDisabled();
+  expect(scope.getByRole("button", { name: "Add skill" })).toBeEnabled();
+  expect(scope.getByRole("button", { name: "Add plugin record" })).toBeEnabled();
 
   const skillCard = scope.getByText("Debugger");
   const skillActions = within(skillCard.closest("article") ?? skillCard.parentElement ?? skillCard);
-  expect(skillActions.getByRole("button", { name: "Delete skill" })).toBeDisabled();
+  expect(skillActions.getByRole("button", { name: "Delete skill" })).toBeEnabled();
 });
 
 test("clicking a skill action sends the path-based resource id and machineId", async () => {
@@ -165,6 +166,16 @@ test("clicking a skill action sends the path-based resource id and machineId", a
       });
     }
 
+    if (path.endsWith(`/environment/skills/${encodedSkillPath}`) && init?.method === "DELETE") {
+      const body = typeof init?.body === "string" ? init.body : "";
+      return new Response(body, {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     throw new Error(`Unexpected request: ${path}`);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -177,12 +188,83 @@ test("clicking a skill action sends the path-based resource id and machineId", a
 
   const scope = await getMainScope();
   fireEvent.click(await scope.findByRole("button", { name: "Disable" }));
+  fireEvent.click(scope.getByRole("button", { name: "Delete skill" }));
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
       `/environment/skills/${encodedSkillPath}/disable`,
       expect.objectContaining({
         body: JSON.stringify({ machineId: "machine-9" }),
+        method: "POST",
+      }),
+    );
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/environment/skills/${encodedSkillPath}`,
+      expect.objectContaining({
+        body: JSON.stringify({ machineId: "machine-9" }),
+        method: "DELETE",
+      }),
+    );
+  });
+});
+
+test("submits skill scaffold create requests", async () => {
+  connectConsoleSocketMock.mockReturnValue(() => {});
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+    const bootstrap = bootstrapResponse(path);
+    if (bootstrap) {
+      return bootstrap;
+    }
+
+    if (path.endsWith("/environment/skills") && init?.method === "POST") {
+      return new Response(typeof init?.body === "string" ? init.body : "", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (path.endsWith("/environment/skills") && (!init?.method || init.method === "GET")) {
+      return jsonResponse({ items: [] });
+    }
+
+    if (path.endsWith("/environment/mcps") || path.endsWith("/environment/plugins")) {
+      return jsonResponse({ items: [] });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/environment"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  fireEvent.click(await scope.findByRole("button", { name: "Add skill" }));
+  fireEvent.change(scope.getByLabelText("Machine ID"), {
+    target: { value: "machine-22" },
+  });
+  fireEvent.change(scope.getByLabelText("Skill name"), {
+    target: { value: "Debug Helper" },
+  });
+  fireEvent.change(scope.getByLabelText("Description"), {
+    target: { value: "Describe what the skill does." },
+  });
+  fireEvent.click(scope.getByRole("button", { name: "Create skill" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/environment/skills",
+      expect.objectContaining({
+        body: JSON.stringify({
+          machineId: "machine-22",
+          name: "Debug Helper",
+          description: "Describe what the skill does.",
+        }),
         method: "POST",
       }),
     );
@@ -500,7 +582,12 @@ test("renders plugin detail contents and install action for marketplace plugins"
     expect(fetchMock).toHaveBeenCalledWith(
       "/environment/plugins/gmail%40openai-curated/install",
       expect.objectContaining({
-        body: JSON.stringify({ machineId: "machine-1" }),
+        body: JSON.stringify({
+          machineId: "machine-1",
+          pluginId: "gmail@openai-curated",
+          pluginName: "Gmail",
+          marketplacePath: "/tmp/codex/marketplace",
+        }),
         method: "POST",
       }),
     );
@@ -574,6 +661,70 @@ test("plugin disable and uninstall send the machine id", async () => {
       expect.objectContaining({
         method: "DELETE",
         body: JSON.stringify({ machineId: "machine-1" }),
+      }),
+    );
+  });
+});
+
+test("submits plugin install requests for add plugin record", async () => {
+  connectConsoleSocketMock.mockReturnValue(() => {});
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+    const bootstrap = bootstrapResponse(path);
+    if (bootstrap) {
+      return bootstrap;
+    }
+
+    if (path.endsWith("/environment/plugins") && (!init?.method || init.method === "GET")) {
+      return jsonResponse({ items: [] });
+    }
+
+    if (path.endsWith("/environment/plugins/install") && init?.method === "POST") {
+      return new Response(typeof init?.body === "string" ? init.body : "", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (path.endsWith("/environment/skills") || path.endsWith("/environment/mcps")) {
+      return jsonResponse({ items: [] });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/environment"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  fireEvent.click(await scope.findByRole("button", { name: "Add plugin record" }));
+  fireEvent.change(scope.getByLabelText("Machine ID"), {
+    target: { value: "machine-3" },
+  });
+  fireEvent.change(scope.getByLabelText("Plugin name"), {
+    target: { value: "calendar" },
+  });
+  fireEvent.change(scope.getByLabelText("Marketplace path"), {
+    target: { value: "/tmp/codex/marketplace" },
+  });
+  fireEvent.click(scope.getByRole("button", { name: "Install plugin" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/environment/plugins/install",
+      expect.objectContaining({
+        body: JSON.stringify({
+          machineId: "machine-3",
+          pluginId: "calendar",
+          pluginName: "calendar",
+          marketplacePath: "/tmp/codex/marketplace",
+        }),
+        method: "POST",
       }),
     );
   });

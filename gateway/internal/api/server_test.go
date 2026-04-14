@@ -589,9 +589,17 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 
 	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
 
-	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req := httptest.NewRequest(http.MethodPost, "/environment/skills", bytes.NewBufferString(`{"machineId":"machine-01","name":"Debug Helper","description":"Helps debug"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("skill create returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("enable returned %d", rec.Code)
@@ -603,6 +611,14 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("disable returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodDelete, "/environment/skills/skill-a", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("skill delete returned %d", rec.Code)
 	}
 
 	req = httptest.NewRequest(http.MethodDelete, "/environment/plugins/plugin-a", bytes.NewBufferString(`{"machineId":"machine-01"}`))
@@ -645,6 +661,14 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("plugin install returned %d", rec.Code)
 	}
 
+	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/install", bytes.NewBufferString(`{"machineId":"machine-01","pluginId":"gmail@openai-curated","pluginName":"Gmail","marketplacePath":"/tmp/codex/marketplace"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("plugin manual install returned %d", rec.Code)
+	}
+
 	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/plugin-a/disable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
@@ -653,92 +677,125 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("plugin disable returned %d", rec.Code)
 	}
 
-	if len(calls) != 8 {
-		t.Fatalf("expected 8 calls, got %d", len(calls))
+	if len(calls) != 11 {
+		t.Fatalf("expected 11 calls, got %d", len(calls))
 	}
-	if calls[0].machineID != "machine-01" || calls[0].name != "environment.skill.enable" {
-		t.Fatalf("unexpected enable call: %+v", calls[0])
+	if calls[0].machineID != "machine-01" || calls[0].name != "environment.skill.create" {
+		t.Fatalf("unexpected create call: %+v", calls[0])
 	}
-	enablePayload, ok := calls[0].payload.(protocol.EnvironmentSkillSetEnabledCommandPayload)
+	createPayload, ok := calls[0].payload.(protocol.EnvironmentSkillCreateCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected enable payload type: %T", calls[0].payload)
+		t.Fatalf("unexpected create payload type: %T", calls[0].payload)
+	}
+	if createPayload.Name != "Debug Helper" || createPayload.Description != "Helps debug" {
+		t.Fatalf("unexpected create payload: %+v", createPayload)
+	}
+
+	if calls[1].machineID != "machine-01" || calls[1].name != "environment.skill.enable" {
+		t.Fatalf("unexpected enable call: %+v", calls[1])
+	}
+	enablePayload, ok := calls[1].payload.(protocol.EnvironmentSkillSetEnabledCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected enable payload type: %T", calls[1].payload)
 	}
 	if enablePayload.SkillID != "skill-a" || !enablePayload.Enabled {
 		t.Fatalf("unexpected enable payload: %+v", enablePayload)
 	}
 
-	if calls[1].machineID != "machine-01" || calls[1].name != "environment.skill.disable" {
-		t.Fatalf("unexpected disable call: %+v", calls[1])
+	if calls[2].machineID != "machine-01" || calls[2].name != "environment.skill.disable" {
+		t.Fatalf("unexpected disable call: %+v", calls[2])
 	}
-	disablePayload, ok := calls[1].payload.(protocol.EnvironmentSkillSetEnabledCommandPayload)
+	disablePayload, ok := calls[2].payload.(protocol.EnvironmentSkillSetEnabledCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected disable payload type: %T", calls[1].payload)
+		t.Fatalf("unexpected disable payload type: %T", calls[2].payload)
 	}
 	if disablePayload.SkillID != "skill-a" || disablePayload.Enabled {
 		t.Fatalf("unexpected disable payload: %+v", disablePayload)
 	}
 
-	if calls[2].machineID != "machine-01" || calls[2].name != "environment.plugin.uninstall" {
-		t.Fatalf("unexpected plugin uninstall call: %+v", calls[2])
+	if calls[3].machineID != "machine-01" || calls[3].name != "environment.skill.delete" {
+		t.Fatalf("unexpected skill delete call: %+v", calls[3])
 	}
-	uninstallPayload, ok := calls[2].payload.(protocol.EnvironmentPluginUninstallCommandPayload)
+	deletePayload, ok := calls[3].payload.(protocol.EnvironmentSkillDeleteCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected uninstall payload type: %T", calls[2].payload)
+		t.Fatalf("unexpected skill delete payload type: %T", calls[3].payload)
+	}
+	if deletePayload.SkillID != "skill-a" {
+		t.Fatalf("unexpected skill delete payload: %+v", deletePayload)
+	}
+
+	if calls[4].machineID != "machine-01" || calls[4].name != "environment.plugin.uninstall" {
+		t.Fatalf("unexpected plugin uninstall call: %+v", calls[4])
+	}
+	uninstallPayload, ok := calls[4].payload.(protocol.EnvironmentPluginUninstallCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected uninstall payload type: %T", calls[4].payload)
 	}
 	if uninstallPayload.PluginID != "plugin-a" {
 		t.Fatalf("unexpected uninstall payload: %+v", uninstallPayload)
 	}
 
-	if calls[3].machineID != "machine-01" || calls[3].name != "environment.mcp.upsert" {
-		t.Fatalf("unexpected mcp upsert call: %+v", calls[3])
+	if calls[5].machineID != "machine-01" || calls[5].name != "environment.mcp.upsert" {
+		t.Fatalf("unexpected mcp upsert call: %+v", calls[5])
 	}
-	mcpUpsertPayload, ok := calls[3].payload.(protocol.EnvironmentMCPUpsertCommandPayload)
+	mcpUpsertPayload, ok := calls[5].payload.(protocol.EnvironmentMCPUpsertCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected mcp upsert payload type: %T", calls[3].payload)
+		t.Fatalf("unexpected mcp upsert payload type: %T", calls[5].payload)
 	}
 	if mcpUpsertPayload.ServerID != "github" {
 		t.Fatalf("unexpected mcp upsert payload: %+v", mcpUpsertPayload)
 	}
 
-	if calls[4].machineID != "machine-01" || calls[4].name != "environment.mcp.disable" {
-		t.Fatalf("unexpected mcp disable call: %+v", calls[4])
+	if calls[6].machineID != "machine-01" || calls[6].name != "environment.mcp.disable" {
+		t.Fatalf("unexpected mcp disable call: %+v", calls[6])
 	}
-	mcpDisablePayload, ok := calls[4].payload.(protocol.EnvironmentMCPSetEnabledCommandPayload)
+	mcpDisablePayload, ok := calls[6].payload.(protocol.EnvironmentMCPSetEnabledCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected mcp disable payload type: %T", calls[4].payload)
+		t.Fatalf("unexpected mcp disable payload type: %T", calls[6].payload)
 	}
 	if mcpDisablePayload.ServerID != "github" || mcpDisablePayload.Enabled {
 		t.Fatalf("unexpected mcp disable payload: %+v", mcpDisablePayload)
 	}
 
-	if calls[5].machineID != "machine-01" || calls[5].name != "environment.mcp.remove" {
-		t.Fatalf("unexpected mcp remove call: %+v", calls[5])
+	if calls[7].machineID != "machine-01" || calls[7].name != "environment.mcp.remove" {
+		t.Fatalf("unexpected mcp remove call: %+v", calls[7])
 	}
-	mcpRemovePayload, ok := calls[5].payload.(protocol.EnvironmentMCPRemoveCommandPayload)
+	mcpRemovePayload, ok := calls[7].payload.(protocol.EnvironmentMCPRemoveCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected mcp remove payload type: %T", calls[5].payload)
+		t.Fatalf("unexpected mcp remove payload type: %T", calls[7].payload)
 	}
 	if mcpRemovePayload.ServerID != "github" {
 		t.Fatalf("unexpected mcp remove payload: %+v", mcpRemovePayload)
 	}
 
-	if calls[6].machineID != "machine-01" || calls[6].name != "environment.plugin.install" {
-		t.Fatalf("unexpected plugin install call: %+v", calls[6])
+	if calls[8].machineID != "machine-01" || calls[8].name != "environment.plugin.install" {
+		t.Fatalf("unexpected plugin install call: %+v", calls[8])
 	}
-	pluginInstallPayload, ok := calls[6].payload.(protocol.EnvironmentPluginInstallCommandPayload)
+	pluginInstallPayload, ok := calls[8].payload.(protocol.EnvironmentPluginInstallCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected plugin install payload type: %T", calls[6].payload)
+		t.Fatalf("unexpected plugin install payload type: %T", calls[8].payload)
 	}
 	if pluginInstallPayload.PluginID != "plugin-a" || pluginInstallPayload.MarketplacePath != "/tmp/codex/marketplace" || pluginInstallPayload.PluginName != "plugin-a" {
 		t.Fatalf("unexpected plugin install payload: %+v", pluginInstallPayload)
 	}
 
-	if calls[7].machineID != "machine-01" || calls[7].name != "environment.plugin.disable" {
-		t.Fatalf("unexpected plugin disable call: %+v", calls[7])
+	if calls[9].machineID != "machine-01" || calls[9].name != "environment.plugin.install" {
+		t.Fatalf("unexpected plugin manual install call: %+v", calls[9])
 	}
-	pluginDisablePayload, ok := calls[7].payload.(protocol.EnvironmentPluginSetEnabledCommandPayload)
+	pluginManualPayload, ok := calls[9].payload.(protocol.EnvironmentPluginInstallCommandPayload)
 	if !ok {
-		t.Fatalf("unexpected plugin disable payload type: %T", calls[7].payload)
+		t.Fatalf("unexpected plugin manual install payload type: %T", calls[9].payload)
+	}
+	if pluginManualPayload.PluginID != "gmail@openai-curated" || pluginManualPayload.MarketplacePath != "/tmp/codex/marketplace" || pluginManualPayload.PluginName != "Gmail" {
+		t.Fatalf("unexpected plugin manual install payload: %+v", pluginManualPayload)
+	}
+
+	if calls[10].machineID != "machine-01" || calls[10].name != "environment.plugin.disable" {
+		t.Fatalf("unexpected plugin disable call: %+v", calls[10])
+	}
+	pluginDisablePayload, ok := calls[10].payload.(protocol.EnvironmentPluginSetEnabledCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected plugin disable payload type: %T", calls[10].payload)
 	}
 	if pluginDisablePayload.PluginID != "plugin-a" || pluginDisablePayload.Enabled {
 		t.Fatalf("unexpected plugin disable payload: %+v", pluginDisablePayload)
@@ -1547,6 +1604,7 @@ func TestCapabilitiesEndpointReflectsDependencies(t *testing.T) {
 		EnvironmentOpenMarketplace  bool `json:"environmentOpenMarketplace"`
 		EnvironmentMutateResources  bool `json:"environmentMutateResources"`
 		EnvironmentWriteMcp         bool `json:"environmentWriteMcp"`
+		EnvironmentWriteSkills      bool `json:"environmentWriteSkills"`
 		SettingsEditGatewayEndpoint bool `json:"settingsEditGatewayEndpoint"`
 		SettingsEditConsoleProfile  bool `json:"settingsEditConsoleProfile"`
 		SettingsEditSafetyPolicy    bool `json:"settingsEditSafetyPolicy"`
@@ -1566,7 +1624,7 @@ func TestCapabilitiesEndpointReflectsDependencies(t *testing.T) {
 	if body.Approvals || body.StartTurn || body.SteerTurn || body.InterruptTurn {
 		t.Fatalf("expected command-driven capabilities to be disabled: %+v", body)
 	}
-	if body.EnvironmentMutateResources || body.EnvironmentWriteMcp {
+	if body.EnvironmentMutateResources || body.EnvironmentWriteMcp || body.EnvironmentWriteSkills {
 		t.Fatalf("expected environment write capabilities to be disabled: %+v", body)
 	}
 	if !body.SettingsGlobalDefault || !body.SettingsMachineOverride {
@@ -1615,6 +1673,7 @@ func TestCapabilitiesEndpointEnablesCommandBackedFeatures(t *testing.T) {
 		InterruptTurn              bool `json:"interruptTurn"`
 		EnvironmentMutateResources bool `json:"environmentMutateResources"`
 		EnvironmentWriteMcp        bool `json:"environmentWriteMcp"`
+		EnvironmentWriteSkills     bool `json:"environmentWriteSkills"`
 		SettingsApplyMachine       bool `json:"settingsApplyMachine"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
@@ -1624,7 +1683,7 @@ func TestCapabilitiesEndpointEnablesCommandBackedFeatures(t *testing.T) {
 	if !body.Approvals || !body.StartTurn || !body.SteerTurn || !body.InterruptTurn {
 		t.Fatalf("expected command capabilities enabled: %+v", body)
 	}
-	if !body.EnvironmentMutateResources || !body.EnvironmentWriteMcp {
+	if !body.EnvironmentMutateResources || !body.EnvironmentWriteMcp || !body.EnvironmentWriteSkills {
 		t.Fatalf("expected environment write capabilities enabled: %+v", body)
 	}
 	if !body.SettingsApplyMachine {

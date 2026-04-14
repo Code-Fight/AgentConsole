@@ -1,6 +1,6 @@
 import { type FormEvent, type ReactNode } from "react";
 import type { EnvironmentResource } from "../../common/api/types";
-import type { MCPFormState } from "../../gateway/use-environment-page";
+import type { MCPFormState, PluginFormState, SkillFormState } from "../../gateway/use-environment-page";
 
 interface EnvironmentSections {
   skills: EnvironmentResource[];
@@ -15,16 +15,29 @@ interface EnvironmentPageViewProps {
   pendingActionKey: string | null;
   expandedResourceKey: string | null;
   mcpForm: MCPFormState | null;
+  skillForm: SkillFormState | null;
+  pluginForm: PluginFormState | null;
   capabilities: {
     syncCatalog: boolean;
     restartBridge: boolean;
     openMarketplace: boolean;
     mutateResources: boolean;
     writeMcp: boolean;
+    writeSkills: boolean;
   };
   setMcpForm: (updater: MCPFormState | null | ((current: MCPFormState | null) => MCPFormState | null)) => void;
+  setSkillForm: (
+    updater: SkillFormState | null | ((current: SkillFormState | null) => SkillFormState | null),
+  ) => void;
+  setPluginForm: (
+    updater: PluginFormState | null | ((current: PluginFormState | null) => PluginFormState | null),
+  ) => void;
   onCloseMcpForm: () => void;
+  onCloseSkillForm: () => void;
+  onClosePluginForm: () => void;
   onOpenCreateMcpForm: () => void;
+  onOpenCreateSkillForm: () => void;
+  onOpenInstallPluginForm: () => void;
   onOpenEditMcpForm: (resource: EnvironmentResource) => void;
   onToggleDetails: (resource: EnvironmentResource) => void;
   onResourceMutation: (
@@ -32,14 +45,18 @@ interface EnvironmentPageViewProps {
     actionKey: string,
     method: "POST" | "DELETE",
     path: string,
+    payload?: Record<string, unknown>,
   ) => void;
   onMcpSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onSkillSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  onPluginInstallSubmit: (event: FormEvent<HTMLFormElement>) => void;
 }
 
 interface ResourceMutation {
   label: string;
   method: "POST" | "DELETE";
   path: string;
+  payload?: Record<string, unknown>;
 }
 
 function formatResourceStatus(resource: EnvironmentResource): string {
@@ -95,11 +112,23 @@ function buildResourceMutations(resource: EnvironmentResource): ResourceMutation
 
   if (resource.kind === "plugin") {
     if (resource.status === "unknown") {
+      const details = resource.details ?? {};
+      const pluginName =
+        typeof details.pluginName === "string" && details.pluginName.trim()
+          ? details.pluginName
+          : resource.displayName || resource.resourceId;
+      const marketplacePath =
+        typeof details.marketplacePath === "string" ? details.marketplacePath : "";
       return [
         {
           label: "Install",
           method: "POST",
           path: `/environment/plugins/${encodeURIComponent(resource.resourceId)}/install`,
+          payload: {
+            pluginId: resource.resourceId,
+            pluginName,
+            marketplacePath,
+          },
         },
       ];
     }
@@ -249,12 +278,24 @@ function renderEnvironmentSection(
                     </button>
                   ) : null}
                   {item.kind === "skill" ? (
-                    <>
-                      <button type="button" aria-label="Delete skill" disabled>
-                        Delete skill
-                      </button>
-                      <span className="meta-pill">Not connected</span>
-                    </>
+                    <button
+                      type="button"
+                      aria-label="Delete skill"
+                      disabled={
+                        !props.capabilities.writeSkills ||
+                        props.pendingActionKey === `${resourceKey}:Delete skill`
+                      }
+                      onClick={() =>
+                        props.onResourceMutation(
+                          item,
+                          `${resourceKey}:Delete skill`,
+                          "DELETE",
+                          `/environment/skills/${encodeURIComponent(item.resourceId)}`,
+                        )
+                      }
+                    >
+                      Delete skill
+                    </button>
                   ) : null}
                   {mutations.map((mutation) => {
                     const actionKey = `${resourceKey}:${mutation.label}`;
@@ -265,7 +306,13 @@ function renderEnvironmentSection(
                         aria-label={mutation.label}
                         disabled={!props.capabilities.mutateResources || props.pendingActionKey === actionKey}
                         onClick={() =>
-                          props.onResourceMutation(item, actionKey, mutation.method, mutation.path)
+                          props.onResourceMutation(
+                            item,
+                            actionKey,
+                            mutation.method,
+                            mutation.path,
+                            mutation.payload,
+                          )
                         }
                       >
                         {mutation.label}
@@ -370,6 +417,133 @@ export function EnvironmentPageView(props: EnvironmentPageViewProps) {
         </form>
       ) : null}
 
+      {props.skillForm ? (
+        <form className="config-form" onSubmit={props.onSkillSubmit}>
+          <div className="config-form-heading">
+            <div>
+              <span className="page-kicker">Skill scaffold</span>
+              <h2>Add skill</h2>
+            </div>
+            <button type="button" aria-label="Cancel" onClick={props.onCloseSkillForm}>
+              Cancel
+            </button>
+          </div>
+          <label>
+            <span>Machine ID</span>
+            <input
+              aria-label="Machine ID"
+              value={props.skillForm.machineId}
+              onChange={(event) =>
+                props.setSkillForm((current) =>
+                  current ? { ...current, machineId: event.target.value } : current,
+                )
+              }
+            />
+          </label>
+          <label>
+            <span>Skill name</span>
+            <input
+              aria-label="Skill name"
+              value={props.skillForm.name}
+              onChange={(event) =>
+                props.setSkillForm((current) =>
+                  current ? { ...current, name: event.target.value } : current,
+                )
+              }
+            />
+          </label>
+          <label>
+            <span>Description</span>
+            <textarea
+              aria-label="Description"
+              rows={5}
+              value={props.skillForm.description}
+              onChange={(event) =>
+                props.setSkillForm((current) =>
+                  current ? { ...current, description: event.target.value } : current,
+                )
+              }
+            />
+          </label>
+          <button
+            type="submit"
+            aria-label="Create skill"
+            disabled={!props.capabilities.writeSkills || props.pendingActionKey === "skill-form"}
+          >
+            Create skill
+          </button>
+        </form>
+      ) : null}
+
+      {props.pluginForm ? (
+        <form className="config-form" onSubmit={props.onPluginInstallSubmit}>
+          <div className="config-form-heading">
+            <div>
+              <span className="page-kicker">Plugin install</span>
+              <h2>Add plugin record</h2>
+            </div>
+            <button type="button" aria-label="Cancel" onClick={props.onClosePluginForm}>
+              Cancel
+            </button>
+          </div>
+          <label>
+            <span>Machine ID</span>
+            <input
+              aria-label="Machine ID"
+              value={props.pluginForm.machineId}
+              onChange={(event) =>
+                props.setPluginForm((current) =>
+                  current ? { ...current, machineId: event.target.value } : current,
+                )
+              }
+            />
+          </label>
+          <label>
+            <span>Plugin name</span>
+            <input
+              aria-label="Plugin name"
+              value={props.pluginForm.pluginName}
+              onChange={(event) =>
+                props.setPluginForm((current) =>
+                  current ? { ...current, pluginName: event.target.value } : current,
+                )
+              }
+            />
+          </label>
+          <label>
+            <span>Plugin ID (optional)</span>
+            <input
+              aria-label="Plugin ID"
+              value={props.pluginForm.pluginId}
+              onChange={(event) =>
+                props.setPluginForm((current) =>
+                  current ? { ...current, pluginId: event.target.value } : current,
+                )
+              }
+            />
+          </label>
+          <label>
+            <span>Marketplace path</span>
+            <input
+              aria-label="Marketplace path"
+              value={props.pluginForm.marketplacePath}
+              onChange={(event) =>
+                props.setPluginForm((current) =>
+                  current ? { ...current, marketplacePath: event.target.value } : current,
+                )
+              }
+            />
+          </label>
+          <button
+            type="submit"
+            aria-label="Install plugin"
+            disabled={!props.capabilities.mutateResources || props.pendingActionKey === "plugin-form"}
+          >
+            Install plugin
+          </button>
+        </form>
+      ) : null}
+
       {props.isLoading ? <p>Loading environment…</p> : null}
       {props.error ? <p>{props.error}</p> : null}
 
@@ -381,10 +555,14 @@ export function EnvironmentPageView(props: EnvironmentPageViewProps) {
             "No skills reported.",
             props,
             <div className="settings-actions">
-              <button type="button" aria-label="Add skill" disabled>
+              <button
+                type="button"
+                aria-label="Add skill"
+                disabled={!props.capabilities.writeSkills}
+                onClick={props.onOpenCreateSkillForm}
+              >
                 Add skill
               </button>
-              <span className="meta-pill">Not connected</span>
             </div>,
           )}
           {renderEnvironmentSection(
@@ -407,10 +585,14 @@ export function EnvironmentPageView(props: EnvironmentPageViewProps) {
             "No plugins reported.",
             props,
             <div className="settings-actions">
-              <button type="button" aria-label="Add plugin record" disabled>
+              <button
+                type="button"
+                aria-label="Add plugin record"
+                disabled={!props.capabilities.mutateResources}
+                onClick={props.onOpenInstallPluginForm}
+              >
                 Add plugin record
               </button>
-              <span className="meta-pill">Not connected</span>
             </div>,
           )}
         </div>

@@ -65,6 +65,7 @@ export interface CapabilitySnapshot {
   environmentOpenMarketplace: boolean;
   environmentMutateResources: boolean;
   environmentWriteMcp: boolean;
+  environmentWriteSkills: boolean;
   settingsEditGatewayEndpoint: boolean;
   settingsEditConsoleProfile: boolean;
   settingsEditSafetyPolicy: boolean;

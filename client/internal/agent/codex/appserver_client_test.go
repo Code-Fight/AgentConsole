@@ -3,6 +3,8 @@ package codex
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	agenttypes "code-agent-gateway/client/internal/agent/types"
@@ -459,6 +461,96 @@ func TestClientSetSkillEnabledUsesExpectedMethodAndPayload(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestClientCreateSkillScaffoldWritesDefaultFile(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+	tmpDir := t.TempDir()
+	client.homeDir = func() (string, error) {
+		return tmpDir, nil
+	}
+
+	skillID, err := client.CreateSkill(agenttypes.CreateSkillParams{
+		Name:        "Debug Helper!!",
+		Description: "Assists debugging",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedPath := filepath.Join(tmpDir, ".codex", "skills", "debug-helper", "SKILL.md")
+	if skillID != expectedPath {
+		t.Fatalf("expected skill path %q, got %q", expectedPath, skillID)
+	}
+
+	contents, err := os.ReadFile(expectedPath)
+	if err != nil {
+		t.Fatalf("read scaffold file: %v", err)
+	}
+
+	expected := `---
+name: Debug Helper!!
+description: Assists debugging
+---
+
+# Debug Helper!!
+
+Assists debugging
+
+## Usage
+
+Add task-specific instructions here.
+`
+	if string(contents) != expected {
+		t.Fatalf("unexpected scaffold contents:\n%s", string(contents))
+	}
+}
+
+func TestClientDeleteSkillScaffoldRemovesDirectory(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+	tmpDir := t.TempDir()
+	client.homeDir = func() (string, error) {
+		return tmpDir, nil
+	}
+
+	tests := []struct {
+		name      string
+		selector  string
+		skillSlug string
+	}{
+		{
+			name:      "delete by path",
+			selector:  filepath.Join(tmpDir, ".codex", "skills", "skill-a", "SKILL.md"),
+			skillSlug: "skill-a",
+		},
+		{
+			name:      "delete by name",
+			selector:  "Skill A",
+			skillSlug: "skill-a",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			skillDir := filepath.Join(tmpDir, ".codex", "skills", tt.skillSlug)
+			if err := os.MkdirAll(skillDir, 0o755); err != nil {
+				t.Fatalf("mkdir: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("stub"), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+
+			if err := client.DeleteSkill(tt.selector); err != nil {
+				t.Fatalf("delete skill: %v", err)
+			}
+
+			if _, err := os.Stat(skillDir); !os.IsNotExist(err) {
+				t.Fatalf("expected skill dir removed, stat err: %v", err)
 			}
 		})
 	}

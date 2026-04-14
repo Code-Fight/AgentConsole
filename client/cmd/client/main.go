@@ -1089,6 +1089,38 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.skill.create":
+		var payload protocol.EnvironmentSkillCreateCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		skillID, err := mgr.CreateSkill(runtimeName, agenttypes.CreateSkillParams{
+			Name:        payload.Name,
+			Description: payload.Description,
+		})
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentSkillCreateCommandResult{
+			SkillID: skillID,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+	case "environment.skill.delete":
+		var payload protocol.EnvironmentSkillDeleteCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.DeleteSkill(runtimeName, payload.SkillID); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentSkillDeleteCommandResult{
+			SkillID: payload.SkillID,
+		}); err != nil {
+			return err
+		}
+		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
 	case "environment.mcp.upsert":
 		var payload protocol.EnvironmentMCPUpsertCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {

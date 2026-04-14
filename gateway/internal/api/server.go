@@ -65,10 +65,23 @@ type environmentMutationRequest struct {
 	MachineID string `json:"machineId"`
 }
 
+type environmentSkillCreateRequest struct {
+	MachineID   string `json:"machineId"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+}
+
 type environmentMCPUpsertRequest struct {
 	MachineID  string         `json:"machineId"`
 	ResourceID string         `json:"resourceId"`
 	Config     map[string]any `json:"config"`
+}
+
+type environmentPluginInstallRequest struct {
+	MachineID       string `json:"machineId"`
+	PluginID        string `json:"pluginId"`
+	PluginName      string `json:"pluginName"`
+	MarketplacePath string `json:"marketplacePath"`
 }
 
 type configDocumentRequest struct {
@@ -199,6 +212,33 @@ func decodeEnvironmentMCPUpsertRequest(r *http.Request) (environmentMCPUpsertReq
 	return req, nil
 }
 
+func decodeEnvironmentPluginInstallRequest(r *http.Request) (environmentPluginInstallRequest, error) {
+	var req environmentPluginInstallRequest
+	if r == nil {
+		return req, nil
+	}
+
+	req.MachineID = strings.TrimSpace(r.URL.Query().Get("machineId"))
+	if r.Body == nil {
+		return req, nil
+	}
+
+	var body environmentPluginInstallRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err == io.EOF {
+			return req, nil
+		}
+		return environmentPluginInstallRequest{}, err
+	}
+	if req.MachineID == "" {
+		req.MachineID = strings.TrimSpace(body.MachineID)
+	}
+	req.PluginID = strings.TrimSpace(body.PluginID)
+	req.PluginName = strings.TrimSpace(body.PluginName)
+	req.MarketplacePath = strings.TrimSpace(body.MarketplacePath)
+	return req, nil
+}
+
 func stringDetail(resource domain.EnvironmentResource, key string) string {
 	if resource.Details == nil || strings.TrimSpace(key) == "" {
 		return ""
@@ -314,6 +354,7 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 		EnvironmentOpenMarketplace:  false,
 		EnvironmentMutateResources:  environmentMutate,
 		EnvironmentWriteMcp:         hasSender,
+		EnvironmentWriteSkills:      hasSender,
 		SettingsEditGatewayEndpoint: false,
 		SettingsEditConsoleProfile:  false,
 		SettingsEditSafetyPolicy:    false,
@@ -1216,6 +1257,55 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		writeJSON(w, http.StatusOK, map[string]any{"items": idx.Environment(domain.EnvironmentKindPlugin)})
 	})
 
+	mux.HandleFunc("POST /environment/skills", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if r.Body == nil {
+			http.Error(w, "skill payload is required", http.StatusBadRequest)
+			return
+		}
+
+		var req environmentSkillCreateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err == io.EOF {
+				http.Error(w, "skill payload is required", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.MachineID) == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), req.MachineID, "environment.skill.create", protocol.EnvironmentSkillCreateCommandPayload{
+			Name:        req.Name,
+			Description: req.Description,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.EnvironmentSkillCreateCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid skill create result", http.StatusBadGateway)
+			return
+		}
+		if result.SkillID == "" {
+			result.SkillID = req.Name
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"skillId": result.SkillID})
+	})
+
 	mux.HandleFunc("POST /environment/skills/{id}/enable", func(w http.ResponseWriter, r *http.Request) {
 		if sender == nil {
 			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
@@ -1282,6 +1372,39 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		}
 
 		writeJSON(w, http.StatusOK, map[string]any{"skillId": skillID, "enabled": false})
+	})
+
+	mux.HandleFunc("DELETE /environment/skills/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID, err := resolveEnvironmentMutationMachineID(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+
+		skillID := r.PathValue("id")
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, machineID, skillID)
+		if !ok {
+			http.Error(w, "skill not found", http.StatusNotFound)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.skill.delete", protocol.EnvironmentSkillDeleteCommandPayload{
+			SkillID: skillID,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"skillId": skillID})
 	})
 
 	mux.HandleFunc("DELETE /environment/plugins/{id}", func(w http.ResponseWriter, r *http.Request) {
@@ -1455,33 +1578,84 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentPluginInstallRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if strings.TrimSpace(req.MachineID) == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
 			return
 		}
 
 		pluginID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, req.MachineID, pluginID)
 		if !ok {
 			http.Error(w, "plugin not found", http.StatusNotFound)
 			return
 		}
-		marketplacePath := stringDetail(resource, "marketplacePath")
-		pluginName := stringDetail(resource, "pluginName")
+		pluginInstallID := strings.TrimSpace(req.PluginID)
+		if pluginInstallID == "" {
+			pluginInstallID = pluginID
+		}
+		marketplacePath := strings.TrimSpace(req.MarketplacePath)
+		pluginName := strings.TrimSpace(req.PluginName)
+		if marketplacePath == "" {
+			marketplacePath = stringDetail(resource, "marketplacePath")
+		}
+		if pluginName == "" {
+			pluginName = stringDetail(resource, "pluginName")
+		}
 		if marketplacePath == "" || pluginName == "" {
 			http.Error(w, "plugin install details unavailable", http.StatusConflict)
 			return
 		}
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.install", protocol.EnvironmentPluginInstallCommandPayload{
-			PluginID:        pluginID,
+			PluginID:        pluginInstallID,
 			MarketplacePath: marketplacePath,
 			PluginName:      pluginName,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginInstallID})
+	})
+
+	mux.HandleFunc("POST /environment/plugins/install", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		req, err := decodeEnvironmentPluginInstallRequest(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.MachineID) == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.PluginName) == "" {
+			http.Error(w, "pluginName is required", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.MarketplacePath) == "" {
+			http.Error(w, "marketplacePath is required", http.StatusBadRequest)
+			return
+		}
+
+		pluginID := strings.TrimSpace(req.PluginID)
+		if pluginID == "" {
+			pluginID = strings.TrimSpace(req.PluginName)
+		}
+
+		if _, err := sender.SendCommand(r.Context(), req.MachineID, "environment.plugin.install", protocol.EnvironmentPluginInstallCommandPayload{
+			PluginID:        pluginID,
+			MarketplacePath: strings.TrimSpace(req.MarketplacePath),
+			PluginName:      strings.TrimSpace(req.PluginName),
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return

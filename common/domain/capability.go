@@ -14,6 +14,7 @@ type CapabilitySnapshot struct {
 	EnvironmentOpenMarketplace  bool `json:"environmentOpenMarketplace"`
 	EnvironmentMutateResources  bool `json:"environmentMutateResources"`
 	EnvironmentWriteMcp         bool `json:"environmentWriteMcp"`
+	EnvironmentWriteSkills      bool `json:"environmentWriteSkills"`
 	SettingsEditGatewayEndpoint bool `json:"settingsEditGatewayEndpoint"`
 	SettingsEditConsoleProfile  bool `json:"settingsEditConsoleProfile"`
 	SettingsEditSafetyPolicy    bool `json:"settingsEditSafetyPolicy"`

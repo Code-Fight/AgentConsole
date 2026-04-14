@@ -94,6 +94,15 @@ type EnvironmentSkillSetEnabledCommandPayload struct {
 	Enabled bool   `json:"enabled"`
 }
 
+type EnvironmentSkillCreateCommandPayload struct {
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+}
+
+type EnvironmentSkillDeleteCommandPayload struct {
+	SkillID string `json:"skillId"`
+}
+
 type EnvironmentMCPUpsertCommandPayload struct {
 	ServerID string         `json:"serverId"`
 	Config   map[string]any `json:"config"`
@@ -192,6 +201,14 @@ type AgentConfigApplyCommandResult struct {
 type EnvironmentSkillSetEnabledCommandResult struct {
 	SkillID string `json:"skillId"`
 	Enabled bool   `json:"enabled"`
+}
+
+type EnvironmentSkillCreateCommandResult struct {
+	SkillID string `json:"skillId"`
+}
+
+type EnvironmentSkillDeleteCommandResult struct {
+	SkillID string `json:"skillId"`
 }
 
 type EnvironmentMCPUpsertCommandResult struct {

@@ -10,6 +10,7 @@ const capabilitySnapshot = vi.hoisted(() => ({
   environmentOpenMarketplace: false,
   environmentMutateResources: true,
   environmentWriteMcp: true,
+  environmentWriteSkills: true,
   settingsEditGatewayEndpoint: false,
   settingsEditConsoleProfile: false,
   settingsEditSafetyPolicy: false,

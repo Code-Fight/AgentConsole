@@ -22,6 +22,11 @@ type InterruptTurnParams struct {
 	TurnID   string
 }
 
+type CreateSkillParams struct {
+	Name        string
+	Description string
+}
+
 type InstallPluginParams struct {
 	PluginID        string
 	MarketplacePath string
@@ -81,6 +86,11 @@ type RuntimeApprovalResponder interface {
 
 type RuntimeSkillConfigurator interface {
 	SetSkillEnabled(nameOrPath string, enabled bool) error
+}
+
+type RuntimeSkillManager interface {
+	CreateSkill(params CreateSkillParams) (string, error)
+	DeleteSkill(nameOrPath string) error
 }
 
 type RuntimeMCPManager interface {

@@ -16,6 +16,7 @@ const defaultCapabilities: CapabilitySnapshot = {
   environmentOpenMarketplace: false,
   environmentMutateResources: false,
   environmentWriteMcp: false,
+  environmentWriteSkills: false,
   settingsEditGatewayEndpoint: false,
   settingsEditConsoleProfile: false,
   settingsEditSafetyPolicy: false,
