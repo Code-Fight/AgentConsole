@@ -20,7 +20,8 @@ interface ConsolePreferencesState {
   hasLoadedSuccessfully: boolean;
   isLoading: boolean;
   isSaving: boolean;
-  error: string | null;
+  loadError: string | null;
+  saveError: string | null;
 }
 
 const initialState: ConsolePreferencesState = {
@@ -29,7 +30,8 @@ const initialState: ConsolePreferencesState = {
   hasLoadedSuccessfully: false,
   isLoading: false,
   isSaving: false,
-  error: null,
+  loadError: null,
+  saveError: null,
 };
 
 const store = {
@@ -78,13 +80,13 @@ export function useConsolePreferences() {
         const response = await http<ConsolePreferencesResponse>("/settings/console");
         setStoreState({
           preferences: response.preferences,
-          error: null,
+          loadError: null,
           hasAttempted: true,
           hasLoadedSuccessfully: true,
         });
       } catch (loadError) {
         setStoreState({
-          error:
+          loadError:
             loadError instanceof Error
               ? loadError.message
               : "Unable to load console preferences.",
@@ -119,14 +121,15 @@ export function useConsolePreferences() {
         });
         setStoreState({
           preferences: response.preferences,
-          error: null,
+          loadError: null,
+          saveError: null,
           hasAttempted: true,
           hasLoadedSuccessfully: true,
         });
         return response.preferences;
       } catch (saveError) {
         setStoreState({
-          error:
+          saveError:
             saveError instanceof Error
               ? saveError.message
               : "Unable to save console preferences.",
@@ -151,17 +154,19 @@ export function useConsolePreferences() {
     if (snapshot.preferences) {
       return snapshot.preferences;
     }
-    if (snapshot.error) {
+    if (snapshot.loadError) {
       return null;
     }
     return snapshot.hasAttempted ? emptyPreferences : null;
-  }, [snapshot.preferences, snapshot.error, snapshot.hasAttempted]);
+  }, [snapshot.preferences, snapshot.loadError, snapshot.hasAttempted]);
 
   return {
     preferences: normalized,
     isLoading: snapshot.isLoading,
     isSaving: snapshot.isSaving,
-    error: snapshot.error,
+    error: snapshot.loadError,
+    loadError: snapshot.loadError,
+    saveError: snapshot.saveError,
     hasAttempted: snapshot.hasAttempted,
     hasLoadedSuccessfully: snapshot.hasLoadedSuccessfully,
     reload: loadPreferences,

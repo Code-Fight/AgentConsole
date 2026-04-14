@@ -112,7 +112,7 @@ export function useConsoleHost({
     preferences,
     isLoading: preferencesLoading,
     hasAttempted: preferencesAttempted,
-    error: preferencesError,
+    hasLoadedSuccessfully: preferencesLoadedSuccessfully,
     updatePreferences,
   } = useConsolePreferences();
 
@@ -127,7 +127,7 @@ export function useConsoleHost({
       return;
     }
 
-    if (preferencesError) {
+    if (!preferencesLoadedSuccessfully) {
       setRestoreAttempted(true);
       return;
     }
@@ -146,7 +146,7 @@ export function useConsoleHost({
     restoreAttempted,
     preferencesLoading,
     preferencesAttempted,
-    preferencesError,
+    preferencesLoadedSuccessfully,
     preferences,
     navigate,
   ]);
@@ -159,7 +159,7 @@ export function useConsoleHost({
       lastVerifiedThreadId === threadId ||
       preferencesLoading ||
       !preferencesAttempted ||
-      preferencesError
+      !preferencesLoadedSuccessfully
     ) {
       return;
     }
@@ -202,7 +202,7 @@ export function useConsoleHost({
     lastVerifiedThreadId,
     preferencesLoading,
     preferencesAttempted,
-    preferencesError,
+    preferencesLoadedSuccessfully,
     preferences,
     updatePreferences,
     restoredThreadId,

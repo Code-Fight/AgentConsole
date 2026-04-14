@@ -18,7 +18,8 @@ export default function Settings() {
     preferences,
     isLoading: preferencesLoading,
     isSaving: preferencesSaving,
-    error: preferencesError,
+    loadError: preferencesLoadError,
+    saveError: preferencesSaveError,
     hasAttempted: preferencesAttempted,
     savePreferences,
   } = useConsolePreferences();
@@ -40,7 +41,7 @@ export default function Settings() {
     }
   }, [preferences, preferencesAttempted]);
 
-  const combinedError = vm.error ?? preferencesError;
+  const combinedError = vm.error ?? preferencesLoadError ?? preferencesSaveError;
   const combinedStatusMessage = consoleStatusMessage ?? vm.statusMessage;
   const combinedLoading = vm.isLoading || preferencesLoading || !hasDraftPreferences;
 
