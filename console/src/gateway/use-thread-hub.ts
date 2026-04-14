@@ -74,35 +74,65 @@ export function useThreadHub(options?: UseThreadHubOptions) {
     [enabled, loadHubData],
   );
 
-  const handleCreateThread = useCallback(async () => {
-    const nextMachineId = machineId.trim();
-    const nextTitle = title.trim();
-    if (!supportsCapability("threadHub") || nextMachineId === "" || nextTitle === "") {
-      return;
-    }
+  const handleCreateThread = useCallback(
+    async (machineOverride?: string, titleOverride?: string) => {
+      const nextMachineId = (machineOverride ?? machineId).trim();
+      const nextTitle = (titleOverride ?? title).trim();
+      if (!supportsCapability("threadHub") || nextMachineId === "" || nextTitle === "") {
+        return null;
+      }
 
-    setIsSubmitting(true);
-    setError(null);
+      setIsSubmitting(true);
+      setError(null);
 
-    try {
-      await http<CreateThreadResponse>("/threads", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          machineId: nextMachineId,
-          title: nextTitle,
-        }),
-      });
-      setTitle("");
-      await loadHubData();
-    } catch {
-      setError("Unable to create thread.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  }, [loadHubData, machineId, title]);
+      try {
+        const response = await http<CreateThreadResponse>("/threads", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            machineId: nextMachineId,
+            title: nextTitle,
+          }),
+        });
+        setTitle("");
+        await loadHubData();
+        return response.thread ?? null;
+      } catch {
+        setError("Unable to create thread.");
+        return null;
+      } finally {
+        setIsSubmitting(false);
+      }
+    },
+    [loadHubData, machineId, title],
+  );
+
+  const handleRename = useCallback(
+    async (threadId: string, newTitle: string) => {
+      const nextTitle = newTitle.trim();
+      if (!threadId || nextTitle === "") {
+        return;
+      }
+
+      setError(null);
+
+      try {
+        await http<void>(`/threads/${encodeURIComponent(threadId)}`, {
+          method: "PATCH",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ title: nextTitle }),
+        });
+        await loadHubData();
+      } catch {
+        setError("Unable to rename thread.");
+      }
+    },
+    [loadHubData],
+  );
 
   const handleArchive = useCallback(
     async (threadId: string) => {
@@ -154,7 +184,9 @@ export function useThreadHub(options?: UseThreadHubOptions) {
 
   return {
     error,
+    threadSummaries: threads,
     threads: threads.map((thread) => toThreadHubItem(thread, machines)),
+    machineSummaries: Object.values(machines),
     machineSuggestions: Object.values(machines).map((machine) => ({
       id: machine.id,
       label: machine.name || machine.id,
@@ -166,8 +198,10 @@ export function useThreadHub(options?: UseThreadHubOptions) {
     setMachineId,
     setTitle,
     handleCreateThread,
+    handleRename,
     handleArchive,
     handleResume,
     handleDelete,
+    reload: loadHubData,
   };
 }

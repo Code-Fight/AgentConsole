@@ -48,6 +48,10 @@ type createThreadRequest struct {
 	Title     string `json:"title"`
 }
 
+type threadRenameRequest struct {
+	Title string `json:"title"`
+}
+
 type startTurnRequest struct {
 	Input string `json:"input"`
 }
@@ -120,6 +124,27 @@ func findThread(idx *runtimeindex.Store, threadID string) (domain.Thread, bool) 
 		}
 	}
 	return domain.Thread{}, false
+}
+
+func resolveThreadTitleOverrides(store settings.Store) map[string]string {
+	if store == nil {
+		return nil
+	}
+	preferences, ok, err := store.GetConsolePreferences()
+	if err != nil || !ok || len(preferences.ThreadTitles) == 0 {
+		return nil
+	}
+	return preferences.ThreadTitles
+}
+
+func applyThreadTitleOverride(thread domain.Thread, overrides map[string]string) domain.Thread {
+	if overrides == nil {
+		return thread
+	}
+	if title, ok := overrides[thread.ThreadID]; ok && strings.TrimSpace(title) != "" {
+		thread.Title = title
+	}
+	return thread
 }
 
 func findEnvironmentResource(idx *runtimeindex.Store, kind domain.EnvironmentKind, machineID string, resourceID string) (domain.EnvironmentResource, bool) {
@@ -650,12 +675,13 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 	})
 
 	mux.HandleFunc("GET /threads", func(w http.ResponseWriter, _ *http.Request) {
+		overrides := resolveThreadTitleOverrides(settingsStore)
 		threads := make([]domain.Thread, 0)
 		for _, thread := range idx.Threads() {
 			if isDeleted(thread.ThreadID) {
 				continue
 			}
-			threads = append(threads, thread)
+			threads = append(threads, applyThreadTitleOverride(thread, overrides))
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"items": threads})
 	})
@@ -671,6 +697,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
+		overrides := resolveThreadTitleOverrides(settingsStore)
 		pendingApprovals := []protocol.ApprovalRequiredPayload{}
 		if reg != nil {
 			pendingApprovals = reg.PendingApprovalsForThread(threadID)
@@ -689,6 +716,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 						if result.Thread.MachineID == "" {
 							result.Thread.MachineID = machineID
 						}
+						result.Thread = applyThreadTitleOverride(result.Thread, overrides)
 						if strings.TrimSpace(result.Thread.ThreadID) != "" {
 							router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
 							if idx != nil {
@@ -720,6 +748,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			http.Error(w, "thread not found", http.StatusNotFound)
 			return
 		}
+		thread = applyThreadTitleOverride(thread, overrides)
 		writeJSON(w, http.StatusOK, threadDetailResponse{
 			Thread:           thread,
 			ActiveTurnID:     activeTurnID,
@@ -759,6 +788,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		if result.Thread.MachineID == "" {
 			result.Thread.MachineID = req.MachineID
 		}
+		result.Thread = applyThreadTitleOverride(result.Thread, resolveThreadTitleOverrides(settingsStore))
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
 		}
@@ -768,6 +798,76 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		clearDeleted(result.Thread.ThreadID)
 
 		writeJSON(w, http.StatusCreated, map[string]any{"thread": result.Thread})
+	})
+
+	mux.HandleFunc("PATCH /threads/{threadId}", func(w http.ResponseWriter, r *http.Request) {
+		threadID := r.PathValue("threadId")
+		if strings.TrimSpace(threadID) == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return
+		}
+		if isDeleted(threadID) {
+			http.Error(w, "thread not found", http.StatusNotFound)
+			return
+		}
+
+		var req threadRenameRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		nextTitle := strings.TrimSpace(req.Title)
+		if nextTitle == "" {
+			http.Error(w, "title is required", http.StatusBadRequest)
+			return
+		}
+
+		thread, ok := findThread(idx, threadID)
+		if !ok {
+			if machineID, ok := resolveThreadMachineID(router, idx, threadID); ok {
+				thread = domain.Thread{
+					ThreadID:  threadID,
+					MachineID: machineID,
+					Status:    domain.ThreadStatusUnknown,
+				}
+			} else {
+				http.Error(w, "thread not found", http.StatusNotFound)
+				return
+			}
+		}
+
+		preferences, ok, err := settingsStore.GetConsolePreferences()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			preferences = domain.ConsolePreferences{}
+		}
+		if preferences.ThreadTitles == nil {
+			preferences.ThreadTitles = map[string]string{}
+		}
+		preferences.ThreadTitles[threadID] = nextTitle
+		if err := settingsStore.PutConsolePreferences(preferences); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		thread.Title = nextTitle
+		if idx != nil && strings.TrimSpace(thread.MachineID) != "" {
+			idx.UpsertThread(thread.MachineID, thread)
+		}
+		clearDeleted(threadID)
+
+		if emitter, ok := sender.(threadUpdateEmitter); ok {
+			emitter.EmitThreadUpdated(protocol.ThreadUpdatedPayload{
+				MachineID: thread.MachineID,
+				ThreadID:  thread.ThreadID,
+				Thread:    &thread,
+			}, time.Now().UTC().Format(time.RFC3339))
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"thread": thread})
 	})
 
 	mux.HandleFunc("POST /threads/{threadId}/resume", func(w http.ResponseWriter, r *http.Request) {
@@ -804,6 +904,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		if result.Thread.MachineID == "" {
 			result.Thread.MachineID = machineID
 		}
+		result.Thread = applyThreadTitleOverride(result.Thread, resolveThreadTitleOverrides(settingsStore))
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
 		}

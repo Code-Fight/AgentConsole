@@ -949,6 +949,73 @@ func TestServerThreadDetailIncludesActiveTurnIDFromSenderState(t *testing.T) {
 	}
 }
 
+func TestServerThreadRenamePersistsTitleAcrossSnapshots(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	thread := domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "",
+	}
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
+
+	handler := NewServerWithSettings(
+		registry.NewStore(),
+		idx,
+		routing.NewRouter(),
+		nil,
+		settingsStore,
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+
+	renameReq := httptest.NewRequest(http.MethodPatch, "/threads/thread-01", bytes.NewBufferString(`{"title":"Renamed thread"}`))
+	renameReq.Header.Set("Content-Type", "application/json")
+	renameRec := httptest.NewRecorder()
+	handler.ServeHTTP(renameRec, renameReq)
+
+	if renameRec.Code != http.StatusOK {
+		t.Fatalf("rename returned %d with %s", renameRec.Code, renameRec.Body.String())
+	}
+
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
+
+	listReq := httptest.NewRequest(http.MethodGet, "/threads", nil)
+	listRec := httptest.NewRecorder()
+	handler.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("thread list returned %d with %s", listRec.Code, listRec.Body.String())
+	}
+	var listBody struct {
+		Items []domain.Thread `json:"items"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("invalid thread list json: %v", err)
+	}
+	if len(listBody.Items) != 1 || listBody.Items[0].Title != "Renamed thread" {
+		t.Fatalf("expected renamed title in list, got %+v", listBody.Items)
+	}
+
+	detailReq := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	detailRec := httptest.NewRecorder()
+	handler.ServeHTTP(detailRec, detailReq)
+	if detailRec.Code != http.StatusOK {
+		t.Fatalf("thread detail returned %d with %s", detailRec.Code, detailRec.Body.String())
+	}
+	var detailBody struct {
+		Thread domain.Thread `json:"thread"`
+	}
+	if err := json.Unmarshal(detailRec.Body.Bytes(), &detailBody); err != nil {
+		t.Fatalf("invalid thread detail json: %v", err)
+	}
+	if detailBody.Thread.Title != "Renamed thread" {
+		t.Fatalf("expected renamed title in detail, got %+v", detailBody.Thread)
+	}
+}
+
 func TestServerDeleteThreadBroadcastsThreadUpdatedInvalidation(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()

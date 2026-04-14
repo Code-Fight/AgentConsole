@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useMemo, useState, useRef, useEffect } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -18,9 +18,14 @@ import {
 import type {
   ConsoleSession as Session,
   ConsoleMachine as Machine,
-  ConsoleMessage as Message,
   ConsoleFileChange as FileChange,
 } from "../../design-host/use-console-host";
+import type { ApprovalDecision } from "../../common/api/types";
+import { useThreadWorkspace } from "../../gateway/use-thread-workspace";
+import type {
+  WorkspaceApprovalCardViewModel,
+  WorkspaceMessageViewModel,
+} from "../../gateway/thread-view-model";
 
 interface SessionChatProps {
   session: Session;
@@ -126,12 +131,28 @@ function TerminalBlock({ output }: { output: string }) {
   );
 }
 
-function MessageBubble({ message }: { message: Message }) {
+type ChatMessage = WorkspaceMessageViewModel & {
+  timestamp?: string;
+  fileChanges?: FileChange[];
+  terminalOutput?: string;
+};
+
+function MessageBubble({ message }: { message: ChatMessage }) {
   const [copied, setCopied] = useState(false);
-  const isUser = message.role === "user";
+  const isUser = message.kind === "user";
+
+  if (message.kind === "system") {
+    return (
+      <div className="flex justify-center">
+        <div className="px-3 py-1.5 rounded-full bg-zinc-900/80 border border-zinc-800 text-xs text-zinc-400">
+          {message.text}
+        </div>
+      </div>
+    );
+  }
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(message.content);
+    navigator.clipboard.writeText(message.text);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };
@@ -141,10 +162,12 @@ function MessageBubble({ message }: { message: Message }) {
       <div className="flex gap-3 justify-end group">
         <div className="max-w-[75%]">
           <div className="bg-blue-600/20 border border-blue-500/30 rounded-2xl rounded-tr-sm px-4 py-3">
-            <p className="text-sm text-zinc-200 whitespace-pre-wrap leading-6">{message.content}</p>
+            <p className="text-sm text-zinc-200 whitespace-pre-wrap leading-6">{message.text}</p>
           </div>
           <div className="flex items-center justify-end gap-2 mt-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            <span className="text-xs text-zinc-600">{message.timestamp}</span>
+            {message.timestamp ? (
+              <span className="text-xs text-zinc-600">{message.timestamp}</span>
+            ) : null}
           </div>
         </div>
         <div className="size-8 rounded-full bg-zinc-700 flex items-center justify-center flex-shrink-0 mt-1">
@@ -160,9 +183,9 @@ function MessageBubble({ message }: { message: Message }) {
         <Bot className="size-4 text-white" />
       </div>
       <div className="flex-1 min-w-0">
-        {message.content ? (
+        {message.text ? (
           <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-2xl rounded-tl-sm px-4 py-3">
-            <p className="text-sm text-zinc-200 whitespace-pre-wrap leading-6">{message.content}</p>
+            <p className="text-sm text-zinc-200 whitespace-pre-wrap leading-6">{message.text}</p>
           </div>
         ) : null}
         {message.fileChanges && message.fileChanges.length > 0 ? (
@@ -170,7 +193,9 @@ function MessageBubble({ message }: { message: Message }) {
         ) : null}
         {message.terminalOutput ? <TerminalBlock output={message.terminalOutput} /> : null}
         <div className="flex items-center gap-2 mt-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
-          <span className="text-xs text-zinc-600">{message.timestamp}</span>
+          {message.timestamp ? (
+            <span className="text-xs text-zinc-600">{message.timestamp}</span>
+          ) : null}
           <button
             onClick={handleCopy}
             className="flex items-center gap-1 text-xs text-zinc-600 hover:text-zinc-400 transition-colors"
@@ -201,29 +226,43 @@ export default function SessionChat({
   onPromptChange,
   onSendPrompt,
 }: SessionChatProps) {
+  const workspace = useThreadWorkspace(session.id);
   const [selectedModel, setSelectedModel] = useState(session.model);
   const [selectedPermission, setSelectedPermission] = useState("完全访问权限");
   const [showModelDrop, setShowModelDrop] = useState(false);
   const [showPermDrop, setShowPermDrop] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const messages = useMemo<ChatMessage[]>(() => {
+    if (workspace.messages.length > 0) {
+      return workspace.messages;
+    }
+    return session.messages.map((message) => ({
+      id: message.id,
+      kind: message.role,
+      text: message.content,
+      timestamp: message.timestamp,
+      fileChanges: message.fileChanges,
+      terminalOutput: message.terminalOutput,
+    }));
+  }, [session.messages, workspace.messages]);
 
   useEffect(() => {
     setSelectedModel(session.model);
   }, [session.model]);
 
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [session.messages, isSubmitting]);
+    messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
+  }, [messages, workspace.pendingApprovals, workspace.isSubmitting, isSubmitting]);
 
   const handleSend = () => {
-    if (isSubmitting) {
+    if (workspace.isSubmitting || isSubmitting) {
       return;
     }
 
-    const trimmed = prompt.trim();
+    const trimmed = workspace.prompt.trim();
     if (!trimmed) return;
-    onSendPrompt();
+    workspace.handlePromptSubmit();
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -234,7 +273,7 @@ export default function SessionChat({
   };
 
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    onPromptChange(e.target.value);
+    workspace.setPrompt(e.target.value);
     const ta = e.target;
     ta.style.height = "auto";
     ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
@@ -255,6 +294,18 @@ export default function SessionChat({
     unknown: "bg-zinc-500",
   }[machine.status];
 
+  const displayTitle = workspace.title || session.title;
+  const displayMachineName = workspace.machine?.name ?? machine.name;
+  const canSend = workspace.canStartTurn && !workspace.isSubmitting;
+
+  const handleApprovalDecision = (
+    requestId: string,
+    decision: ApprovalDecision,
+    answers?: Record<string, string>,
+  ) => {
+    workspace.handleApprovalDecision(requestId, decision, answers);
+  };
+
   return (
     <div className="flex flex-col h-full bg-zinc-950">
       <div className="flex-shrink-0 border-b border-zinc-800 bg-zinc-900/80 px-4 lg:px-6 py-3">
@@ -263,10 +314,12 @@ export default function SessionChat({
             <div className="flex items-center gap-2 min-w-0">
               <div className="flex items-center gap-1.5">
                 <div className={`size-2 rounded-full ${machineStatusDot}`} />
-                <span className="text-xs text-zinc-500 font-mono hidden sm:block">{machine.name}</span>
+                <span className="text-xs text-zinc-500 font-mono hidden sm:block">
+                  {displayMachineName}
+                </span>
               </div>
               <ChevronRight className="size-3.5 text-zinc-600 flex-shrink-0" />
-              <span className="text-sm text-zinc-200 truncate">{session.title}</span>
+              <span className="text-sm text-zinc-200 truncate">{displayTitle}</span>
             </div>
           </div>
           <div className="flex items-center gap-3 flex-shrink-0">
@@ -304,11 +357,119 @@ export default function SessionChat({
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 lg:px-8 py-6 space-y-6">
-        {session.messages.map((msg) => (
+        {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
 
-        {isSubmitting ? (
+        {workspace.pendingApprovals.map((approval: WorkspaceApprovalCardViewModel) => (
+          <div
+            key={approval.requestId}
+            className="border border-zinc-800/80 bg-zinc-900/60 rounded-2xl p-4"
+          >
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <p className="text-xs text-zinc-500">审批</p>
+                <p className="text-sm text-zinc-200">待处理审批</p>
+              </div>
+              <span className="text-xs text-emerald-400">Live</span>
+            </div>
+            <div className="mb-3">
+              <p className="text-sm text-zinc-200">{approval.title}</p>
+              <p className="text-xs text-zinc-500">{approval.kind}</p>
+            </div>
+            {approval.questions.length > 0 ? (
+              <div className="space-y-3">
+                {approval.questions.map((question) => (
+                  <div key={question.id} className="space-y-1">
+                    <label
+                      htmlFor={`${approval.requestId}-${question.id}`}
+                      className="text-xs text-zinc-400"
+                    >
+                      {question.label}
+                    </label>
+                    {question.options?.length ? (
+                      <select
+                        id={`${approval.requestId}-${question.id}`}
+                        aria-label={question.label}
+                        value={question.value}
+                        onChange={(event) =>
+                          workspace.handleApprovalAnswerChange(
+                            approval.requestId,
+                            question.id,
+                            event.target.value,
+                          )
+                        }
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-blue-500"
+                      >
+                        {question.options.map((option) => (
+                          <option key={option} value={option}>
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <textarea
+                        id={`${approval.requestId}-${question.id}`}
+                        aria-label={question.label}
+                        value={question.value}
+                        onChange={(event) =>
+                          workspace.handleApprovalAnswerChange(
+                            approval.requestId,
+                            question.id,
+                            event.target.value,
+                          )
+                        }
+                        rows={2}
+                        className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-blue-500 resize-none"
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="flex items-center gap-2 mt-4">
+              <button
+                type="button"
+                aria-label="Accept"
+                onClick={() =>
+                  handleApprovalDecision(
+                    approval.requestId,
+                    "accept",
+                    approval.questions.length > 0
+                      ? Object.fromEntries(
+                          approval.questions.map((question) => [
+                            question.id,
+                            question.value,
+                          ]),
+                        )
+                      : undefined,
+                  )
+                }
+                className="flex-1 px-3 py-2 rounded-lg bg-emerald-600 text-white text-xs hover:bg-emerald-500 transition-colors"
+              >
+                接受
+              </button>
+              <button
+                type="button"
+                aria-label="Decline"
+                onClick={() => handleApprovalDecision(approval.requestId, "decline")}
+                className="flex-1 px-3 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-xs hover:bg-zinc-700 transition-colors"
+              >
+                拒绝
+              </button>
+              <button
+                type="button"
+                aria-label="Cancel"
+                onClick={() => handleApprovalDecision(approval.requestId, "cancel")}
+                className="flex-1 px-3 py-2 rounded-lg bg-zinc-800 text-zinc-200 text-xs hover:bg-zinc-700 transition-colors"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        ))}
+
+        {(workspace.isSubmitting || isSubmitting) ? (
           <div className="flex gap-3">
             <div className="size-8 rounded-full bg-gradient-to-br from-violet-600 to-blue-600 flex items-center justify-center flex-shrink-0">
               <Bot className="size-4 text-white" />
@@ -329,11 +490,12 @@ export default function SessionChat({
         <div className="bg-zinc-800/60 border border-zinc-700/60 rounded-xl focus-within:border-zinc-600 transition-colors overflow-visible">
           <textarea
             ref={textareaRef}
-            value={prompt}
+            value={workspace.prompt}
             onChange={handleTextareaInput}
             onKeyDown={handleKeyDown}
             placeholder={`向 ${session.agentName} 发送指令...`}
             rows={1}
+            aria-label="Prompt"
             className="w-full bg-transparent px-4 pt-3 pb-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none resize-none min-h-[44px] max-h-[200px]"
           />
           <div className="flex items-center justify-between px-3 pb-2.5 pt-1 relative">
@@ -409,7 +571,8 @@ export default function SessionChat({
 
             <button
               onClick={handleSend}
-              disabled={!prompt.trim() || isSubmitting}
+              aria-label="Send prompt"
+              disabled={!workspace.prompt.trim() || !canSend}
               className="size-8 rounded-lg bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white flex items-center justify-center transition-colors flex-shrink-0"
             >
               <Send className="size-3.5" />
@@ -417,7 +580,7 @@ export default function SessionChat({
           </div>
         </div>
         <p className="text-center text-xs text-zinc-700 mt-2">
-          Shift+Enter 换行 · Enter 发送 · Agent 在 {machine.name} 上运行
+          Shift+Enter 换行 · Enter 发送 · Agent 在 {displayMachineName} 上运行
         </p>
       </div>
     </div>

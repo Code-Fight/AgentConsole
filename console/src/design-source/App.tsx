@@ -1,3 +1,4 @@
+import { useCallback, useMemo } from "react";
 import {
   Menu,
   X,
@@ -7,11 +8,14 @@ import {
   ChevronRight,
   ArrowLeft,
 } from "lucide-react";
+import { useParams } from "react-router-dom";
 import Settings from "./components/Settings";
 import Machines from "./components/Machines";
 import Environment from "./components/Environment";
 import SessionChat from "./components/SessionChat";
 import MachinePanel from "./components/MachinePanel";
+import { useThreadHub } from "../gateway/use-thread-hub";
+import { formatThreadStatus } from "../gateway/thread-view-model";
 import type { ConsoleHostViewModel } from "../design-host/use-console-host";
 import type { Machine as ManagementMachine } from "./data/mockData";
 
@@ -38,8 +42,6 @@ export default function App({
   onCloseMobilePanel,
   onToggleSidebar,
   onExpandSidebar,
-  onRenameSession,
-  onDeleteSession,
   onCreateThread,
   onInstallAgent,
   onDeleteAgent,
@@ -51,7 +53,144 @@ export default function App({
   onDeleteMCP,
   onDeletePlugin,
 }: AppProps) {
-  const managementMachines: ManagementMachine[] = machines.map((machine) => {
+  const { threadId } = useParams<{ threadId?: string }>();
+  const hub = useThreadHub({
+    enabled: activePage !== "settings",
+  });
+
+  const hubMachines = useMemo(() => {
+    if (hub.threadSummaries.length === 0 && hub.machineSummaries.length === 0) {
+      return [];
+    }
+
+    const machineById = new Map(hub.machineSummaries.map((machine) => [machine.id, machine]));
+    hub.threadSummaries.forEach((thread) => {
+      if (!machineById.has(thread.machineId)) {
+        machineById.set(thread.machineId, {
+          id: thread.machineId,
+          name: thread.machineId,
+          status: "unknown",
+          runtimeStatus: "unknown",
+        });
+      }
+    });
+
+    return Array.from(machineById.values()).map((machine) => {
+      const machineThreads = hub.threadSummaries.filter(
+        (thread) => thread.machineId === machine.id,
+      );
+      const hasActiveThread = machineThreads.some((thread) => thread.status === "active");
+      const agent = {
+        id: `${machine.id}-codex`,
+        name: "Codex",
+        type: "codex" as const,
+        model: "codex",
+        status: hasActiveThread ? "active" : "idle",
+        port: 0,
+      };
+
+      return {
+        id: machine.id,
+        name: machine.name || machine.id,
+        status: machine.status,
+        runtimeStatus: machine.runtimeStatus ?? "unknown",
+        agents: [agent],
+        sessions: machineThreads.map((thread) => ({
+          id: thread.threadId,
+          title: thread.title || thread.threadId,
+          agentName: agent.name,
+          model: agent.model,
+          status: thread.status,
+          lastActivity: formatThreadStatus(thread.status),
+          messages: [],
+        })),
+      };
+    });
+  }, [hub.machineSummaries, hub.threadSummaries]);
+
+  const resolvedMachines = hubMachines.length > 0 ? hubMachines : machines;
+  const activeSessionId = threadId ?? selectedSession?.id ?? null;
+
+  const resolvedSelectedSession = useMemo(() => {
+    if (!activeSessionId) {
+      return null;
+    }
+    for (const machine of resolvedMachines) {
+      const session = machine.sessions.find((candidate) => candidate.id === activeSessionId);
+      if (session) {
+        return session;
+      }
+    }
+    return selectedSession;
+  }, [activeSessionId, resolvedMachines, selectedSession]);
+
+  const resolvedSelectedMachine = useMemo(() => {
+    if (!activeSessionId) {
+      return null;
+    }
+    return (
+      resolvedMachines.find((machine) =>
+        machine.sessions.some((session) => session.id === activeSessionId),
+      ) ?? selectedMachine
+    );
+  }, [activeSessionId, resolvedMachines, selectedMachine]);
+
+  const handleCreateThread = useCallback(
+    async (machineId: string, agentId: string, title: string, workDir: string) => {
+      const created = await hub.handleCreateThread(machineId, title);
+      if (created?.threadId) {
+        const machine =
+          resolvedMachines.find((candidate) => candidate.id === created.machineId) ??
+          resolvedMachines[0] ?? {
+            id: created.machineId,
+            name: created.machineId,
+            status: "unknown",
+            runtimeStatus: "unknown",
+            agents: [
+              {
+                id: `${created.machineId}-codex`,
+                name: "Codex",
+                type: "codex" as const,
+                model: "codex",
+                status: "idle" as const,
+                port: 0,
+              },
+            ],
+            sessions: [],
+          };
+        onSelectSession(machine, {
+          id: created.threadId,
+          title: created.title || created.threadId,
+          agentName: "Codex",
+          model: "codex",
+          status: created.status,
+          lastActivity: formatThreadStatus(created.status),
+          messages: [],
+        });
+        return;
+      }
+
+      await Promise.resolve(onCreateThread(machineId, agentId, title, workDir));
+      await hub.reload();
+    },
+    [hub, onCreateThread, onSelectSession, resolvedMachines],
+  );
+
+  const handleDeleteSession = useCallback(
+    async (sessionId: string) => {
+      await hub.handleDelete(sessionId);
+    },
+    [hub],
+  );
+
+  const handleRenameSession = useCallback(
+    async (sessionId: string, newTitle: string) => {
+      await hub.handleRename(sessionId, newTitle);
+    },
+    [hub],
+  );
+
+  const managementMachines: ManagementMachine[] = resolvedMachines.map((machine) => {
     const { runtimeStatus: _runtimeStatus, ...restMachine } = machine;
     const statusLabel =
       machine.status === "reconnecting"
@@ -101,12 +240,12 @@ export default function App({
   const renderMainContent = () => {
     switch (activePage) {
       case "threads":
-        if (selectedSession && selectedMachine) {
+        if (resolvedSelectedSession && resolvedSelectedMachine) {
           return (
             <SessionChat
-              key={selectedSession.id}
-              session={selectedSession}
-              machine={selectedMachine}
+              key={resolvedSelectedSession.id}
+              session={resolvedSelectedSession}
+              machine={resolvedSelectedMachine}
               prompt={prompt}
               isSubmitting={isSubmitting}
               onPromptChange={onPromptChange}
@@ -205,13 +344,13 @@ export default function App({
         <>
           <div className="lg:hidden absolute top-[57px] left-0 bottom-0 w-[300px] bg-zinc-900 border-r border-zinc-800 z-50 shadow-2xl flex flex-col">
             <MachinePanel
-              machines={machines}
-              selectedSessionId={selectedSession?.id ?? null}
+              machines={resolvedMachines}
+              selectedSessionId={resolvedSelectedSession?.id ?? null}
               onSelectSession={onSelectSession}
               onNavigate={onNavigate}
-              onRenameSession={onRenameSession}
-              onDeleteSession={onDeleteSession}
-              onCreateThread={onCreateThread}
+              onRenameSession={handleRenameSession}
+              onDeleteSession={handleDeleteSession}
+              onCreateThread={handleCreateThread}
             />
           </div>
           <div
@@ -247,13 +386,13 @@ export default function App({
               </div>
               <div className="flex-1 overflow-hidden">
                 <MachinePanel
-                  machines={machines}
-                  selectedSessionId={selectedSession?.id ?? null}
+                  machines={resolvedMachines}
+                  selectedSessionId={resolvedSelectedSession?.id ?? null}
                   onSelectSession={onSelectSession}
                   onNavigate={onNavigate}
-                  onRenameSession={onRenameSession}
-                  onDeleteSession={onDeleteSession}
-                  onCreateThread={onCreateThread}
+                  onRenameSession={handleRenameSession}
+                  onDeleteSession={handleDeleteSession}
+                  onCreateThread={handleCreateThread}
                 />
               </div>
             </div>

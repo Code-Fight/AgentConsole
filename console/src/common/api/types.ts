@@ -81,6 +81,7 @@ export interface ConsolePreferences {
   profile: string;
   safetyPolicy: string;
   lastThreadId: string;
+  threadTitles?: Record<string, string>;
 }
 
 export interface ConsolePreferencesResponse {
