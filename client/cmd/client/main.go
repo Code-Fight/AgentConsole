@@ -532,7 +532,10 @@ func defaultRuntimeFactories() runtimeFactories {
 	return runtimeFactories{
 		newFake: newFakeRuntime,
 		newAppServer: func(ctx context.Context, cfg config.Config, spec agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
-			layout := codex.NewInstanceLayout(cfg.ManagedAgentsDir, spec.AgentID)
+			layout, err := codex.NewInstanceLayout(cfg.ManagedAgentsDir, spec.AgentID)
+			if err != nil {
+				return nil, nil, err
+			}
 			return codex.NewIsolatedAppServerClient(ctx, cfg.CodexBin, layout)
 		},
 	}
@@ -640,7 +643,7 @@ func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession, m
 }
 
 func handleRuntimeTurnEvent(session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string, event agenttypes.RuntimeTurnEvent) error {
-	if err := emitRuntimeTurnEvent(session, event); err != nil {
+	if err := emitRuntimeTurnEvent(session, runtimeName, event); err != nil {
 		return err
 	}
 	if !shouldRefreshThreadSnapshotForTurnEvent(event) || mgr == nil || runtimeName == "" {
@@ -658,27 +661,27 @@ func shouldRefreshThreadSnapshotForTurnEvent(event agenttypes.RuntimeTurnEvent) 
 	}
 }
 
-func emitRuntimeTurnEvent(session *clientSession, event agenttypes.RuntimeTurnEvent) error {
+func emitRuntimeTurnEvent(session *clientSession, agentID string, event agenttypes.RuntimeTurnEvent) error {
 	switch event.Type {
 	case agenttypes.RuntimeTurnEventTypeStarted:
 		return session.TurnStarted(event.RequestID, protocol.TurnStartedPayload{
-			ThreadID: event.ThreadID,
+			ThreadID: domain.PublicThreadID(agentID, event.ThreadID),
 			TurnID:   event.TurnID,
 		})
 	case agenttypes.RuntimeTurnEventTypeDelta:
 		return session.TurnDelta(event.RequestID, protocol.TurnDeltaPayload{
-			ThreadID: event.ThreadID,
+			ThreadID: domain.PublicThreadID(agentID, event.ThreadID),
 			TurnID:   event.TurnID,
 			Sequence: event.Sequence,
 			Delta:    event.Delta,
 		})
 	case agenttypes.RuntimeTurnEventTypeCompleted:
 		return session.TurnCompleted(event.RequestID, protocol.TurnCompletedPayload{
-			Turn: event.Turn,
+			Turn: publicTurnForAgent(agentID, event.Turn),
 		})
 	case agenttypes.RuntimeTurnEventTypeFailed:
 		return session.TurnFailed(event.RequestID, protocol.TurnCompletedPayload{
-			Turn: event.Turn,
+			Turn: publicTurnForAgent(agentID, event.Turn),
 		})
 	default:
 		return nil
@@ -703,7 +706,7 @@ func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSessio
 		resolvedSource.SetApprovalResolvedHandler(func(event codex.ApprovalResolvedEvent) {
 			_ = session.ApprovalResolved(protocol.ApprovalResolvedPayload{
 				RequestID: event.RequestID,
-				ThreadID:  event.ThreadID,
+				ThreadID:  domain.PublicThreadID(agentID, event.ThreadID),
 				TurnID:    event.TurnID,
 				Decision:  event.Decision,
 			})
@@ -717,7 +720,7 @@ func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSessio
 func emitRuntimeApprovalEvent(session *clientSession, agentID string, event agenttypes.RuntimeApprovalRequest) error {
 	return session.ApprovalRequired(agentID, protocol.ApprovalRequiredPayload{
 		RequestID: event.RequestID,
-		ThreadID:  event.ThreadID,
+		ThreadID:  domain.PublicThreadID(agentID, event.ThreadID),
 		TurnID:    event.TurnID,
 		ItemID:    event.ItemID,
 		Kind:      event.Kind,
@@ -848,6 +851,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			thread.MachineID = session.machineID
 		}
 		thread.AgentID = agentID
+		thread = publicThreadForAgent(agentID, thread)
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadCreateCommandResult{
 			Thread: thread,
@@ -867,7 +871,12 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
-		thread, err := mgr.ReadThread(agentID, payload.ThreadID)
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		thread, err := mgr.ReadThread(agentID, rawThreadID)
 		if err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
@@ -875,6 +884,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			thread.MachineID = session.machineID
 		}
 		thread.AgentID = agentID
+		thread = publicThreadForAgent(agentID, thread)
 
 		return session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadReadCommandResult{
 			Thread: thread,
@@ -890,7 +900,12 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
-		thread, err := mgr.ResumeThread(agentID, payload.ThreadID)
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		thread, err := mgr.ResumeThread(agentID, rawThreadID)
 		if err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
@@ -898,6 +913,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			thread.MachineID = session.machineID
 		}
 		thread.AgentID = agentID
+		thread = publicThreadForAgent(agentID, thread)
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadResumeCommandResult{
 			Thread: thread,
@@ -917,7 +933,12 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
-		if err := mgr.ArchiveThread(agentID, payload.ThreadID); err != nil {
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		if err := mgr.ArchiveThread(agentID, rawThreadID); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
@@ -939,8 +960,13 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
 		result, err := mgr.StartTurn(agentID, agenttypes.StartTurnParams{
-			ThreadID: payload.ThreadID,
+			ThreadID: rawThreadID,
 			Input:    payload.Input,
 		})
 		if err != nil {
@@ -949,7 +975,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.TurnStartCommandResult{
 			TurnID:   result.TurnID,
-			ThreadID: result.ThreadID,
+			ThreadID: domain.PublicThreadID(agentID, result.ThreadID),
 		}); err != nil {
 			return err
 		}
@@ -959,7 +985,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 
 		for _, delta := range result.Deltas {
 			if err := session.TurnDelta(envelope.RequestID, protocol.TurnDeltaPayload{
-				ThreadID: result.ThreadID,
+				ThreadID: domain.PublicThreadID(agentID, result.ThreadID),
 				TurnID:   result.TurnID,
 				Sequence: delta.Sequence,
 				Delta:    delta.Delta,
@@ -969,11 +995,11 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 		}
 
 		if err := session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
-			Turn: domain.Turn{
+			Turn: publicTurnForAgent(agentID, domain.Turn{
 				TurnID:   result.TurnID,
 				ThreadID: result.ThreadID,
 				Status:   domain.TurnStatusCompleted,
-			},
+			}),
 		}); err != nil {
 			return err
 		}
@@ -990,8 +1016,13 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
 		result, err := mgr.SteerTurn(agentID, agenttypes.SteerTurnParams{
-			ThreadID: payload.ThreadID,
+			ThreadID: rawThreadID,
 			TurnID:   payload.TurnID,
 			Input:    payload.Input,
 		})
@@ -1001,7 +1032,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.TurnSteerCommandResult{
 			TurnID:   result.TurnID,
-			ThreadID: result.ThreadID,
+			ThreadID: domain.PublicThreadID(agentID, result.ThreadID),
 		}); err != nil {
 			return err
 		}
@@ -1011,7 +1042,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 
 		for _, delta := range result.Deltas {
 			if err := session.TurnDelta(envelope.RequestID, protocol.TurnDeltaPayload{
-				ThreadID: result.ThreadID,
+				ThreadID: domain.PublicThreadID(agentID, result.ThreadID),
 				TurnID:   result.TurnID,
 				Sequence: delta.Sequence,
 				Delta:    delta.Delta,
@@ -1021,11 +1052,11 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 		}
 
 		if err := session.TurnCompleted(envelope.RequestID, protocol.TurnCompletedPayload{
-			Turn: domain.Turn{
+			Turn: publicTurnForAgent(agentID, domain.Turn{
 				TurnID:   result.TurnID,
 				ThreadID: result.ThreadID,
 				Status:   domain.TurnStatusCompleted,
-			},
+			}),
 		}); err != nil {
 			return err
 		}
@@ -1042,13 +1073,20 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
 		turn, err := mgr.InterruptTurn(agentID, agenttypes.InterruptTurnParams{
-			ThreadID: payload.ThreadID,
+			ThreadID: rawThreadID,
 			TurnID:   payload.TurnID,
 		})
 		if err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
+
+		turn = publicTurnForAgent(agentID, turn)
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.TurnInterruptCommandResult{
 			Turn: turn,
@@ -1495,6 +1533,7 @@ func collectManagedSnapshot(machineID string, mgr *manager.Manager, registry *ag
 			if thread.AgentID == "" {
 				thread.AgentID = agentID
 			}
+			thread = publicThreadForAgent(agentID, thread)
 			threads = append(threads, thread)
 		}
 
@@ -1533,6 +1572,19 @@ func collectManagedSnapshot(machineID string, mgr *manager.Manager, registry *ag
 		Threads:     threads,
 		Environment: environment,
 	}, nil
+}
+
+func publicThreadForAgent(agentID string, thread domain.Thread) domain.Thread {
+	if strings.TrimSpace(thread.AgentID) == "" {
+		thread.AgentID = strings.TrimSpace(agentID)
+	}
+	thread.ThreadID = domain.PublicThreadID(thread.AgentID, thread.ThreadID)
+	return thread
+}
+
+func publicTurnForAgent(agentID string, turn domain.Turn) domain.Turn {
+	turn.ThreadID = domain.PublicThreadID(agentID, turn.ThreadID)
+	return turn
 }
 
 func firstNonEmpty(values ...string) string {

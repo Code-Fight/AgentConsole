@@ -88,6 +88,39 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 	}
 }
 
+func TestCollectManagedSnapshotUsesAgentScopedPublicThreadIDs(t *testing.T) {
+	registry := agentregistry.New()
+	registry.Register("agent-01", &notifyingRuntime{
+		threadSnapshots: [][]domain.Thread{
+			{{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusIdle, Title: "One"}},
+		},
+	})
+	registry.Register("agent-02", &notifyingRuntime{
+		threadSnapshots: [][]domain.Thread{
+			{{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusIdle, Title: "Two"}},
+		},
+	})
+
+	snap, err := collectManagedSnapshot("machine-01", manager.New(registry), registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Threads) != 2 {
+		t.Fatalf("expected 2 threads, got %d", len(snap.Threads))
+	}
+	if snap.Threads[0].ThreadID == snap.Threads[1].ThreadID {
+		t.Fatalf("expected unique public thread IDs, got %+v", snap.Threads)
+	}
+
+	agentID, rawThreadID, ok := domain.DecodePublicThreadID(snap.Threads[0].ThreadID)
+	if !ok {
+		t.Fatalf("expected encoded public thread id, got %q", snap.Threads[0].ThreadID)
+	}
+	if rawThreadID != "thread-01" || agentID != snap.Threads[0].AgentID {
+		t.Fatalf("unexpected decoded thread identity: agent=%q raw=%q thread=%+v", agentID, rawThreadID, snap.Threads[0])
+	}
+}
+
 func TestHandleCommandEnvelopeRejectsUnsupportedCommands(t *testing.T) {
 	session, sent := newRecordingSession()
 
@@ -355,7 +388,7 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 
 	if err := session.ApprovalRequired("codex", protocol.ApprovalRequiredPayload{
 		RequestID: "approval-1",
-		ThreadID:  "thread-01",
+		ThreadID:  domain.PublicThreadID("codex", "thread-01"),
 		TurnID:    "turn-01",
 		ItemID:    "item-01",
 		Kind:      "command",
@@ -392,7 +425,7 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[2]).Payload, &resolved); err != nil {
 		t.Fatalf("decode resolved payload failed: %v", err)
 	}
-	if resolved.RequestID != publicRequestID || resolved.ThreadID != "thread-01" || resolved.Decision != "accept" {
+	if resolved.RequestID != publicRequestID || resolved.ThreadID != domain.PublicThreadID("codex", "thread-01") || resolved.Decision != "accept" {
 		t.Fatalf("unexpected resolved payload: %+v", resolved)
 	}
 }
@@ -408,7 +441,7 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-1",
-		Payload:   []byte(`{"requestId":"` + publicRequestID + `","threadId":"thread-01","turnId":"turn-01","decision":"accept"}`),
+		Payload:   []byte(`{"requestId":"` + publicRequestID + `","threadId":"` + domain.PublicThreadID("codex", "thread-01") + `","turnId":"turn-01","decision":"accept"}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -425,7 +458,7 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 	if runtime.lastApprovalDecision.requestID != "approval-1" || runtime.lastApprovalDecision.decision != "accept" {
 		t.Fatalf("unexpected approval response: %+v", runtime.lastApprovalDecision)
 	}
-	if resolved.RequestID != publicRequestID || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
+	if resolved.RequestID != publicRequestID || resolved.ThreadID != domain.PublicThreadID("codex", "thread-01") || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
 		t.Fatalf("unexpected resolved payload: %+v", resolved)
 	}
 }
@@ -439,7 +472,7 @@ func TestHandleCommandEnvelopeRespondsToToolUserInputWithAnswers(t *testing.T) {
 
 	if err := session.ApprovalRequired("codex", protocol.ApprovalRequiredPayload{
 		RequestID: "approval-1",
-		ThreadID:  "thread-01",
+		ThreadID:  domain.PublicThreadID("codex", "thread-01"),
 		TurnID:    "turn-01",
 		ItemID:    "item-01",
 		Kind:      "tool_user_input",
@@ -453,7 +486,7 @@ func TestHandleCommandEnvelopeRespondsToToolUserInputWithAnswers(t *testing.T) {
 		RequestID: "req-approval-answers-1",
 		Payload: []byte(`{
 			"requestId":"` + publicRequestID + `",
-			"threadId":"thread-01",
+			"threadId":"` + domain.PublicThreadID("codex", "thread-01") + `",
 			"turnId":"turn-01",
 			"decision":"accept",
 			"answers":{"question-1":"release","question-2":"Need the release branch"}
@@ -504,7 +537,7 @@ func TestBindRuntimeApprovalEventsEmitsResolvedEventsFromRuntimeOriginatedResolu
 	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[0]).Payload, &resolved); err != nil {
 		t.Fatalf("decode resolved payload failed: %v", err)
 	}
-	if resolved.RequestID != publicRequestID || resolved.ThreadID != "thread-01" || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
+	if resolved.RequestID != publicRequestID || resolved.ThreadID != domain.PublicThreadID("codex", "thread-01") || resolved.TurnID != "turn-01" || resolved.Decision != "accept" {
 		t.Fatalf("unexpected resolved payload: %+v", resolved)
 	}
 }

@@ -19,6 +19,7 @@ import (
 const managedAgentMetadataName = "agent.json"
 
 type Supervisor struct {
+	opMu              sync.Mutex
 	mu                sync.RWMutex
 	ctx               context.Context
 	managedAgentsDir  string
@@ -95,6 +96,9 @@ func (s *Supervisor) loadRecords() error {
 		if !entry.IsDir() {
 			continue
 		}
+		if err := codex.ValidateAgentID(entry.Name()); err != nil {
+			return err
+		}
 		recordPath := filepath.Join(s.managedAgentsDir, entry.Name(), managedAgentMetadataName)
 		data, err := os.ReadFile(recordPath)
 		if err != nil {
@@ -110,6 +114,12 @@ func (s *Supervisor) loadRecords() error {
 		if strings.TrimSpace(record.AgentID) == "" {
 			record.AgentID = entry.Name()
 		}
+		if err := codex.ValidateAgentID(record.AgentID); err != nil {
+			return err
+		}
+		if record.AgentID != entry.Name() {
+			return fmt.Errorf("agent record path mismatch for %q", entry.Name())
+		}
 		if record.DisplayName == "" {
 			record.DisplayName = record.AgentID
 		}
@@ -119,19 +129,30 @@ func (s *Supervisor) loadRecords() error {
 }
 
 func (s *Supervisor) StartAll() error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	s.mu.Lock()
 	records := sortedManagedAgentRecords(s.records)
 	s.mu.Unlock()
 
+	startedAgentIDs := make([]string, 0, len(records))
 	for _, record := range records {
 		if err := s.startAgent(record); err != nil {
+			for idx := len(startedAgentIDs) - 1; idx >= 0; idx-- {
+				_ = s.stopAgent(startedAgentIDs[idx])
+			}
 			return err
 		}
+		startedAgentIDs = append(startedAgentIDs, record.AgentID)
 	}
 	return nil
 }
 
 func (s *Supervisor) StopAll() error {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	s.mu.Lock()
 	agentIDs := make([]string, 0, len(s.cleanups))
 	for agentID := range s.cleanups {
@@ -149,6 +170,9 @@ func (s *Supervisor) StopAll() error {
 }
 
 func (s *Supervisor) InstallAgent(agentType domain.AgentType, displayName string) (domain.AgentInstance, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
 	if strings.TrimSpace(displayName) == "" {
 		return domain.AgentInstance{}, fmt.Errorf("displayName is required")
 	}
@@ -168,6 +192,14 @@ func (s *Supervisor) InstallAgent(agentType domain.AgentType, displayName string
 	s.mu.Unlock()
 
 	if err := s.startAgent(record); err != nil {
+		s.mu.Lock()
+		delete(s.records, agentID)
+		delete(s.statusByAgentID, agentID)
+		s.mu.Unlock()
+		layout, layoutErr := codex.NewInstanceLayout(s.managedAgentsDir, agentID)
+		if layoutErr == nil {
+			_ = os.RemoveAll(layout.RootDir)
+		}
 		return domain.AgentInstance{}, err
 	}
 	return s.agentInstance(record), nil
@@ -175,9 +207,12 @@ func (s *Supervisor) InstallAgent(agentType domain.AgentType, displayName string
 
 func (s *Supervisor) DeleteAgent(agentID string) error {
 	agentID = strings.TrimSpace(agentID)
-	if agentID == "" {
-		return fmt.Errorf("agentID is required")
+	if err := codex.ValidateAgentID(agentID); err != nil {
+		return err
 	}
+
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
 
 	if err := s.stopAgent(agentID); err != nil {
 		return err
@@ -188,7 +223,10 @@ func (s *Supervisor) DeleteAgent(agentID string) error {
 	delete(s.statusByAgentID, agentID)
 	s.mu.Unlock()
 
-	layout := codex.NewInstanceLayout(s.managedAgentsDir, agentID)
+	layout, err := codex.NewInstanceLayout(s.managedAgentsDir, agentID)
+	if err != nil {
+		return err
+	}
 	return os.RemoveAll(layout.RootDir)
 }
 
@@ -198,7 +236,10 @@ func (s *Supervisor) ReadConfig(agentID string) (domain.AgentConfigDocument, err
 		return domain.AgentConfigDocument{}, fmt.Errorf("agent %q is not installed", agentID)
 	}
 
-	layout := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+	layout, err := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+	if err != nil {
+		return domain.AgentConfigDocument{}, err
+	}
 	data, err := os.ReadFile(layout.ConfigPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -227,7 +268,10 @@ func (s *Supervisor) WriteConfig(agentID string, document domain.AgentConfigDocu
 		document.Format = domain.AgentConfigFormatTOML
 	}
 
-	layout := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+	layout, err := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+	if err != nil {
+		return domain.AgentConfigDocument{}, err
+	}
 	if _, err := layout.ApplyConfig(document); err != nil {
 		return domain.AgentConfigDocument{}, err
 	}
@@ -242,7 +286,10 @@ func (s *Supervisor) ApplyConfigToType(agentType domain.AgentType, document doma
 
 	var result agenttypes.ApplyConfigResult
 	for idx, record := range records {
-		layout := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+		layout, err := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+		if err != nil {
+			return agenttypes.ApplyConfigResult{}, err
+		}
 		document.AgentType = record.AgentType
 		if document.Format == "" {
 			document.Format = domain.AgentConfigFormatTOML
@@ -274,6 +321,9 @@ func (s *Supervisor) AgentInstances() []domain.AgentInstance {
 func (s *Supervisor) ResolveAgentID(agentID string) (string, error) {
 	trimmed := strings.TrimSpace(agentID)
 	if trimmed != "" {
+		if err := codex.ValidateAgentID(trimmed); err != nil {
+			return "", err
+		}
 		if _, ok := s.record(trimmed); !ok {
 			return "", fmt.Errorf("agent %q is not installed", trimmed)
 		}
@@ -369,7 +419,13 @@ func (s *Supervisor) recordsByType(agentType domain.AgentType) []managedAgentRec
 }
 
 func (s *Supervisor) saveRecord(record managedAgentRecord) error {
-	layout := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+	if err := codex.ValidateAgentID(record.AgentID); err != nil {
+		return err
+	}
+	layout, err := codex.NewInstanceLayout(s.managedAgentsDir, record.AgentID)
+	if err != nil {
+		return err
+	}
 	if err := os.MkdirAll(layout.RootDir, 0o755); err != nil {
 		return err
 	}

@@ -30,9 +30,7 @@ const statusConfig = {
 };
 
 const agentTypeOptions = [
-  { value: "claude-code", label: "Claude Code" },
   { value: "codex", label: "Codex" },
-  { value: "custom", label: "Custom" },
 ];
 
 function AgentCard({
@@ -168,7 +166,7 @@ function InstallAgentDialog({
   onOpenChange: (open: boolean) => void;
   onInstall: (machineId: string, agentType: string, agentName: string) => void;
 }) {
-  const [agentType, setAgentType] = useState<"claude-code" | "codex" | "custom">("claude-code");
+  const [agentType, setAgentType] = useState("codex");
   const [agentName, setAgentName] = useState("");
 
   const handleInstall = () => {
@@ -193,7 +191,7 @@ function InstallAgentDialog({
               <label className="block text-xs text-zinc-400 mb-2">Agent 类型</label>
               <select
                 value={agentType}
-                onChange={(e) => setAgentType(e.target.value as "claude-code" | "codex" | "custom")}
+                onChange={(e) => setAgentType(e.target.value)}
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-300 focus:outline-none focus:border-blue-500"
               >
                 {agentTypeOptions.map((opt) => (

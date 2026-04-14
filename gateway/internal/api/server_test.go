@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 
@@ -233,6 +234,51 @@ func TestServerCreateThreadUpdatesRouterBeforeNextTurnRequest(t *testing.T) {
 
 	if turnRec.Code != http.StatusAccepted {
 		t.Fatalf("expected immediate turn start to succeed, got %d with %s", turnRec.Code, turnRec.Body.String())
+	}
+}
+
+func TestServerRoutesDuplicateUnderlyingThreadIDsAcrossAgentsByPublicThreadID(t *testing.T) {
+	router := routing.NewRouter()
+	threadIDAgentOne := domain.PublicThreadID("agent-01", "thread-01")
+	threadIDAgentTwo := domain.PublicThreadID("agent-02", "thread-01")
+	router.TrackThread(threadIDAgentOne, "machine-01", "agent-01")
+	router.TrackThread(threadIDAgentTwo, "machine-01", "agent-02")
+
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" || name != "turn.start" {
+				t.Fatalf("unexpected route: machine=%q name=%q", machineID, name)
+			}
+
+			commandPayload, ok := payload.(protocol.TurnStartCommandPayload)
+			if !ok {
+				t.Fatalf("payload type = %T", payload)
+			}
+			if commandPayload.AgentID != "agent-02" {
+				t.Fatalf("expected agent-02 route, got %+v", commandPayload)
+			}
+			if commandPayload.ThreadID != threadIDAgentTwo {
+				t.Fatalf("expected public thread id for agent-02, got %+v", commandPayload)
+			}
+
+			return protocol.CommandCompletedPayload{
+				CommandName: "turn.start",
+				Result: mustMarshalJSON(t, protocol.TurnStartCommandResult{
+					TurnID:   "turn-01",
+					ThreadID: threadIDAgentTwo,
+				}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodPost, "/threads/"+url.PathEscape(threadIDAgentTwo)+"/turns", bytes.NewBufferString(`{"input":"run tests"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d with %s", rec.Code, rec.Body.String())
 	}
 }
 

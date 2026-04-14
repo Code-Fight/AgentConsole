@@ -11,8 +11,14 @@ import (
 func TestManagedInstanceLayoutKeepsAgentHomesIsolated(t *testing.T) {
 	rootDir := t.TempDir()
 
-	first := NewInstanceLayout(rootDir, "agent-01")
-	second := NewInstanceLayout(rootDir, "agent-02")
+	first, err := NewInstanceLayout(rootDir, "agent-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := NewInstanceLayout(rootDir, "agent-02")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if first.AgentID != "agent-01" {
 		t.Fatalf("unexpected first agent id: %+v", first)
@@ -32,7 +38,10 @@ func TestManagedInstanceLayoutKeepsAgentHomesIsolated(t *testing.T) {
 }
 
 func TestManagedInstanceLayoutAppliesConfigIntoAgentHome(t *testing.T) {
-	layout := NewInstanceLayout(t.TempDir(), "agent-01")
+	layout, err := NewInstanceLayout(t.TempDir(), "agent-01")
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := layout.ApplyConfig(domain.AgentConfigDocument{
 		AgentType: domain.AgentTypeCodex,
@@ -52,5 +61,11 @@ func TestManagedInstanceLayoutAppliesConfigIntoAgentHome(t *testing.T) {
 	}
 	if string(data) != "model = \"gpt-5.4\"\n" {
 		t.Fatalf("unexpected config contents: %q", string(data))
+	}
+}
+
+func TestManagedInstanceLayoutRejectsUnsafeAgentID(t *testing.T) {
+	if _, err := NewInstanceLayout(t.TempDir(), "../escape"); err == nil {
+		t.Fatal("expected unsafe agentID to be rejected")
 	}
 }
