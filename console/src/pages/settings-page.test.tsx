@@ -580,6 +580,7 @@ test("reloads console preferences from gateway settings", async () => {
   });
 
   unmount();
+  resetConsolePreferencesStoreForTests();
 
   render(
     <MemoryRouter initialEntries={["/settings"]}>
