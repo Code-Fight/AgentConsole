@@ -29,19 +29,25 @@ export function useThreadHub(options?: UseThreadHubOptions) {
 
   const loadHubData = useCallback(async () => {
     try {
-      const [threadResponse, machineResponse] = await Promise.all([
-        http<ThreadListResponse>("/threads"),
-        http<MachineListResponse>("/machines"),
-      ]);
+      const threadResponse = await http<ThreadListResponse>("/threads");
       setThreads(threadResponse.items);
-      setMachines(
-        Object.fromEntries(machineResponse.items.map((machine) => [machine.id, machine])),
-      );
       setError(null);
     } catch {
       setThreads([]);
       setMachines({});
       setError("Unable to load live threads.");
+      return;
+    }
+
+    try {
+      const machineResponse = await http<MachineListResponse>("/machines");
+      setMachines(
+        Object.fromEntries(machineResponse.items.map((machine) => [machine.id, machine])),
+      );
+      setError(null);
+    } catch {
+      setMachines({});
+      setError("Unable to load machines.");
     }
   }, []);
 

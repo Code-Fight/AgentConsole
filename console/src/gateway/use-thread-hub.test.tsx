@@ -1,6 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+
+vi.mock("./capabilities", () => ({
+  supportsCapability: (capability: string) => capability === "threadHub",
+}));
+
 import { useThreadHub } from "./use-thread-hub";
 
 class FakeWebSocket {
