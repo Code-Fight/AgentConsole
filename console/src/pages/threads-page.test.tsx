@@ -132,4 +132,5 @@ test("renders the active console thread list from /threads and machines from /ma
   expect(await screen.findByText("Investigate flaky test")).toBeInTheDocument();
   expect(screen.getByText("Primary Node")).toBeInTheDocument();
   expect(screen.getByText("ID: machine-1")).toBeInTheDocument();
+  expect(FakeWebSocket.instances).toHaveLength(1);
 });

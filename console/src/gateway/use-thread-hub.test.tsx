@@ -231,7 +231,7 @@ test("create thread toggles submitting state and refreshes the hub data", async 
     result.current.setTitle("Created thread");
   });
 
-  let createPromise: Promise<void> | undefined;
+  let createPromise: Promise<unknown> | undefined;
   await act(async () => {
     createPromise = result.current.handleCreateThread();
   });

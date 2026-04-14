@@ -166,11 +166,18 @@ test("selecting a thread loads /threads/{threadId} and /machines/{machineId}", a
     </MemoryRouter>,
   );
 
+  await screen.findByText("Investigate flaky test");
+  expect(FakeWebSocket.instances).toHaveLength(1);
+
   fireEvent.click(await screen.findByText("Investigate flaky test"));
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith("/threads/thread-1", expect.anything());
     expect(fetchMock).toHaveBeenCalledWith("/machines/machine-1", expect.anything());
+  });
+
+  await waitFor(() => {
+    expect(FakeWebSocket.instances).toHaveLength(2);
   });
 });
 
@@ -292,7 +299,9 @@ test("sending a prompt starts a real turn request", async () => {
     </MemoryRouter>,
   );
 
-  const [promptInput] = await screen.findAllByLabelText("Prompt");
+  const promptInputs = await screen.findAllByLabelText("Prompt");
+  expect(FakeWebSocket.instances).toHaveLength(2);
+  const [promptInput] = promptInputs;
   fireEvent.change(promptInput, {
     target: { value: "run tests" },
   });
@@ -411,70 +420,69 @@ test("websocket workspace events update the active console timeline", async () =
   );
 
   await screen.findAllByLabelText("Prompt");
+  await waitFor(() => {
+    expect(FakeWebSocket.instances).toHaveLength(2);
+  });
+  const workspaceSocket = FakeWebSocket.instances[1];
+  expect(workspaceSocket).toBeDefined();
 
   await act(async () => {
-    FakeWebSocket.instances.forEach((socket) => {
-      socket.emitMessage(
-        JSON.stringify({
-          version: "v1",
-          category: "event",
-          name: "turn.delta",
-          timestamp: "2026-04-08T14:00:01Z",
-          payload: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            sequence: 1,
-            delta: "hello from gateway",
-          },
-        }),
-      );
-    });
+    workspaceSocket?.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "turn.delta",
+        timestamp: "2026-04-08T14:00:01Z",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          sequence: 1,
+          delta: "hello from gateway",
+        },
+      }),
+    );
   });
 
-  expect((await screen.findAllByText("hello from gateway")).length).toBeGreaterThan(0);
+  expect(await screen.findAllByText("hello from gateway")).toHaveLength(2);
 
   await act(async () => {
-    FakeWebSocket.instances.forEach((socket) => {
-      socket.emitMessage(
-        JSON.stringify({
-          version: "v1",
-          category: "event",
-          name: "approval.required",
+    workspaceSocket?.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "approval.required",
+        requestId: "approval-1",
+        timestamp: "2026-04-08T14:00:02Z",
+        payload: {
           requestId: "approval-1",
-          timestamp: "2026-04-08T14:00:02Z",
-          payload: {
-            requestId: "approval-1",
-            threadId: "thread-1",
-            turnId: "turn-1",
-            itemId: "item-1",
-            kind: "command",
-            command: "go test ./...",
-          },
-        }),
-      );
-    });
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "item-1",
+          kind: "command",
+          command: "go test ./...",
+        },
+      }),
+    );
   });
 
-  expect((await screen.findAllByText("待处理审批")).length).toBeGreaterThan(0);
-  expect(screen.getAllByText("go test ./...").length).toBeGreaterThan(0);
+  expect(await screen.findAllByText("待处理审批")).toHaveLength(2);
+  expect(screen.getAllByText("go test ./...")).toHaveLength(2);
 
   await act(async () => {
-    FakeWebSocket.instances.forEach((socket) => {
-      socket.emitMessage(
-        JSON.stringify({
-          version: "v1",
-          category: "event",
-          name: "approval.resolved",
+    workspaceSocket?.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "approval.resolved",
+        requestId: "approval-1",
+        timestamp: "2026-04-08T14:00:03Z",
+        payload: {
           requestId: "approval-1",
-          timestamp: "2026-04-08T14:00:03Z",
-          payload: {
-            requestId: "approval-1",
-            threadId: "thread-1",
-            decision: "accept",
-          },
-        }),
-      );
-    });
+          threadId: "thread-1",
+          decision: "accept",
+        },
+      }),
+    );
   });
 
   await waitFor(() => {
@@ -482,40 +490,38 @@ test("websocket workspace events update the active console timeline", async () =
   });
 
   await act(async () => {
-    FakeWebSocket.instances.forEach((socket) => {
-      socket.emitMessage(
-        JSON.stringify({
-          version: "v1",
-          category: "event",
-          name: "turn.completed",
-          timestamp: "2026-04-08T14:00:04Z",
-          payload: {
-            turn: {
-              turnId: "turn-1",
-              threadId: "thread-1",
-              status: "completed",
-            },
+    workspaceSocket?.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "turn.completed",
+        timestamp: "2026-04-08T14:00:04Z",
+        payload: {
+          turn: {
+            turnId: "turn-1",
+            threadId: "thread-1",
+            status: "completed",
           },
-        }),
-      );
-      socket.emitMessage(
-        JSON.stringify({
-          version: "v1",
-          category: "event",
-          name: "turn.failed",
-          timestamp: "2026-04-08T14:00:05Z",
-          payload: {
-            turn: {
-              turnId: "turn-2",
-              threadId: "thread-1",
-              status: "failed",
-            },
+        },
+      }),
+    );
+    workspaceSocket?.emitMessage(
+      JSON.stringify({
+        version: "v1",
+        category: "event",
+        name: "turn.failed",
+        timestamp: "2026-04-08T14:00:05Z",
+        payload: {
+          turn: {
+            turnId: "turn-2",
+            threadId: "thread-1",
+            status: "failed",
           },
-        }),
-      );
-    });
+        },
+      }),
+    );
   });
 
-  expect((await screen.findAllByText("Turn turn-1 completed")).length).toBeGreaterThan(0);
-  expect((await screen.findAllByText("Turn turn-2 failed")).length).toBeGreaterThan(0);
+  expect(await screen.findAllByText("Turn turn-1 completed")).toHaveLength(2);
+  expect(await screen.findAllByText("Turn turn-2 failed")).toHaveLength(2);
 });

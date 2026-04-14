@@ -113,13 +113,16 @@ func (s *MemoryStore) GetConsolePreferences() (domain.ConsolePreferences, bool, 
 	if s.consolePreferences == nil {
 		return domain.ConsolePreferences{}, false, nil
 	}
-	return *s.consolePreferences, true, nil
+	copyPreferences := *s.consolePreferences
+	copyPreferences.ThreadTitles = cloneThreadTitles(copyPreferences.ThreadTitles)
+	return copyPreferences, true, nil
 }
 
 func (s *MemoryStore) PutConsolePreferences(preferences domain.ConsolePreferences) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	copyPreferences := preferences
+	copyPreferences.ThreadTitles = cloneThreadTitles(copyPreferences.ThreadTitles)
 	s.consolePreferences = &copyPreferences
 	return nil
 }
@@ -130,6 +133,7 @@ func (s *MemoryStore) snapshot() persistedState {
 	var consolePreferences *domain.ConsolePreferences
 	if s.consolePreferences != nil {
 		copyPreferences := *s.consolePreferences
+		copyPreferences.ThreadTitles = cloneThreadTitles(copyPreferences.ThreadTitles)
 		consolePreferences = &copyPreferences
 	}
 	return persistedState{
@@ -148,6 +152,7 @@ func (s *MemoryStore) load(state persistedState) {
 	s.machines = cloneMachineDocumentMap(state.Machines)
 	if state.ConsolePreferences != nil {
 		copyPreferences := *state.ConsolePreferences
+		copyPreferences.ThreadTitles = cloneThreadTitles(copyPreferences.ThreadTitles)
 		s.consolePreferences = &copyPreferences
 	} else {
 		s.consolePreferences = nil
@@ -192,6 +197,17 @@ func cloneMachineDocumentMap(source map[string]map[domain.AgentType]domain.Agent
 	cloned := make(map[string]map[domain.AgentType]domain.AgentConfigDocument, len(source))
 	for machineID, documents := range source {
 		cloned[machineID] = cloneDocumentMap(documents)
+	}
+	return cloned
+}
+
+func cloneThreadTitles(source map[string]string) map[string]string {
+	if len(source) == 0 {
+		return nil
+	}
+	cloned := make(map[string]string, len(source))
+	for key, value := range source {
+		cloned[key] = value
 	}
 	return cloned
 }

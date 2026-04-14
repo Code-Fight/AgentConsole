@@ -30,6 +30,8 @@ import {
 type ApprovalAnswerMap = Record<string, string>;
 type PendingApproval = ApprovalRequiredPayload & { requestId: string };
 
+export type ThreadWorkspaceViewModel = ReturnType<typeof useThreadWorkspace>;
+
 export function useThreadWorkspace(threadId: string) {
   const [prompt, setPrompt] = useState("");
   const [steerPrompt, setSteerPrompt] = useState("");

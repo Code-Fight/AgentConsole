@@ -21,7 +21,7 @@ import type {
   ConsoleFileChange as FileChange,
 } from "../../design-host/use-console-host";
 import type { ApprovalDecision } from "../../common/api/types";
-import { useThreadWorkspace } from "../../gateway/use-thread-workspace";
+import type { ThreadWorkspaceViewModel } from "../../gateway/use-thread-workspace";
 import type {
   WorkspaceApprovalCardViewModel,
   WorkspaceMessageViewModel,
@@ -30,10 +30,7 @@ import type {
 interface SessionChatProps {
   session: Session;
   machine: Machine;
-  prompt: string;
-  isSubmitting: boolean;
-  onPromptChange: (value: string) => void;
-  onSendPrompt: () => void;
+  workspace: ThreadWorkspaceViewModel;
 }
 
 function FileChangesBadge({ changes }: { changes: FileChange[] }) {
@@ -221,12 +218,8 @@ const PERMISSION_OPTIONS = ["本地", "完全访问权限", "只读模式"];
 export default function SessionChat({
   session,
   machine,
-  prompt,
-  isSubmitting,
-  onPromptChange,
-  onSendPrompt,
+  workspace,
 }: SessionChatProps) {
-  const workspace = useThreadWorkspace(session.id);
   const [selectedModel, setSelectedModel] = useState(session.model);
   const [selectedPermission, setSelectedPermission] = useState("完全访问权限");
   const [showModelDrop, setShowModelDrop] = useState(false);
@@ -253,10 +246,10 @@ export default function SessionChat({
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
-  }, [messages, workspace.pendingApprovals, workspace.isSubmitting, isSubmitting]);
+  }, [messages, workspace.pendingApprovals, workspace.isSubmitting]);
 
   const handleSend = () => {
-    if (workspace.isSubmitting || isSubmitting) {
+    if (workspace.isSubmitting) {
       return;
     }
 
@@ -469,7 +462,7 @@ export default function SessionChat({
           </div>
         ))}
 
-        {(workspace.isSubmitting || isSubmitting) ? (
+        {workspace.isSubmitting ? (
           <div className="flex gap-3">
             <div className="size-8 rounded-full bg-gradient-to-br from-violet-600 to-blue-600 flex items-center justify-center flex-shrink-0">
               <Bot className="size-4 text-white" />

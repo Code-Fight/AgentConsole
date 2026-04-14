@@ -1,18 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { buildThreadApiPath, http } from "../common/api/http";
 import type {
-  CreateThreadResponse,
-  MachineListResponse,
   MachineSummary,
-  ThreadDeleteResponse,
   ThreadDetailResponse,
-  ThreadListResponse,
   ThreadSummary,
 } from "../common/api/types";
 import { useCapabilities } from "../gateway/capabilities";
 import { formatThreadStatus } from "../gateway/thread-view-model";
 import { useConsolePreferences } from "../gateway/use-console-preferences";
-import { useThreadWorkspace } from "../gateway/use-thread-workspace";
+import { useThreadHub } from "../gateway/use-thread-hub";
+import { useThreadWorkspace, type ThreadWorkspaceViewModel } from "../gateway/use-thread-workspace";
 
 export type AppPage = "threads" | "machines" | "environment" | "settings";
 
@@ -98,15 +95,12 @@ export interface ConsoleHostViewModel {
   machines: ConsoleMachine[];
   selectedSession: ConsoleSession | null;
   selectedMachine: ConsoleMachine | null;
+  workspace: ThreadWorkspaceViewModel;
   skills: ConsoleSkillResource[];
   mcps: ConsoleMCPResource[];
   plugins: ConsolePluginResource[];
-  prompt: string;
-  isSubmitting: boolean;
   mobilePanelOpen: boolean;
   sidebarCollapsed: boolean;
-  onPromptChange: (value: string) => void;
-  onSendPrompt: () => void;
   onSelectSession: (machine: ConsoleMachine, session: ConsoleSession) => void;
   onNavigate: (page: AppPage) => void;
   onBackToThreads: () => void;
@@ -139,21 +133,11 @@ interface UseConsoleHostOptions {
   navigate: (path: string) => void;
 }
 
-function formatTimestamp(): string {
-  return new Date().toLocaleTimeString("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
-}
-
 export function useConsoleHost({
   activePage,
   threadId,
   navigate,
 }: UseConsoleHostOptions): ConsoleHostViewModel {
-  const [threads, setThreads] = useState<ThreadSummary[]>([]);
-  const [machines, setMachines] = useState<MachineSummary[]>([]);
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
@@ -161,31 +145,13 @@ export function useConsoleHost({
   const [lastVerifiedThreadId, setLastVerifiedThreadId] = useState<string | null>(null);
 
   useCapabilities();
+  const hub = useThreadHub({ enabled: activePage !== "settings" });
   const {
     preferences,
     isLoading: preferencesLoading,
     error: preferencesError,
     updatePreferences,
   } = useConsolePreferences();
-
-  const loadHubData = useCallback(async () => {
-    const [threadResult, machineResult] = await Promise.allSettled([
-      http<ThreadListResponse>("/threads"),
-      http<MachineListResponse>("/machines"),
-    ]);
-
-    if (threadResult.status === "fulfilled") {
-      setThreads(threadResult.value.items);
-    }
-
-    if (machineResult.status === "fulfilled") {
-      setMachines(machineResult.value.items);
-    }
-  }, []);
-
-  useEffect(() => {
-    void loadHubData();
-  }, [loadHubData]);
 
   useEffect(() => {
     if (activePage !== "threads") {
@@ -265,27 +231,10 @@ export function useConsoleHost({
     navigate,
   ]);
 
-  const workspaceMessages = useMemo<ConsoleMessage[]>(() => {
-    if (!threadId) {
-      return [];
-    }
-    return workspace.messages
-      .filter(
-        (message): message is typeof message & { kind: "user" | "agent" } =>
-          message.kind === "user" || message.kind === "agent",
-      )
-      .map((message) => ({
-        id: message.id,
-        role: message.kind,
-        content: message.text,
-        timestamp: formatTimestamp(),
-      }));
-  }, [threadId, workspace.messages]);
-
   const machineById = useMemo(() => {
     const map = new Map<string, MachineSummary>();
-    machines.forEach((machine) => map.set(machine.id, machine));
-    threads.forEach((thread) => {
+    hub.machineSummaries.forEach((machine) => map.set(machine.id, machine));
+    hub.threadSummaries.forEach((thread) => {
       if (!map.has(thread.machineId)) {
         map.set(thread.machineId, {
           id: thread.machineId,
@@ -296,11 +245,13 @@ export function useConsoleHost({
       }
     });
     return map;
-  }, [machines, threads]);
+  }, [hub.machineSummaries, hub.threadSummaries]);
 
   const consoleMachines = useMemo(() => {
     return Array.from(machineById.values()).map((machine) => {
-      const machineThreads = threads.filter((thread) => thread.machineId === machine.id);
+      const machineThreads = hub.threadSummaries.filter(
+        (thread) => thread.machineId === machine.id,
+      );
       const hasActiveThread = machineThreads.some((thread) => thread.status === "active");
       const agent: ConsoleAgentInfo = {
         id: `${machine.id}-codex`,
@@ -317,7 +268,7 @@ export function useConsoleHost({
         model: agent.model,
         status: thread.status,
         lastActivity: formatThreadStatus(thread.status),
-        messages: thread.threadId === threadId ? workspaceMessages : [],
+        messages: [],
       }));
 
       return {
@@ -329,7 +280,7 @@ export function useConsoleHost({
         sessions,
       };
     });
-  }, [machineById, threads, threadId, workspaceMessages]);
+  }, [hub.threadSummaries, machineById]);
 
   const selectedSession = useMemo(() => {
     if (!threadId) {
@@ -387,24 +338,12 @@ export function useConsoleHost({
         return;
       }
 
-      try {
-        const response = await http<CreateThreadResponse>("/threads", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ machineId, title: nextTitle }),
-        });
-        if (response.thread?.threadId) {
-          navigate(`/threads/${response.thread.threadId}`);
-        }
-      } catch {
-        return;
+      const created = await hub.handleCreateThread(machineId, nextTitle);
+      if (created?.threadId) {
+        navigate(`/threads/${created.threadId}`);
       }
-
-      await loadHubData();
     },
-    [loadHubData, navigate],
+    [hub, navigate],
   );
 
   const handleDeleteSession = useCallback(
@@ -413,17 +352,16 @@ export function useConsoleHost({
         return;
       }
 
-      try {
-        await http<ThreadDeleteResponse>(`/threads/${encodeURIComponent(sessionId)}`, {
-          method: "DELETE",
-        });
-      } catch {
-        return;
-      }
-
-      await loadHubData();
+      await hub.handleDelete(sessionId);
     },
-    [loadHubData],
+    [hub],
+  );
+
+  const handleRenameSession = useCallback(
+    async (sessionId: string, newTitle: string) => {
+      await hub.handleRename(sessionId, newTitle);
+    },
+    [hub],
   );
 
   return {
@@ -431,15 +369,12 @@ export function useConsoleHost({
     machines: consoleMachines,
     selectedSession,
     selectedMachine,
+    workspace,
     skills: [],
     mcps: [],
     plugins: [],
-    prompt: workspace.prompt,
-    isSubmitting: workspace.isSubmitting,
     mobilePanelOpen,
     sidebarCollapsed,
-    onPromptChange: (value) => workspace.setPrompt(value),
-    onSendPrompt: workspace.handlePromptSubmit,
     onSelectSession: handleSelectSession,
     onNavigate: handleNavigate,
     onBackToThreads: handleBackToThreads,
@@ -449,5 +384,6 @@ export function useConsoleHost({
     onExpandSidebar: () => setSidebarCollapsed(false),
     onDeleteSession: handleDeleteSession,
     onCreateThread: handleCreateThread,
+    onRenameSession: handleRenameSession,
   };
 }
