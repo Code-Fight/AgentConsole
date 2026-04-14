@@ -23,8 +23,14 @@ const (
 type Thread struct {
 	ThreadID  string       `json:"threadId"`
 	MachineID string       `json:"machineId"`
+	AgentID   string       `json:"agentId,omitempty"`
 	Status    ThreadStatus `json:"status"`
 	Title     string       `json:"title"`
+}
+
+type ThreadRoute struct {
+	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
 }
 
 type Turn struct {

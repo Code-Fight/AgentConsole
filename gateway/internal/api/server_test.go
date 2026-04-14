@@ -123,6 +123,9 @@ func TestServerCreatesThreadThroughCommandSender(t *testing.T) {
 			if !ok {
 				t.Fatalf("payload type = %T", payload)
 			}
+			if commandPayload.AgentID != "agent-01" {
+				t.Fatalf("agentID = %q", commandPayload.AgentID)
+			}
 			if commandPayload.Title != "Investigate flaky test" {
 				t.Fatalf("title = %q", commandPayload.Title)
 			}
@@ -133,6 +136,7 @@ func TestServerCreatesThreadThroughCommandSender(t *testing.T) {
 					Thread: domain.Thread{
 						ThreadID:  "thread-01",
 						MachineID: "machine-01",
+						AgentID:   "agent-01",
 						Status:    domain.ThreadStatusIdle,
 						Title:     "Investigate flaky test",
 					},
@@ -142,7 +146,7 @@ func TestServerCreatesThreadThroughCommandSender(t *testing.T) {
 	}
 
 	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
-	req := httptest.NewRequest(http.MethodPost, "/threads", bytes.NewBufferString(`{"machineId":"machine-01","title":"Investigate flaky test"}`))
+	req := httptest.NewRequest(http.MethodPost, "/threads", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01","title":"Investigate flaky test"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -158,7 +162,7 @@ func TestServerCreatesThreadThroughCommandSender(t *testing.T) {
 		t.Fatalf("invalid json: %v", err)
 	}
 
-	if body.Thread.ThreadID != "thread-01" || body.Thread.MachineID != "machine-01" {
+	if body.Thread.ThreadID != "thread-01" || body.Thread.MachineID != "machine-01" || body.Thread.AgentID != "agent-01" {
 		t.Fatalf("unexpected thread: %+v", body.Thread)
 	}
 }
@@ -176,6 +180,7 @@ func TestServerCreateThreadUpdatesRouterBeforeNextTurnRequest(t *testing.T) {
 						Thread: domain.Thread{
 							ThreadID:  "thread-01",
 							MachineID: "machine-01",
+							AgentID:   "agent-01",
 							Status:    domain.ThreadStatusIdle,
 							Title:     "Investigate flaky test",
 						},
@@ -188,6 +193,9 @@ func TestServerCreateThreadUpdatesRouterBeforeNextTurnRequest(t *testing.T) {
 				}
 				if machineID != "machine-01" {
 					t.Fatalf("machineID = %q", machineID)
+				}
+				if commandPayload.AgentID != "agent-01" {
+					t.Fatalf("agentID = %q", commandPayload.AgentID)
 				}
 				if commandPayload.ThreadID != "thread-01" {
 					t.Fatalf("threadID = %q", commandPayload.ThreadID)
@@ -209,7 +217,7 @@ func TestServerCreateThreadUpdatesRouterBeforeNextTurnRequest(t *testing.T) {
 
 	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
 
-	createReq := httptest.NewRequest(http.MethodPost, "/threads", bytes.NewBufferString(`{"machineId":"machine-01","title":"Investigate flaky test"}`))
+	createReq := httptest.NewRequest(http.MethodPost, "/threads", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01","title":"Investigate flaky test"}`))
 	createReq.Header.Set("Content-Type", "application/json")
 	createRec := httptest.NewRecorder()
 	handler.ServeHTTP(createRec, createReq)
@@ -230,7 +238,7 @@ func TestServerCreateThreadUpdatesRouterBeforeNextTurnRequest(t *testing.T) {
 
 func TestServerStartsTurnOnResolvedMachine(t *testing.T) {
 	router := routing.NewRouter()
-	router.TrackThread("thread-01", "machine-01")
+	router.TrackThread("thread-01", "machine-01", "agent-01")
 
 	sender := &fakeCommandSender{
 		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
@@ -245,7 +253,7 @@ func TestServerStartsTurnOnResolvedMachine(t *testing.T) {
 			if !ok {
 				t.Fatalf("payload type = %T", payload)
 			}
-			if commandPayload.ThreadID != "thread-01" || commandPayload.Input != "run tests" {
+			if commandPayload.ThreadID != "thread-01" || commandPayload.AgentID != "agent-01" || commandPayload.Input != "run tests" {
 				t.Fatalf("unexpected payload: %+v", commandPayload)
 			}
 
@@ -283,7 +291,7 @@ func TestServerStartsTurnOnResolvedMachine(t *testing.T) {
 
 func TestServerReadsThreadFromResolvedMachine(t *testing.T) {
 	router := routing.NewRouter()
-	router.TrackThread("thread-01", "machine-01")
+	router.TrackThread("thread-01", "machine-01", "agent-01")
 
 	sender := &fakeCommandSender{
 		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
@@ -308,6 +316,7 @@ func TestServerReadsThreadFromResolvedMachine(t *testing.T) {
 					Thread: domain.Thread{
 						ThreadID:  "thread-01",
 						MachineID: "machine-01",
+						AgentID:   "agent-01",
 						Status:    domain.ThreadStatusIdle,
 						Title:     "Investigate flaky test",
 					},
@@ -331,14 +340,14 @@ func TestServerReadsThreadFromResolvedMachine(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("invalid json: %v", err)
 	}
-	if body.Thread.ThreadID != "thread-01" || body.Thread.MachineID != "machine-01" {
+	if body.Thread.ThreadID != "thread-01" || body.Thread.MachineID != "machine-01" || body.Thread.AgentID != "agent-01" {
 		t.Fatalf("unexpected thread: %+v", body.Thread)
 	}
 }
 
 func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	router := routing.NewRouter()
-	router.TrackThread("thread-01", "machine-01")
+	router.TrackThread("thread-01", "machine-01", "agent-01")
 
 	type recordedCall struct {
 		machineID string
@@ -363,6 +372,7 @@ func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 						Thread: domain.Thread{
 							ThreadID:  "thread-01",
 							MachineID: "machine-01",
+							AgentID:   "agent-01",
 							Status:    domain.ThreadStatusIdle,
 							Title:     "Investigate flaky test",
 						},
@@ -446,6 +456,9 @@ func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	if resumePayload.ThreadID != "thread-01" {
 		t.Fatalf("unexpected resume payload: %+v", resumePayload)
 	}
+	if resumePayload.AgentID != "agent-01" {
+		t.Fatalf("unexpected resume payload: %+v", resumePayload)
+	}
 
 	if calls[1].machineID != "machine-01" || calls[1].name != "thread.archive" {
 		t.Fatalf("unexpected archive call: %+v", calls[1])
@@ -457,6 +470,9 @@ func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	if archivePayload.ThreadID != "thread-01" {
 		t.Fatalf("unexpected archive payload: %+v", archivePayload)
 	}
+	if archivePayload.AgentID != "agent-01" {
+		t.Fatalf("unexpected archive payload: %+v", archivePayload)
+	}
 
 	if calls[2].machineID != "machine-01" || calls[2].name != "turn.steer" {
 		t.Fatalf("unexpected steer call: %+v", calls[2])
@@ -465,7 +481,7 @@ func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("steer payload type = %T", calls[2].payload)
 	}
-	if steerPayload.ThreadID != "thread-01" || steerPayload.TurnID != "turn-01" || steerPayload.Input != "try a smaller patch" {
+	if steerPayload.ThreadID != "thread-01" || steerPayload.AgentID != "agent-01" || steerPayload.TurnID != "turn-01" || steerPayload.Input != "try a smaller patch" {
 		t.Fatalf("unexpected steer payload: %+v", steerPayload)
 	}
 
@@ -476,8 +492,123 @@ func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("interrupt payload type = %T", calls[3].payload)
 	}
-	if interruptPayload.ThreadID != "thread-01" || interruptPayload.TurnID != "turn-01" {
+	if interruptPayload.ThreadID != "thread-01" || interruptPayload.AgentID != "agent-01" || interruptPayload.TurnID != "turn-01" {
 		t.Fatalf("unexpected interrupt payload: %+v", interruptPayload)
+	}
+}
+
+func TestServerListsMachineAgentInventory(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:            "machine-01",
+		Name:          "Machine 01",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusRunning,
+		Agents: []domain.AgentInstance{
+			{
+				AgentID:     "agent-01",
+				AgentType:   domain.AgentTypeCodex,
+				DisplayName: "Primary Codex",
+				Status:      domain.AgentInstanceStatusRunning,
+			},
+		},
+	})
+
+	handler := NewServer(reg, runtimeindex.NewStore(), routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []domain.Machine `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if len(body.Items) != 1 || len(body.Items[0].Agents) != 1 {
+		t.Fatalf("unexpected machine inventory: %+v", body.Items)
+	}
+	if body.Items[0].Agents[0].AgentID != "agent-01" || body.Items[0].Agents[0].DisplayName != "Primary Codex" {
+		t.Fatalf("unexpected agent inventory: %+v", body.Items[0].Agents)
+	}
+}
+
+func TestServerCreateThreadRequiresAgentID(t *testing.T) {
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), &fakeCommandSender{}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPost, "/threads", bytes.NewBufferString(`{"machineId":"machine-01","title":"Investigate flaky test"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestServerPreservesAgentIDInThreadAndEnvironmentViews(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot(
+		"machine-01",
+		[]domain.Thread{
+			{
+				ThreadID:  "thread-01",
+				MachineID: "machine-01",
+				AgentID:   "agent-01",
+				Status:    domain.ThreadStatusIdle,
+				Title:     "Investigate flaky test",
+			},
+		},
+		[]domain.EnvironmentResource{
+			{
+				ResourceID:  "skill-a",
+				MachineID:   "machine-01",
+				AgentID:     "agent-01",
+				Kind:        domain.EnvironmentKindSkill,
+				DisplayName: "Skill A",
+				Status:      domain.EnvironmentResourceStatusEnabled,
+			},
+		},
+	)
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
+
+	threadReq := httptest.NewRequest(http.MethodGet, "/threads", nil)
+	threadRec := httptest.NewRecorder()
+	handler.ServeHTTP(threadRec, threadReq)
+	if threadRec.Code != http.StatusOK {
+		t.Fatalf("threads returned %d", threadRec.Code)
+	}
+
+	var threadBody struct {
+		Items []domain.Thread `json:"items"`
+	}
+	if err := json.Unmarshal(threadRec.Body.Bytes(), &threadBody); err != nil {
+		t.Fatalf("invalid threads json: %v", err)
+	}
+	if len(threadBody.Items) != 1 || threadBody.Items[0].AgentID != "agent-01" {
+		t.Fatalf("unexpected thread body: %+v", threadBody.Items)
+	}
+
+	envReq := httptest.NewRequest(http.MethodGet, "/environment/skills", nil)
+	envRec := httptest.NewRecorder()
+	handler.ServeHTTP(envRec, envReq)
+	if envRec.Code != http.StatusOK {
+		t.Fatalf("environment returned %d", envRec.Code)
+	}
+
+	var envBody struct {
+		Items []domain.EnvironmentResource `json:"items"`
+	}
+	if err := json.Unmarshal(envRec.Body.Bytes(), &envBody); err != nil {
+		t.Fatalf("invalid environment json: %v", err)
+	}
+	if len(envBody.Items) != 1 || envBody.Items[0].AgentID != "agent-01" {
+		t.Fatalf("unexpected environment body: %+v", envBody.Items)
 	}
 }
 
@@ -536,12 +667,179 @@ func TestServerRuntimeControlEndpointsUseExpectedCommands(t *testing.T) {
 	}
 }
 
+func TestServerMachineAgentLifecycleEndpointsUseExpectedCommands(t *testing.T) {
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{
+				machineID: machineID,
+				name:      name,
+				payload:   payload,
+			})
+
+			switch name {
+			case "machine.agent.install":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.MachineAgentInstallCommandResult{
+						Agent: domain.AgentInstance{
+							AgentID:     "agent-01",
+							AgentType:   domain.AgentTypeCodex,
+							DisplayName: "Primary Codex",
+							Status:      domain.AgentInstanceStatusRunning,
+						},
+					}),
+				}, nil
+			case "machine.agent.delete":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result:      mustMarshalJSON(t, protocol.MachineAgentDeleteCommandResult{AgentID: "agent-01"}),
+				}, nil
+			default:
+				t.Fatalf("unexpected command %q", name)
+				return protocol.CommandCompletedPayload{}, nil
+			}
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	createReq := httptest.NewRequest(http.MethodPost, "/machines/machine-01/agents", bytes.NewBufferString(`{"agentType":"codex","displayName":"Primary Codex"}`))
+	createReq.Header.Set("Content-Type", "application/json")
+	createRec := httptest.NewRecorder()
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusCreated {
+		t.Fatalf("install returned %d", createRec.Code)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/machines/machine-01/agents/agent-01", nil)
+	deleteRec := httptest.NewRecorder()
+	handler.ServeHTTP(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusNoContent {
+		t.Fatalf("delete returned %d", deleteRec.Code)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	if calls[0].machineID != "machine-01" || calls[0].name != "machine.agent.install" {
+		t.Fatalf("unexpected install call: %+v", calls[0])
+	}
+	installPayload, ok := calls[0].payload.(protocol.MachineAgentInstallCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected install payload type: %T", calls[0].payload)
+	}
+	if installPayload.AgentType != string(domain.AgentTypeCodex) || installPayload.DisplayName != "Primary Codex" {
+		t.Fatalf("unexpected install payload: %+v", installPayload)
+	}
+
+	if calls[1].machineID != "machine-01" || calls[1].name != "machine.agent.delete" {
+		t.Fatalf("unexpected delete call: %+v", calls[1])
+	}
+	deletePayload, ok := calls[1].payload.(protocol.MachineAgentDeleteCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected delete payload type: %T", calls[1].payload)
+	}
+	if deletePayload.AgentID != "agent-01" {
+		t.Fatalf("unexpected delete payload: %+v", deletePayload)
+	}
+}
+
+func TestServerMachineAgentConfigEndpointsUseExpectedCommands(t *testing.T) {
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{
+				machineID: machineID,
+				name:      name,
+				payload:   payload,
+			})
+
+			switch name {
+			case "machine.agent.config.read":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.MachineAgentConfigReadCommandResult{
+						Document: domain.AgentConfigDocument{
+							AgentType: domain.AgentTypeCodex,
+							Format:    domain.AgentConfigFormatTOML,
+							Content:   "model = \"gpt-5.4\"\n",
+						},
+					}),
+				}, nil
+			case "machine.agent.config.write":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.MachineAgentConfigWriteCommandResult{
+						Document: domain.AgentConfigDocument{
+							AgentType: domain.AgentTypeCodex,
+							Format:    domain.AgentConfigFormatTOML,
+							Content:   "model = \"gpt-5.5\"\n",
+						},
+					}),
+				}, nil
+			default:
+				t.Fatalf("unexpected command %q", name)
+				return protocol.CommandCompletedPayload{}, nil
+			}
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	readReq := httptest.NewRequest(http.MethodGet, "/machines/machine-01/agents/agent-01/config", nil)
+	readRec := httptest.NewRecorder()
+	handler.ServeHTTP(readRec, readReq)
+	if readRec.Code != http.StatusOK {
+		t.Fatalf("config read returned %d", readRec.Code)
+	}
+
+	writeReq := httptest.NewRequest(http.MethodPut, "/machines/machine-01/agents/agent-01/config", bytes.NewBufferString(`{"content":"model = \"gpt-5.5\"\n"}`))
+	writeReq.Header.Set("Content-Type", "application/json")
+	writeRec := httptest.NewRecorder()
+	handler.ServeHTTP(writeRec, writeReq)
+	if writeRec.Code != http.StatusOK {
+		t.Fatalf("config write returned %d", writeRec.Code)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 calls, got %d", len(calls))
+	}
+	readPayload, ok := calls[0].payload.(protocol.MachineAgentConfigReadCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected read payload type: %T", calls[0].payload)
+	}
+	if readPayload.AgentID != "agent-01" {
+		t.Fatalf("unexpected read payload: %+v", readPayload)
+	}
+	writePayload, ok := calls[1].payload.(protocol.MachineAgentConfigWriteCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected write payload type: %T", calls[1].payload)
+	}
+	if writePayload.AgentID != "agent-01" || writePayload.Document.Content != "model = \"gpt-5.5\"\n" {
+		t.Fatalf("unexpected write payload: %+v", writePayload)
+	}
+}
+
 func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	idx := runtimeindex.NewStore()
 	idx.ReplaceSnapshot("machine-01", nil, []domain.EnvironmentResource{
 		{
 			ResourceID:  "skill-a",
 			MachineID:   "machine-01",
+			AgentID:     "agent-01",
 			Kind:        domain.EnvironmentKindSkill,
 			DisplayName: "Skill A",
 			Status:      domain.EnvironmentResourceStatusEnabled,
@@ -549,6 +847,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		{
 			ResourceID:  "github",
 			MachineID:   "machine-01",
+			AgentID:     "agent-01",
 			Kind:        domain.EnvironmentKindMCP,
 			DisplayName: "GitHub MCP",
 			Status:      domain.EnvironmentResourceStatusEnabled,
@@ -556,6 +855,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		{
 			ResourceID:  "plugin-a",
 			MachineID:   "machine-01",
+			AgentID:     "agent-01",
 			Kind:        domain.EnvironmentKindPlugin,
 			DisplayName: "Plugin A",
 			Status:      domain.EnvironmentResourceStatusEnabled,
@@ -589,7 +889,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 
 	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
 
-	req := httptest.NewRequest(http.MethodPost, "/environment/skills", bytes.NewBufferString(`{"machineId":"machine-01","name":"Debug Helper","description":"Helps debug"}`))
+	req := httptest.NewRequest(http.MethodPost, "/environment/skills", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01","name":"Debug Helper","description":"Helps debug"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -597,7 +897,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("skill create returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -605,7 +905,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("enable returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/disable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/disable", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -613,7 +913,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("disable returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodDelete, "/environment/skills/skill-a", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodDelete, "/environment/skills/skill-a", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -621,7 +921,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("skill delete returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodDelete, "/environment/plugins/plugin-a", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodDelete, "/environment/plugins/plugin-a", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -629,7 +929,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("plugin uninstall returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/mcps", bytes.NewBufferString(`{"machineId":"machine-01","resourceId":"github","config":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"]}}`))
+	req = httptest.NewRequest(http.MethodPost, "/environment/mcps", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01","resourceId":"github","config":{"command":"npx","args":["-y","@modelcontextprotocol/server-github"]}}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -637,7 +937,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("mcp upsert returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/mcps/github/disable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodPost, "/environment/mcps/github/disable", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -645,7 +945,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("mcp disable returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodDelete, "/environment/mcps/github", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodDelete, "/environment/mcps/github", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -653,7 +953,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("mcp remove returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/plugin-a/install", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/plugin-a/install", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -661,7 +961,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("plugin install returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/install", bytes.NewBufferString(`{"machineId":"machine-01","pluginId":"gmail@openai-curated","pluginName":"Gmail","marketplacePath":"/tmp/codex/marketplace"}`))
+	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/install", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01","pluginId":"gmail@openai-curated","pluginName":"Gmail","marketplacePath":"/tmp/codex/marketplace"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -669,7 +969,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 		t.Fatalf("plugin manual install returned %d", rec.Code)
 	}
 
-	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/plugin-a/disable", bytes.NewBufferString(`{"machineId":"machine-01"}`))
+	req = httptest.NewRequest(http.MethodPost, "/environment/plugins/plugin-a/disable", bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec = httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -687,7 +987,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected create payload type: %T", calls[0].payload)
 	}
-	if createPayload.Name != "Debug Helper" || createPayload.Description != "Helps debug" {
+	if createPayload.AgentID != "agent-01" || createPayload.Name != "Debug Helper" || createPayload.Description != "Helps debug" {
 		t.Fatalf("unexpected create payload: %+v", createPayload)
 	}
 
@@ -698,7 +998,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected enable payload type: %T", calls[1].payload)
 	}
-	if enablePayload.SkillID != "skill-a" || !enablePayload.Enabled {
+	if enablePayload.AgentID != "agent-01" || enablePayload.SkillID != "skill-a" || !enablePayload.Enabled {
 		t.Fatalf("unexpected enable payload: %+v", enablePayload)
 	}
 
@@ -709,7 +1009,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected disable payload type: %T", calls[2].payload)
 	}
-	if disablePayload.SkillID != "skill-a" || disablePayload.Enabled {
+	if disablePayload.AgentID != "agent-01" || disablePayload.SkillID != "skill-a" || disablePayload.Enabled {
 		t.Fatalf("unexpected disable payload: %+v", disablePayload)
 	}
 
@@ -720,7 +1020,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected skill delete payload type: %T", calls[3].payload)
 	}
-	if deletePayload.SkillID != "skill-a" {
+	if deletePayload.AgentID != "agent-01" || deletePayload.SkillID != "skill-a" {
 		t.Fatalf("unexpected skill delete payload: %+v", deletePayload)
 	}
 
@@ -731,7 +1031,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected uninstall payload type: %T", calls[4].payload)
 	}
-	if uninstallPayload.PluginID != "plugin-a" {
+	if uninstallPayload.AgentID != "agent-01" || uninstallPayload.PluginID != "plugin-a" {
 		t.Fatalf("unexpected uninstall payload: %+v", uninstallPayload)
 	}
 
@@ -742,7 +1042,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected mcp upsert payload type: %T", calls[5].payload)
 	}
-	if mcpUpsertPayload.ServerID != "github" {
+	if mcpUpsertPayload.AgentID != "agent-01" || mcpUpsertPayload.ServerID != "github" {
 		t.Fatalf("unexpected mcp upsert payload: %+v", mcpUpsertPayload)
 	}
 
@@ -753,7 +1053,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected mcp disable payload type: %T", calls[6].payload)
 	}
-	if mcpDisablePayload.ServerID != "github" || mcpDisablePayload.Enabled {
+	if mcpDisablePayload.AgentID != "agent-01" || mcpDisablePayload.ServerID != "github" || mcpDisablePayload.Enabled {
 		t.Fatalf("unexpected mcp disable payload: %+v", mcpDisablePayload)
 	}
 
@@ -764,7 +1064,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected mcp remove payload type: %T", calls[7].payload)
 	}
-	if mcpRemovePayload.ServerID != "github" {
+	if mcpRemovePayload.AgentID != "agent-01" || mcpRemovePayload.ServerID != "github" {
 		t.Fatalf("unexpected mcp remove payload: %+v", mcpRemovePayload)
 	}
 
@@ -775,7 +1075,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected plugin install payload type: %T", calls[8].payload)
 	}
-	if pluginInstallPayload.PluginID != "plugin-a" || pluginInstallPayload.MarketplacePath != "/tmp/codex/marketplace" || pluginInstallPayload.PluginName != "plugin-a" {
+	if pluginInstallPayload.AgentID != "agent-01" || pluginInstallPayload.PluginID != "plugin-a" || pluginInstallPayload.MarketplacePath != "/tmp/codex/marketplace" || pluginInstallPayload.PluginName != "plugin-a" {
 		t.Fatalf("unexpected plugin install payload: %+v", pluginInstallPayload)
 	}
 
@@ -786,7 +1086,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected plugin manual install payload type: %T", calls[9].payload)
 	}
-	if pluginManualPayload.PluginID != "gmail@openai-curated" || pluginManualPayload.MarketplacePath != "/tmp/codex/marketplace" || pluginManualPayload.PluginName != "Gmail" {
+	if pluginManualPayload.AgentID != "agent-01" || pluginManualPayload.PluginID != "gmail@openai-curated" || pluginManualPayload.MarketplacePath != "/tmp/codex/marketplace" || pluginManualPayload.PluginName != "Gmail" {
 		t.Fatalf("unexpected plugin manual install payload: %+v", pluginManualPayload)
 	}
 
@@ -797,7 +1097,7 @@ func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	if !ok {
 		t.Fatalf("unexpected plugin disable payload type: %T", calls[10].payload)
 	}
-	if pluginDisablePayload.PluginID != "plugin-a" || pluginDisablePayload.Enabled {
+	if pluginDisablePayload.AgentID != "agent-01" || pluginDisablePayload.PluginID != "plugin-a" || pluginDisablePayload.Enabled {
 		t.Fatalf("unexpected plugin disable payload: %+v", pluginDisablePayload)
 	}
 }
@@ -834,6 +1134,7 @@ func TestServerEnvironmentMutationTargetsRequestedMachine(t *testing.T) {
 		{
 			ResourceID:  "skill-a",
 			MachineID:   "machine-01",
+			AgentID:     "agent-01",
 			Kind:        domain.EnvironmentKindSkill,
 			DisplayName: "Skill A 1",
 			Status:      domain.EnvironmentResourceStatusEnabled,
@@ -843,6 +1144,7 @@ func TestServerEnvironmentMutationTargetsRequestedMachine(t *testing.T) {
 		{
 			ResourceID:  "skill-a",
 			MachineID:   "machine-02",
+			AgentID:     "agent-02",
 			Kind:        domain.EnvironmentKindSkill,
 			DisplayName: "Skill A 2",
 			Status:      domain.EnvironmentResourceStatusDisabled,
@@ -872,7 +1174,7 @@ func TestServerEnvironmentMutationTargetsRequestedMachine(t *testing.T) {
 
 	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
 
-	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-02"}`))
+	req := httptest.NewRequest(http.MethodPost, "/environment/skills/skill-a/enable", bytes.NewBufferString(`{"machineId":"machine-02","agentId":"agent-02"}`))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
@@ -894,6 +1196,7 @@ func TestServerEnvironmentPluginInstallValidatesMarketplacePath(t *testing.T) {
 		{
 			ResourceID:  "plugin-a",
 			MachineID:   "machine-01",
+			AgentID:     "agent-01",
 			Kind:        domain.EnvironmentKindPlugin,
 			DisplayName: "Plugin A",
 			Status:      domain.EnvironmentResourceStatusUnknown,
@@ -916,7 +1219,7 @@ func TestServerEnvironmentPluginInstallValidatesMarketplacePath(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/environment/plugins/install",
-		bytes.NewBufferString(`{"machineId":"machine-01","pluginName":"plugin-a","marketplacePath":"/tmp/other"}`),
+		bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01","pluginName":"plugin-a","marketplacePath":"/tmp/other"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -936,6 +1239,7 @@ func TestServerEnvironmentPluginInstallRejectsMismatchedPluginID(t *testing.T) {
 		{
 			ResourceID:  "gmail@openai-curated",
 			MachineID:   "machine-01",
+			AgentID:     "agent-01",
 			Kind:        domain.EnvironmentKindPlugin,
 			DisplayName: "Gmail",
 			Status:      domain.EnvironmentResourceStatusUnknown,
@@ -958,7 +1262,7 @@ func TestServerEnvironmentPluginInstallRejectsMismatchedPluginID(t *testing.T) {
 	req := httptest.NewRequest(
 		http.MethodPost,
 		"/environment/plugins/gmail%40openai-curated/install",
-		bytes.NewBufferString(`{"machineId":"machine-01","pluginId":"other","pluginName":"Gmail","marketplacePath":"/tmp/codex/marketplace"}`),
+		bytes.NewBufferString(`{"machineId":"machine-01","agentId":"agent-01","pluginId":"other","pluginName":"Gmail","marketplacePath":"/tmp/codex/marketplace"}`),
 	)
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
@@ -1053,13 +1357,14 @@ func TestServerThreadDetailIncludesActiveTurnIDFromSenderState(t *testing.T) {
 	thread := domain.Thread{
 		ThreadID:  "thread-01",
 		MachineID: "machine-01",
+		AgentID:   "agent-01",
 		Status:    domain.ThreadStatusActive,
 		Title:     "Investigate flaky test",
 	}
 	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
 
 	router := routing.NewRouter()
-	router.TrackThread("thread-01", "machine-01")
+	router.TrackThread("thread-01", "machine-01", "agent-01")
 
 	handler := NewServer(registry.NewStore(), idx, router, &fakeCommandSender{
 		activeTurnID: func(threadID string) (string, bool) {
@@ -1098,6 +1403,7 @@ func TestServerThreadRenamePersistsTitleAcrossSnapshots(t *testing.T) {
 	thread := domain.Thread{
 		ThreadID:  "thread-01",
 		MachineID: "machine-01",
+		AgentID:   "agent-01",
 		Status:    domain.ThreadStatusIdle,
 		Title:     "",
 	}
@@ -1168,11 +1474,12 @@ func TestServerDeleteThreadBroadcastsThreadUpdatedInvalidation(t *testing.T) {
 	thread := domain.Thread{
 		ThreadID:  "thread-01",
 		MachineID: "machine-01",
+		AgentID:   "agent-01",
 		Status:    domain.ThreadStatusIdle,
 		Title:     "Investigate flaky test",
 	}
 	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
-	router.TrackThread("thread-01", "machine-01")
+	router.TrackThread("thread-01", "machine-01", "agent-01")
 
 	server := httptest.NewServer(NewServer(reg, idx, router, clientHub, clientHub.Handler(), consoleHub.Handler()))
 	defer server.Close()
@@ -1225,11 +1532,12 @@ func TestServerThreadDetailIncludesPendingApprovalsWhenThreadIsOffline(t *testin
 	thread := domain.Thread{
 		ThreadID:  "thread-01",
 		MachineID: "machine-01",
+		AgentID:   "agent-01",
 		Status:    domain.ThreadStatusIdle,
 		Title:     "Investigate flaky test",
 	}
 	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
-	router.TrackThread(thread.ThreadID, thread.MachineID)
+	router.TrackThread(thread.ThreadID, thread.MachineID, thread.AgentID)
 
 	handler := NewServer(reg, idx, router, &fakeCommandSender{
 		send: func(_ context.Context, _ string, _ string, _ any) (protocol.CommandCompletedPayload, error) {
@@ -1324,13 +1632,14 @@ func TestServerThreadDetailReturnsLiveReadFailureForOnlineMachine(t *testing.T) 
 		{
 			ThreadID:  "thread-01",
 			MachineID: "machine-01",
+			AgentID:   "agent-01",
 			Status:    domain.ThreadStatusIdle,
 			Title:     "stale snapshot",
 		},
 	}, nil)
 
 	router := routing.NewRouter()
-	router.TrackThread("thread-01", "machine-01")
+	router.TrackThread("thread-01", "machine-01", "agent-01")
 
 	handler := NewServer(reg, idx, router, &fakeCommandSender{
 		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
@@ -1363,13 +1672,14 @@ func TestServerGetsMachineByIDAndDeletesThreadThroughArchiveShim(t *testing.T) {
 		{
 			ThreadID:  "thread-01",
 			MachineID: "machine-01",
+			AgentID:   "agent-01",
 			Status:    domain.ThreadStatusIdle,
 			Title:     "Investigate flaky test",
 		},
 	}, nil)
 
 	router := routing.NewRouter()
-	router.TrackThread("thread-01", "machine-01")
+	router.TrackThread("thread-01", "machine-01", "agent-01")
 
 	handler := NewServer(reg, idx, router, &fakeCommandSender{
 		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {

@@ -66,7 +66,7 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 
 	machine := domain.Machine{ID: "machine-01", Name: "machine-01", Status: domain.MachineStatusOnline}
 
-	if err := sendLiveSnapshot(session, machine, mgr, "codex"); err != nil {
+	if err := sendLiveSnapshot(session, machine, mgr, registry); err != nil {
 		t.Fatal(err)
 	}
 
@@ -74,7 +74,7 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := sendLiveSnapshot(session, machine, mgr, "codex"); err != nil {
+	if err := sendLiveSnapshot(session, machine, mgr, registry); err != nil {
 		t.Fatal(err)
 	}
 
@@ -91,7 +91,7 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 func TestHandleCommandEnvelopeRejectsUnsupportedCommands(t *testing.T) {
 	session, sent := newRecordingSession()
 
-	err := handleCommandEnvelope(session, nil, "codex", false, nil, protocol.Envelope{
+	err := handleCommandEnvelope(session, nil, nil, nil, protocol.Envelope{
 		Name:      "unknown.command",
 		RequestID: "req-1",
 		Payload:   []byte(`{}`),
@@ -113,7 +113,7 @@ func TestHandleCommandEnvelopeRejectsFailedTurnStartWithoutDisconnecting(t *test
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
 		Name:      "turn.start",
 		RequestID: "req-2",
 		Payload:   []byte(`{"threadId":"thread-99","input":"run tests"}`),
@@ -146,11 +146,11 @@ func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) 
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	if !bindRuntimeTurnEvents(runtime, session, mgr, "codex") {
+	if !bindRuntimeTurnEvents(runtime, session, mgr, registry, "codex") {
 		t.Fatal("expected runtime turn event binding")
 	}
 
-	err := handleCommandEnvelope(session, mgr, "codex", true, nil, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
 		Name:      "turn.start",
 		RequestID: "req-async-1",
 		Payload:   []byte(`{"threadId":"thread-01","input":"run tests"}`),
@@ -228,7 +228,7 @@ func TestBindRuntimeTurnEventsRefreshesThreadSnapshotOnStartedAndCompleted(t *te
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	if !bindRuntimeTurnEvents(runtime, session, mgr, "codex") {
+	if !bindRuntimeTurnEvents(runtime, session, mgr, registry, "codex") {
 		t.Fatal("expected runtime turn event binding")
 	}
 
@@ -286,7 +286,7 @@ func TestBindRuntimeTurnEventsEmitsTurnFailedAndRefreshesSnapshot(t *testing.T) 
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	if !bindRuntimeTurnEvents(runtime, session, mgr, "codex") {
+	if !bindRuntimeTurnEvents(runtime, session, mgr, registry, "codex") {
 		t.Fatal("expected runtime turn event binding")
 	}
 
@@ -314,7 +314,7 @@ func TestBindRuntimeApprovalEventsEmitsApprovalRequired(t *testing.T) {
 	runtime := &notifyingRuntime{}
 	session, sent := newRecordingSession()
 
-	if !bindRuntimeApprovalEvents(runtime, session) {
+	if !bindRuntimeApprovalEvents(runtime, session, "codex") {
 		t.Fatal("expected runtime approval event binding")
 	}
 
@@ -353,7 +353,7 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	if err := session.ApprovalRequired(protocol.ApprovalRequiredPayload{
+	if err := session.ApprovalRequired("codex", protocol.ApprovalRequiredPayload{
 		RequestID: "approval-1",
 		ThreadID:  "thread-01",
 		TurnID:    "turn-01",
@@ -365,7 +365,7 @@ func TestHandleCommandEnvelopeRespondsToApprovalRequests(t *testing.T) {
 	}
 
 	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
-	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-1",
 		Payload:   []byte(`{"requestId":"` + publicRequestID + `","decision":"accept"}`),
@@ -405,7 +405,7 @@ func TestHandleCommandEnvelopeApprovalResolvedPreservesThreadContextAfterReconne
 	session, sent := newRecordingSession()
 	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
 
-	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-1",
 		Payload:   []byte(`{"requestId":"` + publicRequestID + `","threadId":"thread-01","turnId":"turn-01","decision":"accept"}`),
@@ -437,7 +437,7 @@ func TestHandleCommandEnvelopeRespondsToToolUserInputWithAnswers(t *testing.T) {
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	if err := session.ApprovalRequired(protocol.ApprovalRequiredPayload{
+	if err := session.ApprovalRequired("codex", protocol.ApprovalRequiredPayload{
 		RequestID: "approval-1",
 		ThreadID:  "thread-01",
 		TurnID:    "turn-01",
@@ -448,7 +448,7 @@ func TestHandleCommandEnvelopeRespondsToToolUserInputWithAnswers(t *testing.T) {
 	}
 
 	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
-	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
 		Name:      "approval.respond",
 		RequestID: "req-approval-answers-1",
 		Payload: []byte(`{
@@ -482,7 +482,7 @@ func TestBindRuntimeApprovalEventsEmitsResolvedEventsFromRuntimeOriginatedResolu
 	session, sent := newRecordingSession()
 	publicRequestID := expectedPublicApprovalID("machine-01", "approval-1")
 
-	if !bindRuntimeApprovalEvents(runtime, session) {
+	if !bindRuntimeApprovalEvents(runtime, session, "codex") {
 		t.Fatal("expected runtime approval event binding")
 	}
 
@@ -540,26 +540,29 @@ func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) 
 	}
 
 	registry := agentregistry.New()
-	registry.Register("codex", initialRuntime)
-	mgr := manager.New(registry)
-	controller := newRuntimeController(
+	startCount := 0
+	supervisor, err := manager.NewSupervisor(
 		context.Background(),
-		config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeFake},
-		time.Now,
-		runtimeFactories{
-			newFake: func(config.Config, func() time.Time) agenttypes.Runtime {
-				return startedRuntime
-			},
-		},
+		t.TempDir(),
 		registry,
-		"codex",
-		initialRuntime,
-		initialRuntime.cleanup,
+		map[domain.AgentType]agenttypes.RuntimeFactory{
+			domain.AgentTypeCodex: runtimeFactoryFunc(func(context.Context, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+				startCount++
+				if startCount == 1 {
+					return initialRuntime, initialRuntime.cleanup, nil
+				}
+				return startedRuntime, startedRuntime.cleanup, nil
+			}),
+		},
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
-	controller.bindSession(session, mgr, "codex")
+	bindAllManagedRuntimeEvents(registry, session, mgr)
 
-	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+	if err := handleCommandEnvelope(session, mgr, registry, supervisor, protocol.Envelope{
 		Name:      "runtime.stop",
 		RequestID: "req-stop-1",
 		Payload:   []byte(`{}`),
@@ -583,7 +586,7 @@ func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) 
 		t.Fatalf("expected empty thread snapshot after stop, got %+v", stoppedThreads.Threads)
 	}
 
-	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+	if err := handleCommandEnvelope(session, mgr, registry, supervisor, protocol.Envelope{
 		Name:      "turn.start",
 		RequestID: "req-turn-1",
 		Payload:   []byte(`{"threadId":"thread-01","input":"run tests"}`),
@@ -596,7 +599,7 @@ func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) 
 		t.Fatalf("expected turn.start rejection while stopped, got %+v", rejection)
 	}
 
-	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+	if err := handleCommandEnvelope(session, mgr, registry, supervisor, protocol.Envelope{
 		Name:      "runtime.start",
 		RequestID: "req-start-1",
 		Payload:   []byte(`{}`),
@@ -612,7 +615,7 @@ func TestHandleCommandEnvelopeRuntimeStartStopChangesAvailability(t *testing.T) 
 		t.Fatalf("expected running runtime status after start, got %+v", machineSnapshot.Machine)
 	}
 
-	if err := handleCommandEnvelope(session, mgr, "codex", false, controller, protocol.Envelope{
+	if err := handleCommandEnvelope(session, mgr, registry, supervisor, protocol.Envelope{
 		Name:      "turn.start",
 		RequestID: "req-turn-2",
 		Payload:   []byte(`{"threadId":"thread-01","input":"run tests"}`),
@@ -684,7 +687,7 @@ func TestHandleCommandEnvelopeEnvironmentCommandsRefreshEnvironmentSnapshot(t *t
 	}
 
 	for _, command := range commands {
-		if err := handleCommandEnvelope(session, mgr, "codex", false, nil, command); err != nil {
+		if err := handleCommandEnvelope(session, mgr, registry, nil, command); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -719,11 +722,23 @@ func TestHandleCommandEnvelopeEnvironmentCommandsRefreshEnvironmentSnapshot(t *t
 func TestHandleCommandEnvelopeAppliesAgentConfig(t *testing.T) {
 	runtime := &notifyingRuntime{}
 	registry := agentregistry.New()
-	registry.Register("codex", runtime)
+	supervisor, err := manager.NewSupervisor(
+		context.Background(),
+		t.TempDir(),
+		registry,
+		map[domain.AgentType]agenttypes.RuntimeFactory{
+			domain.AgentTypeCodex: runtimeFactoryFunc(func(context.Context, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+				return runtime, runtime.cleanup, nil
+			}),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	mgr := manager.New(registry)
 	session, sent := newRecordingSession()
 
-	err := handleCommandEnvelope(session, mgr, "codex", false, nil, protocol.Envelope{
+	err = handleCommandEnvelope(session, mgr, registry, supervisor, protocol.Envelope{
 		Name:      "agent.config.apply",
 		RequestID: "req-config-1",
 		Payload:   []byte(`{"agentType":"codex","source":"global","document":{"agentType":"codex","format":"toml","content":"model = \"gpt-5.4\"\n"}}`),
@@ -732,8 +747,12 @@ func TestHandleCommandEnvelopeAppliesAgentConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if runtime.lastAppliedConfig.Document.Content != "model = \"gpt-5.4\"\n" {
-		t.Fatalf("unexpected applied config: %+v", runtime.lastAppliedConfig)
+	document, err := supervisor.ReadConfig("agent-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Content != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("unexpected applied config: %+v", document)
 	}
 
 	if len(*sent) != 1 {
@@ -750,11 +769,11 @@ func TestBuildRuntimeUsesFakeOnlyWhenConfigured(t *testing.T) {
 	calledAppServer := false
 
 	runtime, cleanup, err := buildRuntime(context.Background(), cfg, time.Now, runtimeFactories{
-		newFake: func(config.Config, func() time.Time) agenttypes.Runtime {
+		newFake: func(config.Config, agenttypes.ManagedAgentSpec, func() time.Time) agenttypes.Runtime {
 			calledFake = true
 			return codex.NewFakeAdapter()
 		},
-		newAppServer: func(context.Context, config.Config) (agenttypes.Runtime, func() error, error) {
+		newAppServer: func(context.Context, config.Config, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
 			calledAppServer = true
 			return codex.NewFakeAdapter(), func() error { return nil }, nil
 		},
@@ -779,11 +798,11 @@ func TestBuildRuntimeUsesAppServerByDefault(t *testing.T) {
 	calledAppServer := false
 
 	runtime, cleanup, err := buildRuntime(context.Background(), cfg, time.Now, runtimeFactories{
-		newFake: func(config.Config, func() time.Time) agenttypes.Runtime {
+		newFake: func(config.Config, agenttypes.ManagedAgentSpec, func() time.Time) agenttypes.Runtime {
 			calledFake = true
 			return codex.NewFakeAdapter()
 		},
-		newAppServer: func(context.Context, config.Config) (agenttypes.Runtime, func() error, error) {
+		newAppServer: func(context.Context, config.Config, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
 			calledAppServer = true
 			return codex.NewFakeAdapter(), func() error { return nil }, nil
 		},
@@ -806,10 +825,11 @@ func TestRunClientReportsBootstrapFailureAndReturnsNonZero(t *testing.T) {
 	var stderr bytes.Buffer
 
 	exitCode := runClient(context.Background(), &stderr, config.Config{
-		MachineID:   "machine-01",
-		RuntimeMode: config.RuntimeModeAppServer,
+		MachineID:        "machine-01",
+		RuntimeMode:      config.RuntimeModeAppServer,
+		ManagedAgentsDir: t.TempDir(),
 	}, time.Now, runtimeFactories{
-		newAppServer: func(context.Context, config.Config) (agenttypes.Runtime, func() error, error) {
+		newAppServer: func(context.Context, config.Config, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
 			return nil, nil, errors.New("bootstrap boom")
 		},
 	})
@@ -898,6 +918,12 @@ func expectedPublicApprovalID(machineID string, rawRequestID string) string {
 		base64.RawURLEncoding.EncodeToString([]byte(machineID)) +
 		"." +
 		base64.RawURLEncoding.EncodeToString([]byte(rawRequestID))
+}
+
+type runtimeFactoryFunc func(context.Context, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error)
+
+func (f runtimeFactoryFunc) Start(ctx context.Context, spec agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+	return f(ctx, spec)
 }
 
 type notifyingRuntime struct {

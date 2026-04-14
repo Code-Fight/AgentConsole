@@ -1,145 +1,257 @@
 import "@testing-library/jest-dom/vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
+import { ConsoleHostRouter } from "../design-host/console-host-router";
 
-const connectConsoleSocketMock = vi.fn();
+class FakeWebSocket {
+  static instances: FakeWebSocket[] = [];
 
-vi.mock("../common/api/ws", () => ({
-  connectConsoleSocket: (
-    threadId: string | undefined,
-    onMessage: (event: MessageEvent<string>) => void,
-  ) => connectConsoleSocketMock(threadId, onMessage),
-}));
+  private readonly listeners = new Map<string, Set<(event: MessageEvent<string>) => void>>();
+  readonly close = vi.fn();
 
-import { MachinesPage } from "./machines-page";
+  constructor(_url: string) {
+    FakeWebSocket.instances.push(this);
+  }
+
+  addEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type: string, listener: (event: MessageEvent<string>) => void) {
+    this.listeners.get(type)?.delete(listener);
+  }
+}
+
+const capabilities = {
+  threadHub: true,
+  threadWorkspace: true,
+  approvals: true,
+  startTurn: true,
+  steerTurn: true,
+  interruptTurn: true,
+  machineInstallAgent: true,
+  machineRemoveAgent: true,
+  environmentSyncCatalog: false,
+  environmentRestartBridge: false,
+  environmentOpenMarketplace: false,
+  environmentMutateResources: false,
+  environmentWriteMcp: false,
+  environmentWriteSkills: false,
+  settingsEditGatewayEndpoint: false,
+  settingsEditConsoleProfile: false,
+  settingsEditSafetyPolicy: false,
+  settingsGlobalDefault: true,
+  settingsMachineOverride: true,
+  settingsApplyMachine: true,
+  dashboardMetrics: false,
+  agentLifecycle: true,
+};
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 afterEach(() => {
-  connectConsoleSocketMock.mockReset();
+  FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
 });
 
-test("renders the design machines surface with disabled unsupported lifecycle actions", async () => {
-  connectConsoleSocketMock.mockReturnValue(() => {});
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL) => {
-      const path = typeof input === "string" ? input : input.toString();
+test("reads and saves per-agent config from the active Machines page", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
 
-      if (path === "/machines") {
-        return new Response(
-          JSON.stringify({
-            items: [
+    if (path === "/capabilities") {
+      return jsonResponse(capabilities);
+    }
+    if (path === "/settings/console") {
+      return jsonResponse({ preferences: null });
+    }
+    if (path === "/threads") {
+      return jsonResponse({ items: [] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [
+          {
+            id: "machine-01",
+            name: "Machine 01",
+            status: "online",
+            runtimeStatus: "running",
+            agents: [
               {
-                id: "machine-01",
-                name: "Machine 01",
-                status: "online",
-                runtimeStatus: "running",
+                agentId: "agent-01",
+                agentType: "codex",
+                displayName: "Primary Codex",
+                status: "running",
               },
             ],
-          }),
-          {
-            status: 200,
-            headers: {
-              "Content-Type": "application/json",
-            },
           },
-        );
-      }
+        ],
+      });
+    }
+    if (path === "/machines/machine-01/agents/agent-01/config" && method === "GET") {
+      return jsonResponse({
+        document: {
+          agentType: "codex",
+          format: "toml",
+          content: "model = \"gpt-5.4\"\n",
+        },
+      });
+    }
+    if (path === "/machines/machine-01/agents/agent-01/config" && method === "PUT") {
+      return jsonResponse({
+        document: {
+          agentType: "codex",
+          format: "toml",
+          content: "model = \"gpt-5.5\"\n",
+        },
+      });
+    }
 
-      throw new Error(`Unexpected request: ${path}`);
-    }),
+    throw new Error(`Unexpected request: ${method} ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/machines"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
   );
 
-  render(<MachinesPage />);
+  expect((await screen.findAllByText("Machine 01")).length).toBeGreaterThan(0);
+  expect(screen.getAllByText("Primary Codex").length).toBeGreaterThan(0);
 
-  expect(await screen.findByRole("heading", { name: "Machines" })).toBeInTheDocument();
-  expect(await screen.findByText("Machine 01")).toBeInTheDocument();
-  expect(screen.getByText("Runtime: running")).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Install agent" })).toBeDisabled();
-  expect(screen.getByRole("button", { name: "Remove agent" })).toBeDisabled();
-  expect(screen.getAllByText("Not connected")).toHaveLength(2);
+  fireEvent.click(screen.getAllByTitle("编辑配置")[0]);
+
+  await waitFor(() => {
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input) === "/machines/machine-01/agents/agent-01/config" &&
+          (!init || !("method" in init) || !init.method || init.method === "GET"),
+      ),
+    ).toBe(true);
+  });
+
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "model = \"gpt-5.5\"\n" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "保存" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/machines/machine-01/agents/agent-01/config",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ content: "model = \"gpt-5.5\"\n" }),
+      }),
+    );
+  });
 });
 
-test("reloads machines after machine.updated websocket events", async () => {
-  const socketListeners: Array<(event: MessageEvent<string>) => void> = [];
-  connectConsoleSocketMock.mockImplementation(
-    (_threadId: string | undefined, onMessage: (event: MessageEvent<string>) => void) => {
-      socketListeners.push(onMessage);
-      return () => {};
-    },
+test("install and delete actions call the managed agent lifecycle APIs", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    const method = init?.method ?? "GET";
+
+    if (path === "/capabilities") {
+      return jsonResponse(capabilities);
+    }
+    if (path === "/settings/console") {
+      return jsonResponse({ preferences: null });
+    }
+    if (path === "/threads") {
+      return jsonResponse({ items: [] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [
+          {
+            id: "machine-01",
+            name: "Machine 01",
+            status: "online",
+            runtimeStatus: "running",
+            agents: [
+              {
+                agentId: "agent-01",
+                agentType: "codex",
+                displayName: "Primary Codex",
+                status: "running",
+              },
+            ],
+          },
+        ],
+      });
+    }
+    if (path === "/machines/machine-01/agents" && method === "POST") {
+      return jsonResponse(
+        {
+          agent: {
+            agentId: "agent-02",
+            agentType: "codex",
+            displayName: "Secondary Codex",
+            status: "running",
+          },
+        },
+        201,
+      );
+    }
+    if (path === "/machines/machine-01/agents/agent-01" && method === "DELETE") {
+      return new Response(null, { status: 204 });
+    }
+
+    throw new Error(`Unexpected request: ${method} ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/machines"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
   );
 
-  const fetchMock = vi
-    .fn<(input: RequestInfo | URL) => Promise<Response>>()
-    .mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            {
-              id: "machine-01",
-              name: "Machine 01",
-              status: "online",
-              runtimeStatus: "running",
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        },
-      ),
-    )
-    .mockResolvedValueOnce(
-      new Response(
-        JSON.stringify({
-          items: [
-            {
-              id: "machine-01",
-              name: "Machine 01",
-              status: "reconnecting",
-              runtimeStatus: "running",
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: {
-            "Content-Type": "application/json",
-          },
-        },
-      ),
-    );
-  vi.stubGlobal("fetch", fetchMock);
+  expect((await screen.findAllByText("Machine 01")).length).toBeGreaterThan(0);
 
-  render(<MachinesPage />);
+  fireEvent.click(screen.getAllByRole("button", { name: "安装 Agent" })[0]);
+  fireEvent.change(screen.getByRole("combobox"), {
+    target: { value: "codex" },
+  });
+  fireEvent.change(screen.getByPlaceholderText("例如: Claude Sonnet"), {
+    target: { value: "Secondary Codex" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "安装" }));
 
-  expect(await screen.findByText("online")).toBeInTheDocument();
-
-  await act(async () => {
-    socketListeners[0]?.(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          version: "v1",
-          category: "event",
-          name: "machine.updated",
-          timestamp: "2026-04-13T10:00:00Z",
-          payload: {
-            machine: {
-              id: "machine-01",
-              name: "Machine 01",
-              status: "reconnecting",
-              runtimeStatus: "running",
-            },
-          },
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/machines/machine-01/agents",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          agentType: "codex",
+          displayName: "Secondary Codex",
         }),
       }),
     );
   });
 
+  fireEvent.click(screen.getAllByTitle("删除 Agent")[0]);
+  fireEvent.click(screen.getByRole("button", { name: "删除" }));
+
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(screen.getByText("reconnecting")).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/machines/machine-01/agents/agent-01",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

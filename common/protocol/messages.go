@@ -35,12 +35,14 @@ type MachineUpdatedPayload struct {
 
 type ThreadUpdatedPayload struct {
 	MachineID string         `json:"machineId"`
+	AgentID   string         `json:"agentId,omitempty"`
 	ThreadID  string         `json:"threadId,omitempty"`
 	Thread    *domain.Thread `json:"thread,omitempty"`
 }
 
 type ResourceChangedPayload struct {
 	MachineID  string                      `json:"machineId"`
+	AgentID    string                      `json:"agentId,omitempty"`
 	Kind       domain.EnvironmentKind      `json:"kind,omitempty"`
 	ResourceID string                      `json:"resourceId,omitempty"`
 	Resource   *domain.EnvironmentResource `json:"resource,omitempty"`
@@ -48,35 +50,42 @@ type ResourceChangedPayload struct {
 }
 
 type ThreadCreateCommandPayload struct {
-	Title string `json:"title,omitempty"`
+	AgentID string `json:"agentId"`
+	Title   string `json:"title,omitempty"`
 }
 
 type ThreadReadCommandPayload struct {
 	ThreadID string `json:"threadId"`
+	AgentID  string `json:"agentId,omitempty"`
 }
 
 type ThreadResumeCommandPayload struct {
 	ThreadID string `json:"threadId"`
+	AgentID  string `json:"agentId,omitempty"`
 }
 
 type ThreadArchiveCommandPayload struct {
 	ThreadID string `json:"threadId"`
+	AgentID  string `json:"agentId,omitempty"`
 }
 
 type TurnStartCommandPayload struct {
 	ThreadID string `json:"threadId"`
+	AgentID  string `json:"agentId,omitempty"`
 	Input    string `json:"input"`
 }
 
 type TurnSteerCommandPayload struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
+	AgentID  string `json:"agentId,omitempty"`
 	Input    string `json:"input"`
 }
 
 type TurnInterruptCommandPayload struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
+	AgentID  string `json:"agentId,omitempty"`
 }
 
 type RuntimeStartCommandPayload struct{}
@@ -91,45 +100,72 @@ type AgentConfigApplyCommandPayload struct {
 
 type EnvironmentSkillSetEnabledCommandPayload struct {
 	SkillID string `json:"skillId"`
+	AgentID string `json:"agentId,omitempty"`
 	Enabled bool   `json:"enabled"`
 }
 
 type EnvironmentSkillCreateCommandPayload struct {
+	AgentID     string `json:"agentId"`
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
 
 type EnvironmentSkillDeleteCommandPayload struct {
 	SkillID string `json:"skillId"`
+	AgentID string `json:"agentId,omitempty"`
 }
 
 type EnvironmentMCPUpsertCommandPayload struct {
 	ServerID string         `json:"serverId"`
+	AgentID  string         `json:"agentId,omitempty"`
 	Config   map[string]any `json:"config"`
 }
 
 type EnvironmentMCPRemoveCommandPayload struct {
 	ServerID string `json:"serverId"`
+	AgentID  string `json:"agentId,omitempty"`
 }
 
 type EnvironmentMCPSetEnabledCommandPayload struct {
 	ServerID string `json:"serverId"`
+	AgentID  string `json:"agentId,omitempty"`
 	Enabled  bool   `json:"enabled"`
 }
 
 type EnvironmentPluginInstallCommandPayload struct {
 	PluginID        string `json:"pluginId"`
+	AgentID         string `json:"agentId,omitempty"`
 	MarketplacePath string `json:"marketplacePath"`
 	PluginName      string `json:"pluginName"`
 }
 
 type EnvironmentPluginSetEnabledCommandPayload struct {
 	PluginID string `json:"pluginId"`
+	AgentID  string `json:"agentId,omitempty"`
 	Enabled  bool   `json:"enabled"`
 }
 
 type EnvironmentPluginUninstallCommandPayload struct {
 	PluginID string `json:"pluginId"`
+	AgentID  string `json:"agentId,omitempty"`
+}
+
+type MachineAgentInstallCommandPayload struct {
+	AgentType   string `json:"agentType"`
+	DisplayName string `json:"displayName"`
+}
+
+type MachineAgentDeleteCommandPayload struct {
+	AgentID string `json:"agentId"`
+}
+
+type MachineAgentConfigReadCommandPayload struct {
+	AgentID string `json:"agentId"`
+}
+
+type MachineAgentConfigWriteCommandPayload struct {
+	AgentID  string                     `json:"agentId"`
+	Document domain.AgentConfigDocument `json:"document"`
 }
 
 type ApprovalQuestionPayload struct {
@@ -235,6 +271,22 @@ type EnvironmentPluginSetEnabledCommandResult struct {
 
 type EnvironmentPluginUninstallCommandResult struct {
 	PluginID string `json:"pluginId"`
+}
+
+type MachineAgentInstallCommandResult struct {
+	Agent domain.AgentInstance `json:"agent"`
+}
+
+type MachineAgentDeleteCommandResult struct {
+	AgentID string `json:"agentId"`
+}
+
+type MachineAgentConfigReadCommandResult struct {
+	Document domain.AgentConfigDocument `json:"document"`
+}
+
+type MachineAgentConfigWriteCommandResult struct {
+	Document domain.AgentConfigDocument `json:"document"`
 }
 
 type ApprovalRespondCommandResult struct {

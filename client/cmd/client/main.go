@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -39,7 +40,6 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 	const heartbeatInterval = 30 * time.Second
 	const connectTimeout = 5 * time.Second
 	const reconnectMaxBackoff = 5 * time.Second
-	const runtimeName = "codex"
 
 	if stderr == nil {
 		stderr = io.Discard
@@ -54,24 +54,29 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 	shutdownCtx, stop := signal.NotifyContext(parentCtx, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runtime, cleanupRuntime, err := buildRuntime(shutdownCtx, cfg, now, factories)
+	runtimeRegistry := agentregistry.New()
+	supervisor, err := manager.NewSupervisor(
+		shutdownCtx,
+		cfg.ManagedAgentsDir,
+		runtimeRegistry,
+		map[domain.AgentType]agenttypes.RuntimeFactory{
+			domain.AgentTypeCodex: managedRuntimeFactory{
+				cfg:       cfg,
+				now:       now,
+				factories: factories,
+			},
+		},
+	)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "runtime bootstrap failed: %v\n", err)
 		return 1
 	}
-
-	runtimeRegistry := agentregistry.New()
-	runtimeRegistry.Register(runtimeName, runtime)
 	agentManager := manager.New(runtimeRegistry)
-	runtimeController := newRuntimeController(shutdownCtx, cfg, now, factories, runtimeRegistry, runtimeName, runtime, cleanupRuntime)
 	defer func() {
-		_ = runtimeController.Close()
+		_ = supervisor.StopAll()
 	}()
 
-	machine := domain.Machine{
-		ID:   cfg.MachineID,
-		Name: cfg.MachineID,
-	}
+	machine := buildMachineSnapshot(cfg.MachineID, supervisor)
 
 	backoff := time.Duration(0)
 	for {
@@ -93,7 +98,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 		session := newClientSession(cfg.MachineID, func(msg []byte) error {
 			return conn.Write(shutdownCtx, cws.MessageText, msg)
 		}, now)
-		runtimeStreamsTurnEvents := runtimeController.bindSession(session, agentManager, runtimeName)
+		bindAllManagedRuntimeEvents(runtimeRegistry, session, agentManager)
 		if err := session.Register(); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "register-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
@@ -102,9 +107,8 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 			}
 			continue
 		}
-		machine.Status = runtimeController.machineStatus()
-		machine.RuntimeStatus = runtimeController.runtimeStatus()
-		if err := sendLiveSnapshot(session, machine, agentManager, runtimeName); err != nil {
+		machine = buildMachineSnapshot(cfg.MachineID, supervisor)
+		if err := sendLiveSnapshot(session, machine, agentManager, runtimeRegistry); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "snapshot-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
@@ -114,7 +118,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 		}
 
 		backoff = 0
-		if err := runConnection(shutdownCtx, conn, session, agentManager, runtimeName, runtimeStreamsTurnEvents, runtimeController, heartbeatInterval); err != nil {
+		if err := runConnection(shutdownCtx, conn, session, agentManager, runtimeRegistry, supervisor, heartbeatInterval); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "reconnect")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
 			if !sleepWithContext(shutdownCtx, backoff) {
@@ -129,13 +133,24 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 }
 
 type runtimeFactories struct {
-	newFake      func(cfg config.Config, now func() time.Time) agenttypes.Runtime
-	newAppServer func(ctx context.Context, cfg config.Config) (agenttypes.Runtime, func() error, error)
+	newFake      func(cfg config.Config, spec agenttypes.ManagedAgentSpec, now func() time.Time) agenttypes.Runtime
+	newAppServer func(ctx context.Context, cfg config.Config, spec agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error)
+}
+
+type managedRuntimeFactory struct {
+	cfg       config.Config
+	now       func() time.Time
+	factories runtimeFactories
+}
+
+func (f managedRuntimeFactory) Start(ctx context.Context, spec agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+	return buildManagedRuntime(ctx, f.cfg, spec, f.now, f.factories)
 }
 
 type approvalContext struct {
 	rawRequestID    string
 	publicRequestID string
+	agentID         string
 	threadID        string
 	turnID          string
 }
@@ -184,8 +199,8 @@ func (c *runtimeController) bindSession(session *clientSession, mgr *manager.Man
 	}
 	c.mu.Unlock()
 
-	streamsTurnEvents := bindRuntimeTurnEvents(runtime, session, mgr, c.runtimeName)
-	bindRuntimeApprovalEvents(runtime, session)
+	streamsTurnEvents := bindRuntimeTurnEvents(runtime, session, mgr, c.registry, c.runtimeName)
+	bindRuntimeApprovalEvents(runtime, session, c.runtimeName)
 
 	c.mu.Lock()
 	c.runtimeStreamsTurnEvents = streamsTurnEvents
@@ -366,9 +381,9 @@ func (s *clientSession) TurnStarted(requestID string, payload protocol.TurnStart
 	return s.sendEnvelope(protocol.CategoryEvent, "turn.started", requestID, payload)
 }
 
-func (s *clientSession) ApprovalRequired(payload protocol.ApprovalRequiredPayload) error {
+func (s *clientSession) ApprovalRequired(agentID string, payload protocol.ApprovalRequiredPayload) error {
 	publicRequestID := s.publicApprovalRequestID(payload.RequestID)
-	s.rememberApprovalContext(payload.RequestID, publicRequestID, payload.ThreadID, payload.TurnID)
+	s.rememberApprovalContext(payload.RequestID, publicRequestID, agentID, payload.ThreadID, payload.TurnID)
 	payload.RequestID = publicRequestID
 	return s.sendEnvelope(protocol.CategoryEvent, "approval.required", publicRequestID, payload)
 }
@@ -391,7 +406,7 @@ func (s *clientSession) ApprovalResolved(payload protocol.ApprovalResolvedPayloa
 	return nil
 }
 
-func (s *clientSession) rememberApprovalContext(rawRequestID string, publicRequestID string, threadID string, turnID string) {
+func (s *clientSession) rememberApprovalContext(rawRequestID string, publicRequestID string, agentID string, threadID string, turnID string) {
 	if strings.TrimSpace(publicRequestID) == "" {
 		return
 	}
@@ -401,6 +416,7 @@ func (s *clientSession) rememberApprovalContext(rawRequestID string, publicReque
 	s.approvalByID[publicRequestID] = approvalContext{
 		rawRequestID:    strings.TrimSpace(rawRequestID),
 		publicRequestID: publicRequestID,
+		agentID:         strings.TrimSpace(agentID),
 		threadID:        threadID,
 		turnID:          turnID,
 	}
@@ -515,55 +531,57 @@ func (s *clientSession) sendEnvelope(category protocol.Category, name string, re
 func defaultRuntimeFactories() runtimeFactories {
 	return runtimeFactories{
 		newFake: newFakeRuntime,
-		newAppServer: func(ctx context.Context, cfg config.Config) (agenttypes.Runtime, func() error, error) {
-			runner, err := codex.NewStdioRunner(ctx, cfg.CodexBin)
-			if err != nil {
-				return nil, nil, err
-			}
-			client := codex.NewAppServerClient(runner)
-			if err := client.Initialize(); err != nil {
-				_ = runner.Close()
-				return nil, nil, err
-			}
-			return client, runner.Close, nil
+		newAppServer: func(ctx context.Context, cfg config.Config, spec agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+			layout := codex.NewInstanceLayout(cfg.ManagedAgentsDir, spec.AgentID)
+			return codex.NewIsolatedAppServerClient(ctx, cfg.CodexBin, layout)
 		},
 	}
 }
 
 func buildRuntime(ctx context.Context, cfg config.Config, now func() time.Time, factories runtimeFactories) (agenttypes.Runtime, func() error, error) {
+	return buildManagedRuntime(ctx, cfg, agenttypes.ManagedAgentSpec{
+		AgentID:     "agent-01",
+		AgentType:   domain.AgentTypeCodex,
+		DisplayName: "Codex",
+	}, now, factories)
+}
+
+func buildManagedRuntime(ctx context.Context, cfg config.Config, spec agenttypes.ManagedAgentSpec, now func() time.Time, factories runtimeFactories) (agenttypes.Runtime, func() error, error) {
 	switch cfg.RuntimeMode {
 	case "", config.RuntimeModeAppServer:
 		if factories.newAppServer == nil {
 			return nil, nil, fmt.Errorf("app-server runtime factory is not configured")
 		}
-		return factories.newAppServer(ctx, cfg)
+		return factories.newAppServer(ctx, cfg, spec)
 	case config.RuntimeModeFake:
 		if factories.newFake == nil {
 			return nil, nil, fmt.Errorf("fake runtime factory is not configured")
 		}
-		return factories.newFake(cfg, now), func() error { return nil }, nil
+		return factories.newFake(cfg, spec, now), func() error { return nil }, nil
 	default:
 		return nil, nil, fmt.Errorf("unsupported runtime mode %q", cfg.RuntimeMode)
 	}
 }
 
-func newFakeRuntime(cfg config.Config, now func() time.Time) agenttypes.Runtime {
+func newFakeRuntime(cfg config.Config, spec agenttypes.ManagedAgentSpec, now func() time.Time) agenttypes.Runtime {
 	adapter := codex.NewFakeAdapter()
 	adapter.SeedSnapshot(
 		[]domain.Thread{
 			{
 				ThreadID:  "thread-01",
 				MachineID: cfg.MachineID,
+				AgentID:   spec.AgentID,
 				Status:    domain.ThreadStatusIdle,
-				Title:     "Gateway bootstrap thread",
+				Title:     firstNonEmpty(strings.TrimSpace(spec.DisplayName), "Gateway bootstrap thread"),
 			},
 		},
 		[]domain.EnvironmentResource{
 			{
 				ResourceID:      "skill-01",
 				MachineID:       cfg.MachineID,
+				AgentID:         spec.AgentID,
 				Kind:            domain.EnvironmentKindSkill,
-				DisplayName:     "Bootstrap Skill",
+				DisplayName:     firstNonEmpty(strings.TrimSpace(spec.DisplayName), "Bootstrap Skill"),
 				Status:          domain.EnvironmentResourceStatusEnabled,
 				RestartRequired: false,
 				LastObservedAt:  now().UTC().Format(time.RFC3339),
@@ -609,26 +627,26 @@ func (stoppedRuntime) InterruptTurn(agenttypes.InterruptTurnParams) (domain.Turn
 	return domain.Turn{}, fmt.Errorf("runtime is stopped")
 }
 
-func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession, mgr *manager.Manager, runtimeName string) bool {
+func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string) bool {
 	source, ok := runtime.(agenttypes.RuntimeTurnEventSource)
 	if !ok {
 		return false
 	}
 
 	source.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
-		_ = handleRuntimeTurnEvent(session, mgr, runtimeName, event)
+		_ = handleRuntimeTurnEvent(session, mgr, registry, runtimeName, event)
 	})
 	return true
 }
 
-func handleRuntimeTurnEvent(session *clientSession, mgr *manager.Manager, runtimeName string, event agenttypes.RuntimeTurnEvent) error {
+func handleRuntimeTurnEvent(session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string, event agenttypes.RuntimeTurnEvent) error {
 	if err := emitRuntimeTurnEvent(session, event); err != nil {
 		return err
 	}
 	if !shouldRefreshThreadSnapshotForTurnEvent(event) || mgr == nil || runtimeName == "" {
 		return nil
 	}
-	return refreshThreadSnapshot(session, mgr, runtimeName)
+	return refreshThreadSnapshot(session, mgr, registry)
 }
 
 func shouldRefreshThreadSnapshotForTurnEvent(event agenttypes.RuntimeTurnEvent) bool {
@@ -667,13 +685,13 @@ func emitRuntimeTurnEvent(session *clientSession, event agenttypes.RuntimeTurnEv
 	}
 }
 
-func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSession) bool {
+func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSession, agentID string) bool {
 	bound := false
 
 	source, ok := runtime.(agenttypes.RuntimeApprovalEventSource)
 	if ok {
 		source.SetApprovalHandler(func(event agenttypes.RuntimeApprovalRequest) {
-			_ = emitRuntimeApprovalEvent(session, event)
+			_ = emitRuntimeApprovalEvent(session, agentID, event)
 		})
 		bound = true
 	}
@@ -696,8 +714,8 @@ func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSessio
 	return bound
 }
 
-func emitRuntimeApprovalEvent(session *clientSession, event agenttypes.RuntimeApprovalRequest) error {
-	return session.ApprovalRequired(protocol.ApprovalRequiredPayload{
+func emitRuntimeApprovalEvent(session *clientSession, agentID string, event agenttypes.RuntimeApprovalRequest) error {
+	return session.ApprovalRequired(agentID, protocol.ApprovalRequiredPayload{
 		RequestID: event.RequestID,
 		ThreadID:  event.ThreadID,
 		TurnID:    event.TurnID,
@@ -708,7 +726,7 @@ func emitRuntimeApprovalEvent(session *clientSession, event agenttypes.RuntimeAp
 	})
 }
 
-func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, runtimeController *runtimeController, heartbeatInterval time.Duration) error {
+func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, supervisor *manager.Supervisor, heartbeatInterval time.Duration) error {
 	loopCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -719,7 +737,7 @@ func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, 
 	}()
 
 	go func() {
-		errCh <- runCommandLoop(loopCtx, conn, session, mgr, runtimeName, runtimeStreamsTurnEvents, runtimeController)
+		errCh <- runCommandLoop(loopCtx, conn, session, mgr, registry, supervisor)
 	}()
 
 	err := <-errCh
@@ -731,8 +749,8 @@ func runConnection(ctx context.Context, conn *cws.Conn, session *clientSession, 
 	return nil
 }
 
-func sendLiveSnapshot(session *clientSession, machine domain.Machine, mgr *manager.Manager, runtimeName string) error {
-	snap, err := mgr.Snapshot(runtimeName)
+func sendLiveSnapshot(session *clientSession, machine domain.Machine, mgr *manager.Manager, registry *agentregistry.Registry) error {
+	snap, err := collectManagedSnapshot(session.machineID, mgr, registry)
 	if err != nil {
 		return err
 	}
@@ -766,7 +784,7 @@ func runHeartbeatLoop(ctx context.Context, session *clientSession, interval time
 	}
 }
 
-func runCommandLoop(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, runtimeController *runtimeController) error {
+func runCommandLoop(ctx context.Context, conn *cws.Conn, session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, supervisor *manager.Supervisor) error {
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
@@ -785,15 +803,27 @@ func runCommandLoop(ctx context.Context, conn *cws.Conn, session *clientSession,
 			continue
 		}
 
-		if err := handleCommandEnvelope(session, mgr, runtimeName, runtimeStreamsTurnEvents, runtimeController, envelope); err != nil {
+		if err := handleCommandEnvelope(session, mgr, registry, supervisor, envelope); err != nil {
 			return err
 		}
 	}
 }
 
-func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtimeName string, runtimeStreamsTurnEvents bool, runtimeController *runtimeController, envelope protocol.Envelope) error {
-	if runtimeController != nil {
-		runtimeStreamsTurnEvents = runtimeController.runtimeStreams()
+func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, supervisor *manager.Supervisor, envelope protocol.Envelope) error {
+	resolveAgentID := func(agentID string) (string, error) {
+		if supervisor == nil {
+			if strings.TrimSpace(agentID) != "" {
+				return strings.TrimSpace(agentID), nil
+			}
+			if registry != nil {
+				names := registry.Names()
+				if len(names) == 1 {
+					return names[0], nil
+				}
+			}
+			return "", fmt.Errorf("agentId is required")
+		}
+		return supervisor.ResolveAgentID(agentID)
 	}
 
 	switch envelope.Name {
@@ -803,12 +833,21 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		thread, err := mgr.CreateThread(runtimeName, agenttypes.CreateThreadParams{
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		thread, err := mgr.CreateThread(agentID, agenttypes.CreateThreadParams{
 			Title: payload.Title,
 		})
 		if err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
+		if thread.MachineID == "" {
+			thread.MachineID = session.machineID
+		}
+		thread.AgentID = agentID
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadCreateCommandResult{
 			Thread: thread,
@@ -816,17 +855,26 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 
-		return refreshThreadSnapshot(session, mgr, runtimeName)
+		return refreshThreadSnapshot(session, mgr, registry)
 	case "thread.read":
 		var payload protocol.ThreadReadCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		thread, err := mgr.ReadThread(runtimeName, payload.ThreadID)
+		agentID, err := resolveAgentID(payload.AgentID)
 		if err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
+
+		thread, err := mgr.ReadThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+		if thread.MachineID == "" {
+			thread.MachineID = session.machineID
+		}
+		thread.AgentID = agentID
 
 		return session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadReadCommandResult{
 			Thread: thread,
@@ -837,10 +885,19 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		thread, err := mgr.ResumeThread(runtimeName, payload.ThreadID)
+		agentID, err := resolveAgentID(payload.AgentID)
 		if err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
+
+		thread, err := mgr.ResumeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+		if thread.MachineID == "" {
+			thread.MachineID = session.machineID
+		}
+		thread.AgentID = agentID
 
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadResumeCommandResult{
 			Thread: thread,
@@ -848,14 +905,19 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 
-		return refreshThreadSnapshot(session, mgr, runtimeName)
+		return refreshThreadSnapshot(session, mgr, registry)
 	case "thread.archive":
 		var payload protocol.ThreadArchiveCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		if err := mgr.ArchiveThread(runtimeName, payload.ThreadID); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		if err := mgr.ArchiveThread(agentID, payload.ThreadID); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
 		}
 
@@ -865,14 +927,19 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 
-		return refreshThreadSnapshot(session, mgr, runtimeName)
+		return refreshThreadSnapshot(session, mgr, registry)
 	case "turn.start":
 		var payload protocol.TurnStartCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		result, err := mgr.StartTurn(runtimeName, agenttypes.StartTurnParams{
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		result, err := mgr.StartTurn(agentID, agenttypes.StartTurnParams{
 			ThreadID: payload.ThreadID,
 			Input:    payload.Input,
 		})
@@ -886,7 +953,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		if runtimeStreamsTurnEvents {
+		if runtimeStreamsTurnEventsForAgent(registry, agentID) {
 			return nil
 		}
 
@@ -911,14 +978,19 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 
-		return refreshThreadSnapshot(session, mgr, runtimeName)
+		return refreshThreadSnapshot(session, mgr, registry)
 	case "turn.steer":
 		var payload protocol.TurnSteerCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		result, err := mgr.SteerTurn(runtimeName, agenttypes.SteerTurnParams{
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		result, err := mgr.SteerTurn(agentID, agenttypes.SteerTurnParams{
 			ThreadID: payload.ThreadID,
 			TurnID:   payload.TurnID,
 			Input:    payload.Input,
@@ -933,7 +1005,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		if runtimeStreamsTurnEvents {
+		if runtimeStreamsTurnEventsForAgent(registry, agentID) {
 			return nil
 		}
 
@@ -958,14 +1030,19 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 
-		return refreshThreadSnapshot(session, mgr, runtimeName)
+		return refreshThreadSnapshot(session, mgr, registry)
 	case "turn.interrupt":
 		var payload protocol.TurnInterruptCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
-		turn, err := mgr.InterruptTurn(runtimeName, agenttypes.InterruptTurnParams{
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		turn, err := mgr.InterruptTurn(agentID, agenttypes.InterruptTurnParams{
 			ThreadID: payload.ThreadID,
 			TurnID:   payload.TurnID,
 		})
@@ -985,7 +1062,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 			return err
 		}
 
-		return refreshThreadSnapshot(session, mgr, runtimeName)
+		return refreshThreadSnapshot(session, mgr, registry)
 	case "approval.respond":
 		var payload protocol.ApprovalRespondCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -996,8 +1073,13 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		if !ok {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, fmt.Sprintf("approval request %q not found", payload.RequestID), "")
 		}
+		approvalCtx := session.approvalContext(payload.RequestID)
+		agentID, err := resolveAgentID(approvalCtx.agentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
 
-		if err := mgr.RespondApproval(runtimeName, rawRequestID, payload.Decision, payload.Answers); err != nil {
+		if err := mgr.RespondApproval(agentID, rawRequestID, payload.Decision, payload.Answers); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 
@@ -1019,50 +1101,112 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if runtimeController == nil {
-			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime controller unavailable", "")
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
 		}
-		if err := runtimeController.Stop(); err != nil {
+		if err := supervisor.StopAll(); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.RuntimeStopCommandResult{}); err != nil {
 			return err
 		}
-		return sendLiveSnapshot(session, domain.Machine{
-			ID:            session.machineID,
-			Name:          session.machineID,
-			Status:        runtimeController.machineStatus(),
-			RuntimeStatus: runtimeController.runtimeStatus(),
-		}, mgr, runtimeName)
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
 	case "runtime.start":
 		var payload protocol.RuntimeStartCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if runtimeController == nil {
-			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime controller unavailable", "")
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
 		}
-		if err := runtimeController.Start(session, mgr, runtimeName); err != nil {
+		if err := supervisor.StartAll(); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
+		bindAllManagedRuntimeEvents(registry, session, mgr)
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.RuntimeStartCommandResult{}); err != nil {
 			return err
 		}
-		return sendLiveSnapshot(session, domain.Machine{
-			ID:            session.machineID,
-			Name:          session.machineID,
-			Status:        runtimeController.machineStatus(),
-			RuntimeStatus: runtimeController.runtimeStatus(),
-		}, mgr, runtimeName)
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
+	case "machine.agent.install":
+		var payload protocol.MachineAgentInstallCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
+		}
+		agentType := domain.AgentType(strings.TrimSpace(payload.AgentType))
+		agent, err := supervisor.InstallAgent(agentType, payload.DisplayName)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		bindManagedRuntimeEvents(agent.AgentID, registry, session, mgr)
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.MachineAgentInstallCommandResult{
+			Agent: agent,
+		}); err != nil {
+			return err
+		}
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
+	case "machine.agent.delete":
+		var payload protocol.MachineAgentDeleteCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
+		}
+		if err := supervisor.DeleteAgent(payload.AgentID); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.MachineAgentDeleteCommandResult{
+			AgentID: payload.AgentID,
+		}); err != nil {
+			return err
+		}
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
+	case "machine.agent.config.read":
+		var payload protocol.MachineAgentConfigReadCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
+		}
+		document, err := supervisor.ReadConfig(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		return session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.MachineAgentConfigReadCommandResult{
+			Document: document,
+		})
+	case "machine.agent.config.write":
+		var payload protocol.MachineAgentConfigWriteCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
+		}
+		document, err := supervisor.WriteConfig(payload.AgentID, payload.Document)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		return session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.MachineAgentConfigWriteCommandResult{
+			Document: document,
+		})
 	case "agent.config.apply":
 		var payload protocol.AgentConfigApplyCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if strings.TrimSpace(payload.AgentType) != "" && payload.AgentType != runtimeName {
-			return session.CommandRejected(envelope.RequestID, envelope.Name, fmt.Sprintf("unsupported agentType %q", payload.AgentType), "")
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
 		}
-		result, err := mgr.ApplyConfig(runtimeName, payload.Document)
+		agentType := payload.Document.AgentType
+		if strings.TrimSpace(payload.AgentType) != "" {
+			agentType = domain.AgentType(payload.AgentType)
+		}
+		result, err := supervisor.ApplyConfigToType(agentType, payload.Document)
 		if err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
@@ -1079,7 +1223,11 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.SetSkillEnabled(runtimeName, payload.SkillID, payload.Enabled); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.SetSkillEnabled(agentID, payload.SkillID, payload.Enabled); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentSkillSetEnabledCommandResult{
@@ -1088,13 +1236,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.skill.create":
 		var payload protocol.EnvironmentSkillCreateCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		skillID, err := mgr.CreateSkill(runtimeName, agenttypes.CreateSkillParams{
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		skillID, err := mgr.CreateSkill(agentID, agenttypes.CreateSkillParams{
 			Name:        payload.Name,
 			Description: payload.Description,
 		})
@@ -1106,13 +1258,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.skill.delete":
 		var payload protocol.EnvironmentSkillDeleteCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.DeleteSkill(runtimeName, payload.SkillID); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.DeleteSkill(agentID, payload.SkillID); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentSkillDeleteCommandResult{
@@ -1120,13 +1276,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.mcp.upsert":
 		var payload protocol.EnvironmentMCPUpsertCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.UpsertMCPServer(runtimeName, payload.ServerID, payload.Config); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.UpsertMCPServer(agentID, payload.ServerID, payload.Config); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentMCPUpsertCommandResult{
@@ -1134,13 +1294,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.mcp.enable", "environment.mcp.disable":
 		var payload protocol.EnvironmentMCPSetEnabledCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.SetMCPServerEnabled(runtimeName, payload.ServerID, payload.Enabled); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.SetMCPServerEnabled(agentID, payload.ServerID, payload.Enabled); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentMCPSetEnabledCommandResult{
@@ -1149,13 +1313,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.mcp.remove":
 		var payload protocol.EnvironmentMCPRemoveCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.RemoveMCPServer(runtimeName, payload.ServerID); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.RemoveMCPServer(agentID, payload.ServerID); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentMCPRemoveCommandResult{
@@ -1163,13 +1331,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.plugin.install":
 		var payload protocol.EnvironmentPluginInstallCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.InstallPlugin(runtimeName, agenttypes.InstallPluginParams{
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.InstallPlugin(agentID, agenttypes.InstallPluginParams{
 			PluginID:        payload.PluginID,
 			MarketplacePath: payload.MarketplacePath,
 			PluginName:      payload.PluginName,
@@ -1181,13 +1353,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.plugin.enable", "environment.plugin.disable":
 		var payload protocol.EnvironmentPluginSetEnabledCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.SetPluginEnabled(runtimeName, payload.PluginID, payload.Enabled); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.SetPluginEnabled(agentID, payload.PluginID, payload.Enabled); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentPluginSetEnabledCommandResult{
@@ -1196,13 +1372,17 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	case "environment.plugin.uninstall":
 		var payload protocol.EnvironmentPluginUninstallCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
-		if err := mgr.UninstallPlugin(runtimeName, payload.PluginID); err != nil {
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := mgr.UninstallPlugin(agentID, payload.PluginID); err != nil {
 			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
 		}
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.EnvironmentPluginUninstallCommandResult{
@@ -1210,28 +1390,158 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, runtime
 		}); err != nil {
 			return err
 		}
-		return refreshEnvironmentSnapshot(session, mgr, runtimeName)
+		return refreshEnvironmentSnapshot(session, mgr, registry)
 	default:
 		return session.CommandRejected(envelope.RequestID, envelope.Name, "unsupported command", "")
 	}
 }
 
-func refreshThreadSnapshot(session *clientSession, mgr *manager.Manager, runtimeName string) error {
-	threads, err := mgr.Threads(runtimeName)
+func refreshThreadSnapshot(session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry) error {
+	snap, err := collectManagedSnapshot(session.machineID, mgr, registry)
 	if err != nil {
 		return err
 	}
 
-	return session.ThreadSnapshot(threads)
+	return session.ThreadSnapshot(snap.Threads)
 }
 
-func refreshEnvironmentSnapshot(session *clientSession, mgr *manager.Manager, runtimeName string) error {
-	environment, err := mgr.Environment(runtimeName)
+func refreshEnvironmentSnapshot(session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry) error {
+	snap, err := collectManagedSnapshot(session.machineID, mgr, registry)
 	if err != nil {
 		return err
 	}
 
-	return session.EnvironmentSnapshot(environment)
+	return session.EnvironmentSnapshot(snap.Environment)
+}
+
+func buildMachineSnapshot(machineID string, supervisor *manager.Supervisor) domain.Machine {
+	machine := domain.Machine{
+		ID:     machineID,
+		Name:   machineID,
+		Status: domain.MachineStatusOnline,
+	}
+	if supervisor == nil {
+		machine.RuntimeStatus = domain.MachineRuntimeStatusUnknown
+		return machine
+	}
+
+	machine.Agents = supervisor.AgentInstances()
+	machine.RuntimeStatus = domain.MachineRuntimeStatusStopped
+	for _, agent := range machine.Agents {
+		if agent.Status == domain.AgentInstanceStatusRunning {
+			machine.RuntimeStatus = domain.MachineRuntimeStatusRunning
+			break
+		}
+	}
+	return machine
+}
+
+func bindAllManagedRuntimeEvents(registry *agentregistry.Registry, session *clientSession, mgr *manager.Manager) bool {
+	if registry == nil {
+		return false
+	}
+
+	bound := false
+	for _, agentID := range registry.Names() {
+		if bindManagedRuntimeEvents(agentID, registry, session, mgr) {
+			bound = true
+		}
+	}
+	return bound
+}
+
+func bindManagedRuntimeEvents(agentID string, registry *agentregistry.Registry, session *clientSession, mgr *manager.Manager) bool {
+	if registry == nil || strings.TrimSpace(agentID) == "" {
+		return false
+	}
+	runtime, ok := registry.Get(agentID)
+	if !ok {
+		return false
+	}
+
+	streams := bindRuntimeTurnEvents(runtime, session, mgr, registry, agentID)
+	bindRuntimeApprovalEvents(runtime, session, agentID)
+	return streams
+}
+
+func runtimeStreamsTurnEventsForAgent(registry *agentregistry.Registry, agentID string) bool {
+	if registry == nil || strings.TrimSpace(agentID) == "" {
+		return false
+	}
+	runtime, ok := registry.Get(agentID)
+	if !ok {
+		return false
+	}
+	_, ok = runtime.(agenttypes.RuntimeTurnEventSource)
+	return ok
+}
+
+func collectManagedSnapshot(machineID string, mgr *manager.Manager, registry *agentregistry.Registry) (snapshot.Snapshot, error) {
+	if mgr == nil || registry == nil {
+		return snapshot.Snapshot{}, nil
+	}
+
+	threads := make([]domain.Thread, 0)
+	environment := make([]domain.EnvironmentResource, 0)
+	for _, agentID := range registry.Names() {
+		agentThreads, err := mgr.Threads(agentID)
+		if err != nil {
+			return snapshot.Snapshot{}, err
+		}
+		for _, thread := range agentThreads {
+			if thread.MachineID == "" {
+				thread.MachineID = machineID
+			}
+			if thread.AgentID == "" {
+				thread.AgentID = agentID
+			}
+			threads = append(threads, thread)
+		}
+
+		agentEnvironment, err := mgr.Environment(agentID)
+		if err != nil {
+			return snapshot.Snapshot{}, err
+		}
+		for _, resource := range agentEnvironment {
+			if resource.MachineID == "" {
+				resource.MachineID = machineID
+			}
+			if resource.AgentID == "" {
+				resource.AgentID = agentID
+			}
+			environment = append(environment, resource)
+		}
+	}
+
+	sort.Slice(threads, func(i int, j int) bool {
+		if threads[i].ThreadID == threads[j].ThreadID {
+			return threads[i].AgentID < threads[j].AgentID
+		}
+		return threads[i].ThreadID < threads[j].ThreadID
+	})
+	sort.Slice(environment, func(i int, j int) bool {
+		if environment[i].Kind == environment[j].Kind {
+			if environment[i].ResourceID == environment[j].ResourceID {
+				return environment[i].AgentID < environment[j].AgentID
+			}
+			return environment[i].ResourceID < environment[j].ResourceID
+		}
+		return environment[i].Kind < environment[j].Kind
+	})
+
+	return snapshot.Snapshot{
+		Threads:     threads,
+		Environment: environment,
+	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) bool {

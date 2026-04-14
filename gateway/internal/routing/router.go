@@ -8,25 +8,32 @@ import (
 
 type Router struct {
 	mu      sync.RWMutex
-	threads map[string]string
+	threads map[string]domain.ThreadRoute
 }
 
 func NewRouter() *Router {
-	return &Router{threads: map[string]string{}}
+	return &Router{threads: map[string]domain.ThreadRoute{}}
 }
 
-func (r *Router) TrackThread(threadID string, machineID string) {
+func (r *Router) TrackThread(threadID string, machineID string, agentID string) {
+	if threadID == "" {
+		return
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.threads[threadID] = machineID
+	r.threads[threadID] = domain.ThreadRoute{
+		MachineID: machineID,
+		AgentID:   agentID,
+	}
 }
 
 func (r *Router) ReplaceSnapshot(machineID string, threads []domain.Thread) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for threadID, ownerMachineID := range r.threads {
-		if ownerMachineID == machineID {
+	for threadID, route := range r.threads {
+		if route.MachineID == machineID {
 			delete(r.threads, threadID)
 		}
 	}
@@ -40,7 +47,10 @@ func (r *Router) ReplaceSnapshot(machineID string, threads []domain.Thread) {
 		if ownerMachineID == "" {
 			ownerMachineID = machineID
 		}
-		r.threads[thread.ThreadID] = ownerMachineID
+		r.threads[thread.ThreadID] = domain.ThreadRoute{
+			MachineID: ownerMachineID,
+			AgentID:   thread.AgentID,
+		}
 	}
 }
 
@@ -52,16 +62,16 @@ func (r *Router) ClearMachine(machineID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	for threadID, ownerMachineID := range r.threads {
-		if ownerMachineID == machineID {
+	for threadID, route := range r.threads {
+		if route.MachineID == machineID {
 			delete(r.threads, threadID)
 		}
 	}
 }
 
-func (r *Router) ResolveThread(threadID string) (string, bool) {
+func (r *Router) ResolveThread(threadID string) (domain.ThreadRoute, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	machineID, ok := r.threads[threadID]
-	return machineID, ok
+	route, ok := r.threads[threadID]
+	return route, ok
 }

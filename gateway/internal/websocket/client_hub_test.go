@@ -353,9 +353,9 @@ func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 		return environment[0].ResourceID == "skill-01" && environment[0].MachineID == "machine-01"
 	})
 
-	machineID, ok := router.ResolveThread("thread-01")
-	if !ok || machineID != "machine-01" {
-		t.Fatalf("router resolved (%q, %v)", machineID, ok)
+	route, ok := router.ResolveThread("thread-01")
+	if !ok || route.MachineID != "machine-01" {
+		t.Fatalf("router resolved (%+v, %v)", route, ok)
 	}
 }
 
@@ -540,8 +540,8 @@ func TestClientHubDisconnectPreservesUnknownThreadsAndClearsRoutes(t *testing.T)
 		return len(idx.Threads()) == 1 && len(idx.Environment(domain.EnvironmentKindSkill)) == 1
 	})
 	waitForCondition(t, 2*time.Second, func() bool {
-		machineID, ok := router.ResolveThread("thread-01")
-		return ok && machineID == "machine-01"
+		route, ok := router.ResolveThread("thread-01")
+		return ok && route.MachineID == "machine-01"
 	})
 
 	if err := conn.Close(websocket.StatusNormalClosure, "disconnect"); err != nil {

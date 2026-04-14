@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { buildThreadApiPath, http } from "../common/api/http";
 import type {
+  CreateThreadResponse,
   MachineSummary,
   ThreadDetailResponse,
   ThreadSummary,
@@ -202,6 +203,7 @@ export function useConsoleHost({
           name: thread.machineId,
           status: "unknown",
           runtimeStatus: "unknown",
+          agents: [],
         });
       }
     });
@@ -213,20 +215,30 @@ export function useConsoleHost({
       const machineThreads = hub.threadSummaries.filter(
         (thread) => thread.machineId === machine.id,
       );
-      const hasActiveThread = machineThreads.some((thread) => thread.status === "active");
-      const agent: ConsoleAgentInfo = {
-        id: `${machine.id}-codex`,
-        name: "Codex",
-        type: "codex",
-        model: "codex",
-        status: hasActiveThread ? "active" : "idle",
-        port: 0,
-      };
+      const agents: ConsoleAgentInfo[] = (machine.agents ?? []).map((agent) => {
+        const agentThreads = machineThreads.filter((thread) => thread.agentId === agent.agentId);
+        const hasActiveThread = agentThreads.some((thread) => thread.status === "active");
+        return {
+          id: agent.agentId,
+          name: agent.displayName,
+          type: agent.agentType,
+          model: agent.agentType,
+          status:
+            agent.status === "running"
+              ? hasActiveThread
+                ? "active"
+                : "idle"
+              : "offline",
+          port: 0,
+        };
+      });
       const sessions = machineThreads.map((thread) => ({
         id: thread.threadId,
         title: thread.title || thread.threadId,
-        agentName: agent.name,
-        model: agent.model,
+        agentName:
+          agents.find((agent) => agent.id === thread.agentId)?.name ?? "Unknown agent",
+        model:
+          agents.find((agent) => agent.id === thread.agentId)?.model ?? "unknown",
         status: thread.status,
         lastActivity: formatThreadStatus(thread.status),
         messages: [],
@@ -237,7 +249,7 @@ export function useConsoleHost({
         name: machine.name || machine.id,
         status: machine.status,
         runtimeStatus: machine.runtimeStatus ?? "unknown",
-        agents: [agent],
+        agents,
         sessions,
       };
     });
@@ -293,15 +305,26 @@ export function useConsoleHost({
   }, [navigate]);
 
   const handleCreateThread = useCallback(
-    async (machineId: string, _agentId: string, title: string) => {
+    async (machineId: string, agentId: string, title: string) => {
       const nextTitle = title.trim();
-      if (!machineId || nextTitle === "") {
+      if (!machineId || !agentId || nextTitle === "") {
         return;
       }
 
-      const created = await hub.handleCreateThread(machineId, nextTitle);
-      if (created?.threadId) {
-        navigate(`/threads/${created.threadId}`);
+      const created = await http<CreateThreadResponse>("/threads", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          machineId,
+          agentId,
+          title: nextTitle,
+        }),
+      });
+      await hub.reload();
+      if (created?.thread?.threadId) {
+        navigate(`/threads/${created.thread.threadId}`);
       }
     },
     [hub, navigate],
@@ -325,6 +348,59 @@ export function useConsoleHost({
     [hub],
   );
 
+  const handleInstallAgent = useCallback(
+    async (machineId: string, agentType: string, agentName: string) => {
+      if (!machineId || !agentType || !agentName.trim()) {
+        return;
+      }
+
+      await http(`/machines/${encodeURIComponent(machineId)}/agents`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          agentType,
+          displayName: agentName.trim(),
+        }),
+      });
+      await hub.reload();
+    },
+    [hub],
+  );
+
+  const handleDeleteAgent = useCallback(
+    async (machineId: string, agentId: string) => {
+      if (!machineId || !agentId) {
+        return;
+      }
+
+      await http(`/machines/${encodeURIComponent(machineId)}/agents/${encodeURIComponent(agentId)}`, {
+        method: "DELETE",
+      });
+      await hub.reload();
+    },
+    [hub],
+  );
+
+  const handleUpdateAgentConfig = useCallback(
+    async (machineId: string, agentId: string, config: string) => {
+      if (!machineId || !agentId) {
+        return;
+      }
+
+      await http(`/machines/${encodeURIComponent(machineId)}/agents/${encodeURIComponent(agentId)}/config`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ content: config }),
+      });
+      await hub.reload();
+    },
+    [hub],
+  );
+
   return {
     activePage,
     machines: consoleMachines,
@@ -343,5 +419,8 @@ export function useConsoleHost({
     onDeleteSession: handleDeleteSession,
     onCreateThread: handleCreateThread,
     onRenameSession: handleRenameSession,
+    onInstallAgent: handleInstallAgent,
+    onDeleteAgent: handleDeleteAgent,
+    onUpdateAgentConfig: handleUpdateAgentConfig,
   };
 }

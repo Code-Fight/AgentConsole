@@ -18,4 +18,5 @@ type Machine struct {
 	Name          string               `json:"name"`
 	Status        MachineStatus        `json:"status"`
 	RuntimeStatus MachineRuntimeStatus `json:"runtimeStatus,omitempty"`
+	Agents        []AgentInstance      `json:"agents,omitempty"`
 }

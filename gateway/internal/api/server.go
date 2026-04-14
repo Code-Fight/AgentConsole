@@ -45,6 +45,7 @@ type threadDeleteResponse struct {
 
 type createThreadRequest struct {
 	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
 	Title     string `json:"title"`
 }
 
@@ -63,25 +64,34 @@ type approvalRespondRequest struct {
 
 type environmentMutationRequest struct {
 	MachineID string `json:"machineId"`
+	AgentID   string `json:"agentId"`
 }
 
 type environmentSkillCreateRequest struct {
 	MachineID   string `json:"machineId"`
+	AgentID     string `json:"agentId"`
 	Name        string `json:"name"`
 	Description string `json:"description"`
 }
 
 type environmentMCPUpsertRequest struct {
 	MachineID  string         `json:"machineId"`
+	AgentID    string         `json:"agentId"`
 	ResourceID string         `json:"resourceId"`
 	Config     map[string]any `json:"config"`
 }
 
 type environmentPluginInstallRequest struct {
 	MachineID       string `json:"machineId"`
+	AgentID         string `json:"agentId"`
 	PluginID        string `json:"pluginId"`
 	PluginName      string `json:"pluginName"`
 	MarketplacePath string `json:"marketplacePath"`
+}
+
+type machineAgentInstallRequest struct {
+	AgentType   string `json:"agentType"`
+	DisplayName string `json:"displayName"`
 }
 
 type configDocumentRequest struct {
@@ -107,18 +117,24 @@ type threadUpdateEmitter interface {
 	EmitThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string)
 }
 
-func resolveThreadMachineID(router *routing.Router, idx *runtimeindex.Store, threadID string) (string, bool) {
+func resolveThreadRoute(router *routing.Router, idx *runtimeindex.Store, threadID string) (domain.ThreadRoute, bool) {
 	if router != nil {
-		if machineID, ok := router.ResolveThread(threadID); ok {
-			return machineID, true
+		if route, ok := router.ResolveThread(threadID); ok {
+			return route, true
 		}
 	}
 	if idx != nil {
+		if route, ok := idx.ThreadRoute(threadID); ok && strings.TrimSpace(route.MachineID) != "" {
+			return route, true
+		}
 		if thread, ok := findThread(idx, threadID); ok && strings.TrimSpace(thread.MachineID) != "" {
-			return thread.MachineID, true
+			return domain.ThreadRoute{
+				MachineID: thread.MachineID,
+				AgentID:   thread.AgentID,
+			}, true
 		}
 	}
-	return "", false
+	return domain.ThreadRoute{}, false
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -160,41 +176,81 @@ func applyThreadTitleOverride(thread domain.Thread, overrides map[string]string)
 	return thread
 }
 
-func findEnvironmentResource(idx *runtimeindex.Store, kind domain.EnvironmentKind, machineID string, resourceID string) (domain.EnvironmentResource, bool) {
+func upsertMachineAgent(items []domain.AgentInstance, agent domain.AgentInstance) []domain.AgentInstance {
+	if strings.TrimSpace(agent.AgentID) == "" {
+		return append([]domain.AgentInstance(nil), items...)
+	}
+
+	next := append([]domain.AgentInstance(nil), items...)
+	for idx := range next {
+		if next[idx].AgentID != agent.AgentID {
+			continue
+		}
+		next[idx] = agent
+		return next
+	}
+	return append(next, agent)
+}
+
+func removeMachineAgent(items []domain.AgentInstance, agentID string) []domain.AgentInstance {
+	if strings.TrimSpace(agentID) == "" {
+		return append([]domain.AgentInstance(nil), items...)
+	}
+
+	next := make([]domain.AgentInstance, 0, len(items))
+	for _, item := range items {
+		if item.AgentID == agentID {
+			continue
+		}
+		next = append(next, item)
+	}
+	return next
+}
+
+func findEnvironmentResource(idx *runtimeindex.Store, kind domain.EnvironmentKind, machineID string, agentID string, resourceID string) (domain.EnvironmentResource, bool) {
 	if idx == nil || strings.TrimSpace(machineID) == "" || strings.TrimSpace(resourceID) == "" {
 		return domain.EnvironmentResource{}, false
 	}
 	for _, resource := range idx.Environment(kind) {
 		if resource.ResourceID == resourceID && resource.MachineID == machineID {
+			if strings.TrimSpace(agentID) != "" && resource.AgentID != agentID {
+				continue
+			}
 			return resource, true
 		}
 	}
 	return domain.EnvironmentResource{}, false
 }
 
-func resolveEnvironmentMutationMachineID(r *http.Request) (string, error) {
+func decodeEnvironmentMutationRequest(r *http.Request) (environmentMutationRequest, error) {
+	var req environmentMutationRequest
 	if r == nil {
-		return "", nil
+		return req, nil
 	}
 
-	machineID := strings.TrimSpace(r.URL.Query().Get("machineId"))
-	if machineID != "" {
-		return machineID, nil
-	}
+	req.MachineID = strings.TrimSpace(r.URL.Query().Get("machineId"))
+	req.AgentID = strings.TrimSpace(r.URL.Query().Get("agentId"))
 
 	if r.Body == nil {
-		return "", nil
+		return req, nil
 	}
 
-	var req environmentMutationRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var body environmentMutationRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		if err == io.EOF {
-			return "", nil
+			return req, nil
 		}
-		return "", err
+		return environmentMutationRequest{}, err
 	}
 
-	return strings.TrimSpace(req.MachineID), nil
+	if req.MachineID == "" {
+		req.MachineID = strings.TrimSpace(body.MachineID)
+	}
+	if req.AgentID == "" {
+		req.AgentID = strings.TrimSpace(body.AgentID)
+	}
+
+	return req, nil
 }
 
 func decodeEnvironmentMCPUpsertRequest(r *http.Request) (environmentMCPUpsertRequest, error) {
@@ -219,6 +275,7 @@ func decodeEnvironmentPluginInstallRequest(r *http.Request) (environmentPluginIn
 	}
 
 	req.MachineID = strings.TrimSpace(r.URL.Query().Get("machineId"))
+	req.AgentID = strings.TrimSpace(r.URL.Query().Get("agentId"))
 	if r.Body == nil {
 		return req, nil
 	}
@@ -232,6 +289,9 @@ func decodeEnvironmentPluginInstallRequest(r *http.Request) (environmentPluginIn
 	}
 	if req.MachineID == "" {
 		req.MachineID = strings.TrimSpace(body.MachineID)
+	}
+	if req.AgentID == "" {
+		req.AgentID = strings.TrimSpace(body.AgentID)
 	}
 	req.PluginID = strings.TrimSpace(body.PluginID)
 	req.PluginName = strings.TrimSpace(body.PluginName)
@@ -254,7 +314,7 @@ func stringDetail(resource domain.EnvironmentResource, key string) string {
 	return strings.TrimSpace(stringValue)
 }
 
-func allowedMarketplacePaths(idx *runtimeindex.Store, machineID string) map[string]struct{} {
+func allowedMarketplacePaths(idx *runtimeindex.Store, machineID string, agentID string) map[string]struct{} {
 	if idx == nil || strings.TrimSpace(machineID) == "" {
 		return nil
 	}
@@ -262,6 +322,9 @@ func allowedMarketplacePaths(idx *runtimeindex.Store, machineID string) map[stri
 	allowed := map[string]struct{}{}
 	for _, resource := range idx.Environment(domain.EnvironmentKindPlugin) {
 		if resource.MachineID != machineID {
+			continue
+		}
+		if strings.TrimSpace(agentID) != "" && resource.AgentID != agentID {
 			continue
 		}
 		path := stringDetail(resource, "marketplacePath")
@@ -366,8 +429,8 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 		StartTurn:                   hasSender && threadRouting,
 		SteerTurn:                   hasSender && threadRouting,
 		InterruptTurn:               hasSender && threadRouting,
-		MachineInstallAgent:         false,
-		MachineRemoveAgent:          false,
+		MachineInstallAgent:         hasSender && hasRegistry,
+		MachineRemoveAgent:          hasSender && hasRegistry,
 		EnvironmentSyncCatalog:      false,
 		EnvironmentRestartBridge:    false,
 		EnvironmentOpenMarketplace:  false,
@@ -381,7 +444,7 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 		SettingsMachineOverride:     hasSettings,
 		SettingsApplyMachine:        hasSettings && hasSender,
 		DashboardMetrics:            false,
-		AgentLifecycle:              false,
+		AgentLifecycle:              hasSender && hasRegistry,
 	}
 }
 
@@ -676,6 +739,201 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		})
 	})
 
+	mux.HandleFunc("POST /machines/{machineId}/agents", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if r.Body == nil {
+			http.Error(w, "request body is required", http.StatusBadRequest)
+			return
+		}
+
+		var req machineAgentInstallRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			if err == io.EOF {
+				http.Error(w, "request body is required", http.StatusBadRequest)
+				return
+			}
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if _, ok := resolveAgentType(req.AgentType); !ok {
+			http.Error(w, "agentType is not supported", http.StatusNotFound)
+			return
+		}
+		if strings.TrimSpace(req.DisplayName) == "" {
+			http.Error(w, "displayName is required", http.StatusBadRequest)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "machine.agent.install", protocol.MachineAgentInstallCommandPayload{
+			AgentType:   req.AgentType,
+			DisplayName: req.DisplayName,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.MachineAgentInstallCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			http.Error(w, "invalid machine.agent.install result", http.StatusBadGateway)
+			return
+		}
+
+		if reg != nil {
+			machine, ok := reg.Get(machineID)
+			if !ok {
+				machine = domain.Machine{
+					ID:     machineID,
+					Name:   machineID,
+					Status: domain.MachineStatusOnline,
+				}
+			}
+			machine.Agents = upsertMachineAgent(machine.Agents, result.Agent)
+			reg.Upsert(machine)
+		}
+
+		writeJSON(w, http.StatusCreated, map[string]any{"agent": result.Agent})
+	})
+
+	mux.HandleFunc("DELETE /machines/{machineId}/agents/{agentId}", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentID := strings.TrimSpace(r.PathValue("agentId"))
+		if agentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
+
+		if _, err := sender.SendCommand(r.Context(), machineID, "machine.agent.delete", protocol.MachineAgentDeleteCommandPayload{
+			AgentID: agentID,
+		}); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		if reg != nil {
+			if machine, ok := reg.Get(machineID); ok {
+				machine.Agents = removeMachineAgent(machine.Agents, agentID)
+				reg.Upsert(machine)
+			}
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+
+	mux.HandleFunc("GET /machines/{machineId}/agents/{agentId}/config", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentID := strings.TrimSpace(r.PathValue("agentId"))
+		if agentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "machine.agent.config.read", protocol.MachineAgentConfigReadCommandPayload{
+			AgentID: agentID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.MachineAgentConfigReadCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			http.Error(w, "invalid machine.agent.config.read result", http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"document": result.Document})
+	})
+
+	mux.HandleFunc("PUT /machines/{machineId}/agents/{agentId}/config", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentID := strings.TrimSpace(r.PathValue("agentId"))
+		if agentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
+		req, err := decodeConfigDocumentRequest(r)
+		if err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if strings.TrimSpace(req.Content) == "" {
+			http.Error(w, "content is required", http.StatusBadRequest)
+			return
+		}
+		if err := validateTOMLContent(req.Content); err != nil {
+			http.Error(w, "content must be valid toml", http.StatusBadRequest)
+			return
+		}
+
+		agentType := domain.AgentTypeCodex
+		if reg != nil {
+			if machine, ok := reg.Get(machineID); ok {
+				for _, agent := range machine.Agents {
+					if agent.AgentID == agentID && agent.AgentType != "" {
+						agentType = agent.AgentType
+						break
+					}
+				}
+			}
+		}
+		document := domain.AgentConfigDocument{
+			AgentType: agentType,
+			Format:    domain.AgentConfigFormatTOML,
+			Content:   req.Content,
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "machine.agent.config.write", protocol.MachineAgentConfigWriteCommandPayload{
+			AgentID:  agentID,
+			Document: document,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.MachineAgentConfigWriteCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			http.Error(w, "invalid machine.agent.config.write result", http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"document": result.Document})
+	})
+
 	mux.HandleFunc("GET /machines", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": reg.List()})
 	})
@@ -765,20 +1023,24 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		activeTurnID := resolveActiveTurnID(sender, threadID)
 
 		if sender != nil && router != nil {
-			if machineID, ok := router.ResolveThread(threadID); ok {
-				liveReadRequired := machineIsOnline(reg, machineID)
-				completed, err := sender.SendCommand(r.Context(), machineID, "thread.read", protocol.ThreadReadCommandPayload{
+			if route, ok := router.ResolveThread(threadID); ok {
+				liveReadRequired := machineIsOnline(reg, route.MachineID)
+				completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.read", protocol.ThreadReadCommandPayload{
 					ThreadID: threadID,
+					AgentID:  route.AgentID,
 				})
 				if err == nil {
 					var result protocol.ThreadReadCommandResult
 					if err := json.Unmarshal(completed.Result, &result); err == nil {
 						if result.Thread.MachineID == "" {
-							result.Thread.MachineID = machineID
+							result.Thread.MachineID = route.MachineID
+						}
+						if result.Thread.AgentID == "" {
+							result.Thread.AgentID = route.AgentID
 						}
 						result.Thread = applyThreadTitleOverride(result.Thread, overrides)
 						if strings.TrimSpace(result.Thread.ThreadID) != "" {
-							router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+							router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID, result.Thread.AgentID)
 							if idx != nil {
 								idx.UpsertThread(result.Thread.MachineID, result.Thread)
 							}
@@ -831,9 +1093,14 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			http.Error(w, "machineId is required", http.StatusBadRequest)
 			return
 		}
+		if strings.TrimSpace(req.AgentID) == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
 
 		completed, err := sender.SendCommand(r.Context(), req.MachineID, "thread.create", protocol.ThreadCreateCommandPayload{
-			Title: req.Title,
+			AgentID: req.AgentID,
+			Title:   req.Title,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -848,9 +1115,12 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		if result.Thread.MachineID == "" {
 			result.Thread.MachineID = req.MachineID
 		}
+		if result.Thread.AgentID == "" {
+			result.Thread.AgentID = req.AgentID
+		}
 		result.Thread = applyThreadTitleOverride(result.Thread, resolveThreadTitleOverrides(settingsStore))
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
-			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID, result.Thread.AgentID)
 		}
 		if idx != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			idx.UpsertThread(result.Thread.MachineID, result.Thread)
@@ -884,10 +1154,11 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		thread, ok := findThread(idx, threadID)
 		if !ok {
-			if machineID, ok := resolveThreadMachineID(router, idx, threadID); ok {
+			if route, ok := resolveThreadRoute(router, idx, threadID); ok {
 				thread = domain.Thread{
 					ThreadID:  threadID,
-					MachineID: machineID,
+					MachineID: route.MachineID,
+					AgentID:   route.AgentID,
 					Status:    domain.ThreadStatusUnknown,
 				}
 			} else {
@@ -922,6 +1193,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		if emitter, ok := sender.(threadUpdateEmitter); ok {
 			emitter.EmitThreadUpdated(protocol.ThreadUpdatedPayload{
 				MachineID: thread.MachineID,
+				AgentID:   thread.AgentID,
 				ThreadID:  thread.ThreadID,
 				Thread:    &thread,
 			}, time.Now().UTC().Format(time.RFC3339))
@@ -942,14 +1214,15 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, idx, threadID)
+		route, ok := resolveThreadRoute(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
 		}
 
-		completed, err := sender.SendCommand(r.Context(), machineID, "thread.resume", protocol.ThreadResumeCommandPayload{
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.resume", protocol.ThreadResumeCommandPayload{
 			ThreadID: threadID,
+			AgentID:  route.AgentID,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -962,11 +1235,14 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 		if result.Thread.MachineID == "" {
-			result.Thread.MachineID = machineID
+			result.Thread.MachineID = route.MachineID
+		}
+		if result.Thread.AgentID == "" {
+			result.Thread.AgentID = route.AgentID
 		}
 		result.Thread = applyThreadTitleOverride(result.Thread, resolveThreadTitleOverrides(settingsStore))
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
-			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID)
+			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID, result.Thread.AgentID)
 		}
 		if idx != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			idx.UpsertThread(result.Thread.MachineID, result.Thread)
@@ -988,14 +1264,15 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, idx, threadID)
+		route, ok := resolveThreadRoute(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
 		}
 
-		completed, err := sender.SendCommand(r.Context(), machineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
 			ThreadID: threadID,
+			AgentID:  route.AgentID,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1036,9 +1313,10 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		archived := false
 		if sender != nil {
-			if machineID, ok := resolveThreadMachineID(router, idx, threadID); ok {
-				completed, err := sender.SendCommand(r.Context(), machineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
+			if route, ok := resolveThreadRoute(router, idx, threadID); ok {
+				completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
 					ThreadID: threadID,
+					AgentID:  route.AgentID,
 				})
 				if err == nil {
 					var result protocol.ThreadArchiveCommandResult
@@ -1051,12 +1329,16 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		markDeleted(threadID)
 		if emitter, ok := sender.(threadUpdateEmitter); ok {
-			machineID := thread.MachineID
-			if machineID == "" {
-				machineID, _ = resolveThreadMachineID(router, idx, threadID)
+			route := domain.ThreadRoute{
+				MachineID: thread.MachineID,
+				AgentID:   thread.AgentID,
+			}
+			if route.MachineID == "" {
+				route, _ = resolveThreadRoute(router, idx, threadID)
 			}
 			emitter.EmitThreadUpdated(protocol.ThreadUpdatedPayload{
-				MachineID: machineID,
+				MachineID: route.MachineID,
+				AgentID:   route.AgentID,
 				ThreadID:  threadID,
 			}, time.Now().UTC().Format(time.RFC3339))
 		}
@@ -1079,7 +1361,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, idx, threadID)
+		route, ok := resolveThreadRoute(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
@@ -1091,8 +1373,9 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		completed, err := sender.SendCommand(r.Context(), machineID, "turn.start", protocol.TurnStartCommandPayload{
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "turn.start", protocol.TurnStartCommandPayload{
 			ThreadID: threadID,
+			AgentID:  route.AgentID,
 			Input:    req.Input,
 		})
 		if err != nil {
@@ -1122,7 +1405,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, idx, threadID)
+		route, ok := resolveThreadRoute(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
@@ -1134,9 +1417,10 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		completed, err := sender.SendCommand(r.Context(), machineID, "turn.steer", protocol.TurnSteerCommandPayload{
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "turn.steer", protocol.TurnSteerCommandPayload{
 			ThreadID: threadID,
 			TurnID:   turnID,
+			AgentID:  route.AgentID,
 			Input:    req.Input,
 		})
 		if err != nil {
@@ -1166,15 +1450,16 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, ok := resolveThreadMachineID(router, idx, threadID)
+		route, ok := resolveThreadRoute(router, idx, threadID)
 		if !ok {
 			http.Error(w, "thread route not found", http.StatusNotFound)
 			return
 		}
 
-		completed, err := sender.SendCommand(r.Context(), machineID, "turn.interrupt", protocol.TurnInterruptCommandPayload{
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "turn.interrupt", protocol.TurnInterruptCommandPayload{
 			ThreadID: threadID,
 			TurnID:   turnID,
+			AgentID:  route.AgentID,
 		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1299,12 +1584,17 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			http.Error(w, "machineId is required", http.StatusBadRequest)
 			return
 		}
+		if strings.TrimSpace(req.AgentID) == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
 		if strings.TrimSpace(req.Name) == "" {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
 
 		completed, err := sender.SendCommand(r.Context(), req.MachineID, "environment.skill.create", protocol.EnvironmentSkillCreateCommandPayload{
+			AgentID:     req.AgentID,
 			Name:        req.Name,
 			Description: req.Description,
 		})
@@ -1335,18 +1625,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		skillID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, machineID, skillID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, req.MachineID, req.AgentID, skillID)
 		if !ok {
 			http.Error(w, "skill not found", http.StatusNotFound)
 			return
@@ -1354,6 +1648,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.skill.enable", protocol.EnvironmentSkillSetEnabledCommandPayload{
 			SkillID: skillID,
+			AgentID: resource.AgentID,
 			Enabled: true,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1369,18 +1664,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		skillID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, machineID, skillID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, req.MachineID, req.AgentID, skillID)
 		if !ok {
 			http.Error(w, "skill not found", http.StatusNotFound)
 			return
@@ -1388,6 +1687,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.skill.disable", protocol.EnvironmentSkillSetEnabledCommandPayload{
 			SkillID: skillID,
+			AgentID: resource.AgentID,
 			Enabled: false,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1403,18 +1703,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		skillID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, machineID, skillID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindSkill, req.MachineID, req.AgentID, skillID)
 		if !ok {
 			http.Error(w, "skill not found", http.StatusNotFound)
 			return
@@ -1422,6 +1726,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.skill.delete", protocol.EnvironmentSkillDeleteCommandPayload{
 			SkillID: skillID,
+			AgentID: resource.AgentID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -1436,18 +1741,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		pluginID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, req.MachineID, req.AgentID, pluginID)
 		if !ok {
 			http.Error(w, "plugin not found", http.StatusNotFound)
 			return
@@ -1455,6 +1764,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.uninstall", protocol.EnvironmentPluginUninstallCommandPayload{
 			PluginID: pluginID,
+			AgentID:  resource.AgentID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -1478,6 +1788,10 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			http.Error(w, "machineId is required", http.StatusBadRequest)
 			return
 		}
+		if strings.TrimSpace(req.AgentID) == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
 		if strings.TrimSpace(req.ResourceID) == "" {
 			http.Error(w, "resourceId is required", http.StatusBadRequest)
 			return
@@ -1485,6 +1799,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), req.MachineID, "environment.mcp.upsert", protocol.EnvironmentMCPUpsertCommandPayload{
 			ServerID: req.ResourceID,
+			AgentID:  req.AgentID,
 			Config:   req.Config,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1500,18 +1815,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		serverID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, machineID, serverID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, req.MachineID, req.AgentID, serverID)
 		if !ok {
 			http.Error(w, "mcp not found", http.StatusNotFound)
 			return
@@ -1519,6 +1838,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.mcp.enable", protocol.EnvironmentMCPSetEnabledCommandPayload{
 			ServerID: serverID,
+			AgentID:  resource.AgentID,
 			Enabled:  true,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1534,18 +1854,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		serverID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, machineID, serverID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, req.MachineID, req.AgentID, serverID)
 		if !ok {
 			http.Error(w, "mcp not found", http.StatusNotFound)
 			return
@@ -1553,6 +1877,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.mcp.disable", protocol.EnvironmentMCPSetEnabledCommandPayload{
 			ServerID: serverID,
+			AgentID:  resource.AgentID,
 			Enabled:  false,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1568,18 +1893,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		serverID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, machineID, serverID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindMCP, req.MachineID, req.AgentID, serverID)
 		if !ok {
 			http.Error(w, "mcp not found", http.StatusNotFound)
 			return
@@ -1587,6 +1916,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.mcp.remove", protocol.EnvironmentMCPRemoveCommandPayload{
 			ServerID: serverID,
+			AgentID:  resource.AgentID,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 			return
@@ -1610,13 +1940,17 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			http.Error(w, "machineId is required", http.StatusBadRequest)
 			return
 		}
+		if strings.TrimSpace(req.AgentID) == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
 
 		pluginID := r.PathValue("id")
 		if strings.TrimSpace(req.PluginID) != "" && req.PluginID != pluginID {
 			http.Error(w, "pluginId does not match path", http.StatusBadRequest)
 			return
 		}
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, req.MachineID, pluginID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, req.MachineID, req.AgentID, pluginID)
 		if !ok {
 			http.Error(w, "plugin not found", http.StatusNotFound)
 			return
@@ -1624,7 +1958,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		pluginInstallID := pluginID
 		marketplacePath := strings.TrimSpace(req.MarketplacePath)
 		pluginName := strings.TrimSpace(req.PluginName)
-		allowedMarketplaces := allowedMarketplacePaths(idx, req.MachineID)
+		allowedMarketplaces := allowedMarketplacePaths(idx, req.MachineID, req.AgentID)
 		if marketplacePath != "" {
 			if _, ok := allowedMarketplaces[marketplacePath]; !ok {
 				http.Error(w, "marketplacePath is not recognized", http.StatusBadRequest)
@@ -1655,6 +1989,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.install", protocol.EnvironmentPluginInstallCommandPayload{
 			PluginID:        pluginInstallID,
+			AgentID:         resource.AgentID,
 			MarketplacePath: marketplacePath,
 			PluginName:      pluginName,
 		}); err != nil {
@@ -1680,6 +2015,10 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			http.Error(w, "machineId is required", http.StatusBadRequest)
 			return
 		}
+		if strings.TrimSpace(req.AgentID) == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
 		if strings.TrimSpace(req.PluginName) == "" {
 			http.Error(w, "pluginName is required", http.StatusBadRequest)
 			return
@@ -1689,7 +2028,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		allowedMarketplaces := allowedMarketplacePaths(idx, req.MachineID)
+		allowedMarketplaces := allowedMarketplacePaths(idx, req.MachineID, req.AgentID)
 		if _, ok := allowedMarketplaces[strings.TrimSpace(req.MarketplacePath)]; !ok {
 			http.Error(w, "marketplacePath is not recognized", http.StatusBadRequest)
 			return
@@ -1702,6 +2041,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), req.MachineID, "environment.plugin.install", protocol.EnvironmentPluginInstallCommandPayload{
 			PluginID:        pluginID,
+			AgentID:         req.AgentID,
 			MarketplacePath: strings.TrimSpace(req.MarketplacePath),
 			PluginName:      strings.TrimSpace(req.PluginName),
 		}); err != nil {
@@ -1718,18 +2058,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		pluginID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, req.MachineID, req.AgentID, pluginID)
 		if !ok {
 			http.Error(w, "plugin not found", http.StatusNotFound)
 			return
@@ -1737,6 +2081,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.enable", protocol.EnvironmentPluginSetEnabledCommandPayload{
 			PluginID: pluginID,
+			AgentID:  resource.AgentID,
 			Enabled:  true,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
@@ -1752,18 +2097,22 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 
-		machineID, err := resolveEnvironmentMutationMachineID(r)
+		req, err := decodeEnvironmentMutationRequest(r)
 		if err != nil {
 			http.Error(w, "invalid json body", http.StatusBadRequest)
 			return
 		}
-		if machineID == "" {
+		if req.MachineID == "" {
 			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		if req.AgentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
 			return
 		}
 
 		pluginID := r.PathValue("id")
-		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, machineID, pluginID)
+		resource, ok := findEnvironmentResource(idx, domain.EnvironmentKindPlugin, req.MachineID, req.AgentID, pluginID)
 		if !ok {
 			http.Error(w, "plugin not found", http.StatusNotFound)
 			return
@@ -1771,6 +2120,7 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 
 		if _, err := sender.SendCommand(r.Context(), resource.MachineID, "environment.plugin.disable", protocol.EnvironmentPluginSetEnabledCommandPayload{
 			PluginID: pluginID,
+			AgentID:  resource.AgentID,
 			Enabled:  false,
 		}); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)

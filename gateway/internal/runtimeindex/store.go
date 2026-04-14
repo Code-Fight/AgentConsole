@@ -10,12 +10,14 @@ type Store struct {
 	mu                   sync.RWMutex
 	threadsByMachine     map[string][]domain.Thread
 	environmentByMachine map[string][]domain.EnvironmentResource
+	threadRoutes         map[string]domain.ThreadRoute
 }
 
 func NewStore() *Store {
 	return &Store{
 		threadsByMachine:     map[string][]domain.Thread{},
 		environmentByMachine: map[string][]domain.EnvironmentResource{},
+		threadRoutes:         map[string]domain.ThreadRoute{},
 	}
 }
 
@@ -25,6 +27,24 @@ func (s *Store) ReplaceSnapshot(machineID string, threads []domain.Thread, envir
 
 	s.threadsByMachine[machineID] = cloneThreads(threads)
 	s.environmentByMachine[machineID] = cloneEnvironment(environment)
+	for threadID, route := range s.threadRoutes {
+		if route.MachineID == machineID {
+			delete(s.threadRoutes, threadID)
+		}
+	}
+	for _, thread := range threads {
+		if thread.ThreadID == "" {
+			continue
+		}
+		ownerMachineID := thread.MachineID
+		if ownerMachineID == "" {
+			ownerMachineID = machineID
+		}
+		s.threadRoutes[thread.ThreadID] = domain.ThreadRoute{
+			MachineID: ownerMachineID,
+			AgentID:   thread.AgentID,
+		}
+	}
 }
 
 func (s *Store) UpsertThread(machineID string, thread domain.Thread) {
@@ -53,6 +73,10 @@ func (s *Store) UpsertThread(machineID string, thread domain.Thread) {
 		items = append(items, thread)
 	}
 	s.threadsByMachine[machineID] = items
+	s.threadRoutes[thread.ThreadID] = domain.ThreadRoute{
+		MachineID: thread.MachineID,
+		AgentID:   thread.AgentID,
+	}
 }
 
 func (s *Store) RemoveThread(machineID string, threadID string) {
@@ -72,6 +96,7 @@ func (s *Store) RemoveThread(machineID string, threadID string) {
 		filtered = append(filtered, thread)
 	}
 	s.threadsByMachine[machineID] = filtered
+	delete(s.threadRoutes, threadID)
 }
 
 func (s *Store) ClearMachine(machineID string) {
@@ -84,6 +109,11 @@ func (s *Store) ClearMachine(machineID string) {
 
 	delete(s.threadsByMachine, machineID)
 	delete(s.environmentByMachine, machineID)
+	for threadID, route := range s.threadRoutes {
+		if route.MachineID == machineID {
+			delete(s.threadRoutes, threadID)
+		}
+	}
 }
 
 func (s *Store) MarkMachineUnknown(machineID string) {
@@ -134,6 +164,14 @@ func (s *Store) Environment(kind domain.EnvironmentKind) []domain.EnvironmentRes
 		}
 	}
 	return items
+}
+
+func (s *Store) ThreadRoute(threadID string) (domain.ThreadRoute, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	route, ok := s.threadRoutes[threadID]
+	return route, ok
 }
 
 func cloneThreads(threads []domain.Thread) []domain.Thread {

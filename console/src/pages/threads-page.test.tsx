@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom/vitest";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
 import { ConsoleHostRouter } from "../design-host/console-host-router";
@@ -57,6 +57,13 @@ const capabilities = {
   agentLifecycle: false,
 };
 
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 afterEach(() => {
   FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
@@ -67,55 +74,46 @@ test("renders the active console thread list from /threads and machines from /ma
     const url = String(input);
 
     if (url === "/capabilities") {
-      return new Response(JSON.stringify(capabilities), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonResponse(capabilities);
     }
 
     if (url === "/settings/console") {
-      return new Response(JSON.stringify({ preferences: null }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonResponse({ preferences: null });
     }
 
     if (url === "/threads") {
-      return new Response(
-        JSON.stringify({
-          items: [
-            {
-              threadId: "thread-1",
-              machineId: "machine-1",
-              status: "idle",
-              title: "Investigate flaky test",
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+      return jsonResponse({
+        items: [
+          {
+            threadId: "thread-1",
+            machineId: "machine-1",
+            agentId: "agent-01",
+            status: "idle",
+            title: "Investigate flaky test",
+          },
+        ],
+      });
     }
 
     if (url === "/machines") {
-      return new Response(
-        JSON.stringify({
-          items: [
-            {
-              id: "machine-1",
-              name: "Primary Node",
-              status: "online",
-              runtimeStatus: "running",
-            },
-          ],
-        }),
-        {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        },
-      );
+      return jsonResponse({
+        items: [
+          {
+            id: "machine-1",
+            name: "Primary Node",
+            status: "online",
+            runtimeStatus: "running",
+            agents: [
+              {
+                agentId: "agent-01",
+                agentType: "codex",
+                displayName: "Primary Codex",
+                status: "running",
+              },
+            ],
+          },
+        ],
+      });
     }
 
     throw new Error(`Unhandled request: ${url}`);
@@ -134,4 +132,120 @@ test("renders the active console thread list from /threads and machines from /ma
   expect(screen.getByText("Primary Node")).toBeInTheDocument();
   expect(screen.getByText("ID: machine-1")).toBeInTheDocument();
   expect(FakeWebSocket.instances).toHaveLength(1);
+});
+
+test("active create-thread flow submits both machineId and agentId", async () => {
+  let threads = [
+    {
+      threadId: "thread-1",
+      machineId: "machine-1",
+      agentId: "agent-01",
+      status: "idle",
+      title: "Investigate flaky test",
+    },
+  ];
+
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+
+    if (url === "/capabilities") {
+      return jsonResponse(capabilities);
+    }
+    if (url === "/settings/console") {
+      return jsonResponse({ preferences: null });
+    }
+    if (url === "/threads" && method === "GET") {
+      return jsonResponse({ items: threads });
+    }
+    if (url === "/threads" && method === "POST") {
+      threads = [
+        ...threads,
+        {
+          threadId: "thread-2",
+          machineId: "machine-1",
+          agentId: "agent-02",
+          status: "idle",
+          title: "Ship managed agents",
+        },
+      ];
+      return jsonResponse(
+        {
+          thread: {
+            threadId: "thread-2",
+            machineId: "machine-1",
+            agentId: "agent-02",
+            status: "idle",
+            title: "Ship managed agents",
+          },
+        },
+        201,
+      );
+    }
+    if (url === "/machines") {
+      return jsonResponse({
+        items: [
+          {
+            id: "machine-1",
+            name: "Primary Node",
+            status: "online",
+            runtimeStatus: "running",
+            agents: [
+              {
+                agentId: "agent-01",
+                agentType: "codex",
+                displayName: "Primary Codex",
+                status: "running",
+              },
+              {
+                agentId: "agent-02",
+                agentType: "codex",
+                displayName: "Secondary Codex",
+                status: "running",
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    throw new Error(`Unhandled request: ${method} ${url}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findByText("Investigate flaky test")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: "新建" }));
+  fireEvent.change(screen.getByRole("combobox"), {
+    target: { value: "machine-1" },
+  });
+  fireEvent.change(screen.getAllByRole("combobox")[1], {
+    target: { value: "agent-02" },
+  });
+  fireEvent.change(screen.getByPlaceholderText("例如: 实现用户认证功能"), {
+    target: { value: "Ship managed agents" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "创建" }));
+
+  await waitFor(() => {
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/threads",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          machineId: "machine-1",
+          agentId: "agent-02",
+          title: "Ship managed agents",
+        }),
+      }),
+    );
+  });
 });

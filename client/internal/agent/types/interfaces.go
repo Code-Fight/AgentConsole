@@ -1,6 +1,20 @@
 package types
 
-import "code-agent-gateway/common/domain"
+import (
+	"context"
+
+	"code-agent-gateway/common/domain"
+)
+
+type ManagedAgentSpec struct {
+	AgentID     string
+	AgentType   domain.AgentType
+	DisplayName string
+}
+
+type RuntimeFactory interface {
+	Start(ctx context.Context, spec ManagedAgentSpec) (Runtime, func() error, error)
+}
 
 type CreateThreadParams struct {
 	Title string

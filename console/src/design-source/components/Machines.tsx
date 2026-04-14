@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Server, Wifi, WifiOff, Bot, Plus, Trash2, X, Check, Edit } from "lucide-react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as Dialog from "@radix-ui/react-dialog";
 import type { Machine, AgentInfo } from "../data/mockData";
+import { http } from "../../common/api/http";
 
 interface MachinesProps {
   machines: Machine[];
@@ -276,6 +277,36 @@ max_tokens = 2048`,
   };
 
   const [config, setConfig] = useState(defaultConfigs[agent.type] || defaultConfigs.custom);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    let active = true;
+    const loadConfig = async () => {
+      const fallbackConfig = defaultConfigs[agent.type] ?? defaultConfigs.custom;
+      try {
+        const response = await http<{ document?: { content?: string } }>(
+          `/machines/${encodeURIComponent(machine.id)}/agents/${encodeURIComponent(agent.id)}/config`,
+        );
+        if (!active) {
+          return;
+        }
+        setConfig(response.document?.content ?? fallbackConfig);
+      } catch {
+        if (!active) {
+          return;
+        }
+        setConfig(fallbackConfig);
+      }
+    };
+
+    void loadConfig();
+    return () => {
+      active = false;
+    };
+  }, [open, machine.id, agent.id, agent.type]);
 
   const handleSave = () => {
     onSave(machine.id, agent.id, config);

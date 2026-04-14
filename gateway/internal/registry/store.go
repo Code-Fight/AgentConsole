@@ -59,6 +59,9 @@ func (s *Store) Upsert(machine domain.Machine) {
 		if machine.RuntimeStatus == "" || machine.RuntimeStatus == domain.MachineRuntimeStatusUnknown {
 			machine.RuntimeStatus = existing.RuntimeStatus
 		}
+		if len(machine.Agents) == 0 {
+			machine.Agents = existing.Agents
+		}
 	}
 	if machine.RuntimeStatus == "" {
 		machine.RuntimeStatus = domain.MachineRuntimeStatusUnknown
@@ -81,6 +84,9 @@ func (s *Store) MarkOffline(machineID string) {
 
 	machine.Status = domain.MachineStatusOffline
 	machine.RuntimeStatus = domain.MachineRuntimeStatusUnknown
+	for idx := range machine.Agents {
+		machine.Agents[idx].Status = domain.AgentInstanceStatusStopped
+	}
 	s.machines[machineID] = machine
 }
 

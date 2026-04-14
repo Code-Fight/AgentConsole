@@ -18,6 +18,7 @@ const (
 type EnvironmentResource struct {
 	ResourceID      string                    `json:"resourceId"`
 	MachineID       string                    `json:"machineId"`
+	AgentID         string                    `json:"agentId,omitempty"`
 	Kind            EnvironmentKind           `json:"kind"`
 	DisplayName     string                    `json:"displayName"`
 	Status          EnvironmentResourceStatus `json:"status"`

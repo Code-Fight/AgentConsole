@@ -19,6 +19,14 @@ export interface MachineSummary {
   name: string;
   status: MachineStatus;
   runtimeStatus: MachineRuntimeStatus;
+  agents?: MachineAgentSummary[];
+}
+
+export interface MachineAgentSummary {
+  agentId: string;
+  agentType: AgentType;
+  displayName: string;
+  status: "running" | "stopped" | "error";
 }
 
 export interface MachineListResponse {
@@ -104,6 +112,7 @@ export interface MachineAgentConfigAssignment {
 export interface EnvironmentResource {
   resourceId: string;
   machineId: string;
+  agentId?: string;
   kind: EnvironmentKind;
   displayName: string;
   status: EnvironmentResourceStatus;
@@ -127,6 +136,7 @@ export interface ResourceChangedPayload {
 export interface ThreadSummary {
   threadId: string;
   machineId: string;
+  agentId?: string;
   status: ThreadStatus;
   title: string;
 }

@@ -707,10 +707,11 @@ func (h *ClientHub) applyCompletedCommand(machineID string, timestamp string, co
 		}
 		h.upsertThreadSnapshot(machineID, thread)
 		if h.router != nil {
-			h.router.TrackThread(thread.ThreadID, thread.MachineID)
+			h.router.TrackThread(thread.ThreadID, thread.MachineID, thread.AgentID)
 		}
 		h.broadcastThreadUpdated(protocol.ThreadUpdatedPayload{
 			MachineID: thread.MachineID,
+			AgentID:   thread.AgentID,
 			ThreadID:  thread.ThreadID,
 			Thread:    &thread,
 		}, timestamp)
@@ -728,10 +729,11 @@ func (h *ClientHub) applyCompletedCommand(machineID string, timestamp string, co
 		}
 		h.upsertThreadSnapshot(machineID, thread)
 		if h.router != nil {
-			h.router.TrackThread(thread.ThreadID, thread.MachineID)
+			h.router.TrackThread(thread.ThreadID, thread.MachineID, thread.AgentID)
 		}
 		h.broadcastThreadUpdated(protocol.ThreadUpdatedPayload{
 			MachineID: thread.MachineID,
+			AgentID:   thread.AgentID,
 			ThreadID:  thread.ThreadID,
 			Thread:    &thread,
 		}, timestamp)
@@ -768,6 +770,7 @@ func (h *ClientHub) applyCompletedCommand(machineID string, timestamp string, co
 		if !ok {
 			h.broadcastResourceChanged(protocol.ResourceChangedPayload{
 				MachineID:  machineID,
+				AgentID:    resource.AgentID,
 				Kind:       domain.EnvironmentKindSkill,
 				ResourceID: result.SkillID,
 				Action:     "updated",
@@ -776,6 +779,7 @@ func (h *ClientHub) applyCompletedCommand(machineID string, timestamp string, co
 		}
 		h.broadcastResourceChanged(protocol.ResourceChangedPayload{
 			MachineID:  machineID,
+			AgentID:    resource.AgentID,
 			Kind:       resource.Kind,
 			ResourceID: resource.ResourceID,
 			Resource:   &resource,
@@ -1013,6 +1017,9 @@ func (h *ClientHub) upsertEnvironmentResource(machineID string, resource domain.
 		if state.environment[idx].Kind != resource.Kind || state.environment[idx].ResourceID != resource.ResourceID {
 			continue
 		}
+		if resource.AgentID != "" && state.environment[idx].AgentID != "" && state.environment[idx].AgentID != resource.AgentID {
+			continue
+		}
 		if resource.DisplayName == "" {
 			resource.DisplayName = state.environment[idx].DisplayName
 		}
@@ -1082,6 +1089,9 @@ func mergeEnvironmentResource(current domain.EnvironmentResource, next domain.En
 	}
 	if next.MachineID == "" {
 		next.MachineID = current.MachineID
+	}
+	if next.AgentID == "" {
+		next.AgentID = current.AgentID
 	}
 	if next.Kind == "" {
 		next.Kind = current.Kind

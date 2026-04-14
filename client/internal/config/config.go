@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"path/filepath"
+)
 
 const (
 	RuntimeModeAppServer = "appserver"
@@ -8,10 +11,11 @@ const (
 )
 
 type Config struct {
-	MachineID   string
-	GatewayURL  string
-	RuntimeMode string
-	CodexBin    string
+	MachineID        string
+	GatewayURL       string
+	RuntimeMode      string
+	CodexBin         string
+	ManagedAgentsDir string
 }
 
 func Read() Config {
@@ -39,10 +43,21 @@ func Read() Config {
 		codexBin = "codex"
 	}
 
+	managedAgentsDir := os.Getenv("MANAGED_AGENTS_DIR")
+	if managedAgentsDir == "" {
+		homeDir, err := os.UserHomeDir()
+		if err == nil && homeDir != "" {
+			managedAgentsDir = filepath.Join(homeDir, ".code-agent-gateway", "machines", machineID, "agents")
+		} else {
+			managedAgentsDir = filepath.Join(".", ".code-agent-gateway", "machines", machineID, "agents")
+		}
+	}
+
 	return Config{
-		MachineID:   machineID,
-		GatewayURL:  gatewayURL,
-		RuntimeMode: runtimeMode,
-		CodexBin:    codexBin,
+		MachineID:        machineID,
+		GatewayURL:       gatewayURL,
+		RuntimeMode:      runtimeMode,
+		CodexBin:         codexBin,
+		ManagedAgentsDir: managedAgentsDir,
 	}
 }
