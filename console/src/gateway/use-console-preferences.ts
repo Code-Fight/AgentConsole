@@ -14,36 +14,93 @@ const emptyPreferences: ConsolePreferences = {
   lastThreadId: "",
 };
 
+interface ConsolePreferencesState {
+  preferences: ConsolePreferences | null;
+  hasLoaded: boolean;
+  isLoading: boolean;
+  isSaving: boolean;
+  error: string | null;
+}
+
+const initialState: ConsolePreferencesState = {
+  preferences: null,
+  hasLoaded: false,
+  isLoading: true,
+  isSaving: false,
+  error: null,
+};
+
+const store = {
+  state: initialState,
+  listeners: new Set<() => void>(),
+};
+
+let loadPromise: Promise<void> | null = null;
+
+function emitChange() {
+  store.listeners.forEach((listener) => listener());
+}
+
+function setStoreState(patch: Partial<ConsolePreferencesState>) {
+  store.state = { ...store.state, ...patch };
+  emitChange();
+}
+
+function subscribe(listener: () => void) {
+  store.listeners.add(listener);
+  return () => {
+    store.listeners.delete(listener);
+  };
+}
+
+export function resetConsolePreferencesStoreForTests() {
+  store.state = { ...initialState };
+  loadPromise = null;
+  emitChange();
+}
+
 export function useConsolePreferences() {
-  const [preferences, setPreferences] = useState<ConsolePreferences | null>(null);
-  const [hasLoaded, setHasLoaded] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [snapshot, setSnapshot] = useState(store.state);
+
+  useEffect(() => subscribe(() => setSnapshot(store.state)), []);
 
   const loadPreferences = useCallback(async () => {
-    setIsLoading(true);
-    try {
-      const response = await http<ConsolePreferencesResponse>("/settings/console");
-      setPreferences(response.preferences);
-      setError(null);
-      setHasLoaded(true);
-    } catch (loadError) {
-      setError(
-        loadError instanceof Error ? loadError.message : "Unable to load console preferences.",
-      );
-    } finally {
-      setIsLoading(false);
+    if (loadPromise) {
+      return loadPromise;
     }
+    setStoreState({ isLoading: true });
+    loadPromise = (async () => {
+      try {
+        const response = await http<ConsolePreferencesResponse>("/settings/console");
+        setStoreState({
+          preferences: response.preferences,
+          error: null,
+          hasLoaded: true,
+        });
+      } catch (loadError) {
+        setStoreState({
+          error:
+            loadError instanceof Error
+              ? loadError.message
+              : "Unable to load console preferences.",
+        });
+      } finally {
+        loadPromise = null;
+        setStoreState({ isLoading: false });
+      }
+    })();
+    return loadPromise;
   }, []);
 
   useEffect(() => {
-    void loadPreferences();
+    if (!store.state.hasLoaded) {
+      void loadPreferences();
+    }
   }, [loadPreferences]);
 
   const savePreferences = useCallback(
     async (next: ConsolePreferences) => {
-      setIsSaving(true);
+      setStoreState({ isSaving: true });
       try {
         const payload: ConsolePreferencesRequest = { preferences: next };
         const response = await http<ConsolePreferencesResponse>("/settings/console", {
@@ -53,17 +110,22 @@ export function useConsolePreferences() {
           },
           body: JSON.stringify(payload),
         });
-        setPreferences(response.preferences);
-        setError(null);
-        setHasLoaded(true);
+        setStoreState({
+          preferences: response.preferences,
+          error: null,
+          hasLoaded: true,
+        });
         return response.preferences;
       } catch (saveError) {
-        setError(
-          saveError instanceof Error ? saveError.message : "Unable to save console preferences.",
-        );
+        setStoreState({
+          error:
+            saveError instanceof Error
+              ? saveError.message
+              : "Unable to save console preferences.",
+        });
         return null;
       } finally {
-        setIsSaving(false);
+        setStoreState({ isSaving: false });
       }
     },
     [],
@@ -71,27 +133,28 @@ export function useConsolePreferences() {
 
   const updatePreferences = useCallback(
     async (patch: Partial<ConsolePreferences>) => {
-      const base = preferences ?? emptyPreferences;
+      const base = store.state.preferences ?? emptyPreferences;
       return savePreferences({ ...base, ...patch });
     },
-    [preferences, savePreferences],
+    [savePreferences],
   );
 
   const normalized = useMemo(() => {
-    if (preferences) {
-      return preferences;
+    if (snapshot.preferences) {
+      return snapshot.preferences;
     }
-    if (error) {
+    if (snapshot.error) {
       return null;
     }
-    return hasLoaded ? emptyPreferences : null;
-  }, [preferences, error, hasLoaded]);
+    return snapshot.hasLoaded ? emptyPreferences : null;
+  }, [snapshot.preferences, snapshot.error, snapshot.hasLoaded]);
 
   return {
     preferences: normalized,
-    isLoading,
-    isSaving,
-    error,
+    isLoading: snapshot.isLoading,
+    isSaving: snapshot.isSaving,
+    error: snapshot.error,
+    hasLoaded: snapshot.hasLoaded,
     reload: loadPreferences,
     savePreferences,
     updatePreferences,

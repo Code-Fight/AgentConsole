@@ -2,6 +2,7 @@ import type {
   AgentConfigDocument,
   AgentDescriptor,
   AgentType,
+  ConsolePreferences,
   MachineSummary,
 } from "../../common/api/types";
 
@@ -16,6 +17,8 @@ interface SettingsPageViewProps {
   error: string | null;
   statusMessage: string | null;
   isLoading: boolean;
+  consolePreferences?: ConsolePreferences;
+  isConsoleSaving?: boolean;
   capabilities: {
     editGatewayEndpoint: boolean;
     editConsoleProfile: boolean;
@@ -32,6 +35,8 @@ interface SettingsPageViewProps {
   onSaveMachineOverride: () => void;
   onDeleteMachineOverride: () => void;
   onApplyToMachine: () => void;
+  onConsolePreferencesChange?: (patch: Partial<ConsolePreferences>) => void;
+  onSaveConsolePreferences?: () => void;
 }
 
 function CapabilityCard(props: { title: string; description: string; action: string; connected: boolean }) {
@@ -50,6 +55,17 @@ function CapabilityCard(props: { title: string; description: string; action: str
 }
 
 export function SettingsPageView(props: SettingsPageViewProps) {
+  const consolePreferences = props.consolePreferences ?? {
+    consoleUrl: "",
+    apiKey: "",
+    profile: "",
+    safetyPolicy: "",
+    lastThreadId: "",
+  };
+  const onConsolePreferencesChange = props.onConsolePreferencesChange ?? (() => {});
+  const onSaveConsolePreferences = props.onSaveConsolePreferences ?? (() => {});
+  const isConsoleSaving = props.isConsoleSaving ?? false;
+
   return (
     <section className="page settings-page">
       <header className="page-header">
@@ -86,6 +102,68 @@ export function SettingsPageView(props: SettingsPageViewProps) {
 
       {!props.isLoading ? (
         <div className="settings-layout">
+          <section className="config-form">
+            <div className="config-form-heading">
+              <div>
+                <span className="page-kicker">Console</span>
+                <h2>Console settings</h2>
+              </div>
+            </div>
+            <p className="form-hint">Saved console preferences persist across reloads and apply to this host.</p>
+            <label>
+              <span>Console URL</span>
+              <input
+                aria-label="Console URL"
+                type="text"
+                value={consolePreferences.consoleUrl}
+                onChange={(event) =>
+                  onConsolePreferencesChange({ consoleUrl: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              <span>API Key</span>
+              <input
+                aria-label="API Key"
+                type="password"
+                value={consolePreferences.apiKey}
+                onChange={(event) =>
+                  onConsolePreferencesChange({ apiKey: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              <span>Console Profile</span>
+              <input
+                aria-label="Console Profile"
+                type="text"
+                value={consolePreferences.profile}
+                onChange={(event) =>
+                  onConsolePreferencesChange({ profile: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              <span>Safety Policy</span>
+              <input
+                aria-label="Safety Policy"
+                type="text"
+                value={consolePreferences.safetyPolicy}
+                onChange={(event) =>
+                  onConsolePreferencesChange({ safetyPolicy: event.target.value })
+                }
+              />
+            </label>
+            <button
+              type="button"
+              aria-label="Save Console Settings"
+              disabled={isConsoleSaving}
+              onClick={onSaveConsolePreferences}
+            >
+              Save Console Settings
+            </button>
+          </section>
+
           <section className="settings-sidebar">
             <div className="config-form settings-intro-card">
               <div className="config-form-heading">

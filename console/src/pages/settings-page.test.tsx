@@ -3,6 +3,7 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, expect, test, vi } from "vitest";
 import { ConsoleHostRouter } from "../design-host/console-host-router";
+import { resetConsolePreferencesStoreForTests } from "../gateway/use-console-preferences";
 
 const capabilitySnapshot = vi.hoisted(() => ({
   environmentSyncCatalog: false,
@@ -27,6 +28,7 @@ vi.mock("../gateway/capabilities", () => ({
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  resetConsolePreferencesStoreForTests();
 });
 
 test("renders global default and machine override settings", async () => {
@@ -368,6 +370,228 @@ test("deleting machine override falls back to global default", async () => {
   });
   expect(await scope.findByText("Machine override deleted.")).toBeInTheDocument();
   expect(scope.getByText("Using global default")).toBeInTheDocument();
+});
+
+test("renders console preferences from gateway settings", async () => {
+  const storedPreferences = {
+    consoleUrl: "http://localhost:3100",
+    apiKey: "test-key",
+    profile: "dev",
+    safetyPolicy: "strict",
+    lastThreadId: "",
+  };
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const path = typeof input === "string" ? input : input.toString();
+    if (path === "/settings/console") {
+      return jsonResponse({ preferences: storedPreferences });
+    }
+    if (path === "/settings/agents") {
+      return jsonResponse({ items: [{ agentType: "codex", displayName: "Codex" }] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [{ id: "machine-01", name: "Machine 01", status: "online", runtimeStatus: "running" }],
+      });
+    }
+    if (path === "/settings/agents/codex/global") {
+      return jsonResponse({ document: null });
+    }
+    if (path === "/settings/machines/machine-01/agents/codex") {
+      return jsonResponse({
+        machineId: "machine-01",
+        agentType: "codex",
+        globalDefault: null,
+        machineOverride: null,
+        usesGlobalDefault: true,
+      });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  expect(await scope.findByLabelText("Console URL")).toHaveValue("http://localhost:3100");
+  const apiKeyInput = scope.getByLabelText("API Key");
+  expect(apiKeyInput).toHaveValue("test-key");
+  expect(apiKeyInput).toHaveAttribute("type", "password");
+  expect(scope.getByLabelText("Console Profile")).toHaveValue("dev");
+  expect(scope.getByLabelText("Safety Policy")).toHaveValue("strict");
+});
+
+test("saving console preferences uses the settings endpoint", async () => {
+  let storedPreferences = {
+    consoleUrl: "",
+    apiKey: "",
+    profile: "",
+    safetyPolicy: "",
+    lastThreadId: "",
+  };
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+    if (path === "/settings/console" && (!init?.method || init.method === "GET")) {
+      return jsonResponse({ preferences: storedPreferences });
+    }
+    if (path === "/settings/console" && init?.method === "PUT") {
+      const body = init.body ? JSON.parse(init.body.toString()) : null;
+      storedPreferences = body?.preferences ?? storedPreferences;
+      return jsonResponse({ preferences: storedPreferences });
+    }
+    if (path === "/settings/agents") {
+      return jsonResponse({ items: [{ agentType: "codex", displayName: "Codex" }] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [{ id: "machine-01", name: "Machine 01", status: "online", runtimeStatus: "running" }],
+      });
+    }
+    if (path === "/settings/agents/codex/global") {
+      return jsonResponse({ document: null });
+    }
+    if (path === "/settings/machines/machine-01/agents/codex") {
+      return jsonResponse({
+        machineId: "machine-01",
+        agentType: "codex",
+        globalDefault: null,
+        machineOverride: null,
+        usesGlobalDefault: true,
+      });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  fireEvent.change(await scope.findByLabelText("Console URL"), {
+    target: { value: "http://localhost:3100" },
+  });
+  fireEvent.change(scope.getByLabelText("API Key"), {
+    target: { value: "test-key" },
+  });
+  fireEvent.change(scope.getByLabelText("Console Profile"), {
+    target: { value: "dev" },
+  });
+  fireEvent.change(scope.getByLabelText("Safety Policy"), {
+    target: { value: "strict" },
+  });
+  fireEvent.click(scope.getByRole("button", { name: "Save Console Settings" }));
+
+  await waitFor(() => {
+    const putCall = fetchMock.mock.calls.find(
+      (call) =>
+        call[0] === "/settings/console" &&
+        call[1] &&
+        typeof call[1] === "object" &&
+        (call[1] as RequestInit).method === "PUT",
+    );
+    expect(putCall).toBeTruthy();
+    const body = JSON.parse((putCall?.[1] as RequestInit).body as string);
+    expect(body).toEqual({
+      preferences: {
+        consoleUrl: "http://localhost:3100",
+        apiKey: "test-key",
+        profile: "dev",
+        safetyPolicy: "strict",
+        lastThreadId: "",
+      },
+    });
+  });
+});
+
+test("reloads console preferences from gateway settings", async () => {
+  let storedPreferences = {
+    consoleUrl: "",
+    apiKey: "",
+    profile: "",
+    safetyPolicy: "",
+    lastThreadId: "",
+  };
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = typeof input === "string" ? input : input.toString();
+    if (path === "/settings/console" && (!init?.method || init.method === "GET")) {
+      return jsonResponse({ preferences: storedPreferences });
+    }
+    if (path === "/settings/console" && init?.method === "PUT") {
+      const body = init.body ? JSON.parse(init.body.toString()) : null;
+      storedPreferences = body?.preferences ?? storedPreferences;
+      return jsonResponse({ preferences: storedPreferences });
+    }
+    if (path === "/settings/agents") {
+      return jsonResponse({ items: [{ agentType: "codex", displayName: "Codex" }] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [{ id: "machine-01", name: "Machine 01", status: "online", runtimeStatus: "running" }],
+      });
+    }
+    if (path === "/settings/agents/codex/global") {
+      return jsonResponse({ document: null });
+    }
+    if (path === "/settings/machines/machine-01/agents/codex") {
+      return jsonResponse({
+        machineId: "machine-01",
+        agentType: "codex",
+        globalDefault: null,
+        machineOverride: null,
+        usesGlobalDefault: true,
+      });
+    }
+
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  const { unmount } = render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  let scope = await getMainScope();
+  fireEvent.change(await scope.findByLabelText("Console URL"), {
+    target: { value: "http://localhost:3100" },
+  });
+  fireEvent.change(scope.getByLabelText("API Key"), {
+    target: { value: "test-key" },
+  });
+  fireEvent.change(scope.getByLabelText("Console Profile"), {
+    target: { value: "dev" },
+  });
+  fireEvent.change(scope.getByLabelText("Safety Policy"), {
+    target: { value: "strict" },
+  });
+  fireEvent.click(scope.getByRole("button", { name: "Save Console Settings" }));
+
+  await waitFor(() => {
+    expect(storedPreferences.consoleUrl).toBe("http://localhost:3100");
+  });
+
+  unmount();
+
+  render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  scope = await getMainScope();
+  expect(await scope.findByLabelText("Console URL")).toHaveValue("http://localhost:3100");
+  expect(scope.getByLabelText("API Key")).toHaveValue("test-key");
+  expect(scope.getByLabelText("Console Profile")).toHaveValue("dev");
+  expect(scope.getByLabelText("Safety Policy")).toHaveValue("strict");
 });
 
 test("shows load error when settings bootstrap fails", async () => {

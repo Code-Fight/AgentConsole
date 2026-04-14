@@ -111,6 +111,7 @@ export function useConsoleHost({
   const {
     preferences,
     isLoading: preferencesLoading,
+    hasLoaded: preferencesLoaded,
     error: preferencesError,
     updatePreferences,
   } = useConsolePreferences();
@@ -122,7 +123,7 @@ export function useConsoleHost({
   }, [activePage]);
 
   useEffect(() => {
-    if (threadId || restoreAttempted || preferencesLoading) {
+    if (threadId || restoreAttempted || preferencesLoading || !preferencesLoaded) {
       return;
     }
 
@@ -144,6 +145,7 @@ export function useConsoleHost({
     threadId,
     restoreAttempted,
     preferencesLoading,
+    preferencesLoaded,
     preferencesError,
     preferences,
     navigate,
@@ -152,7 +154,13 @@ export function useConsoleHost({
   const workspace = useThreadWorkspace(threadId ?? "");
 
   useEffect(() => {
-    if (!threadId || lastVerifiedThreadId === threadId || preferencesLoading || preferencesError) {
+    if (
+      !threadId ||
+      lastVerifiedThreadId === threadId ||
+      preferencesLoading ||
+      !preferencesLoaded ||
+      preferencesError
+    ) {
       return;
     }
 
@@ -186,6 +194,7 @@ export function useConsoleHost({
     threadId,
     lastVerifiedThreadId,
     preferencesLoading,
+    preferencesLoaded,
     preferencesError,
     preferences,
     updatePreferences,
