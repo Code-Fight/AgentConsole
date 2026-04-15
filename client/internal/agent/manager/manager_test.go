@@ -248,6 +248,10 @@ func (s *stubRuntime) SetMCPServerEnabled(serverID string, enabled bool) error {
 	return nil
 }
 
+func (s *stubRuntime) ReloadMCPServers() error {
+	return nil
+}
+
 func (s *stubRuntime) InstallPlugin(params agenttypes.InstallPluginParams) error {
 	s.lastInstalledPlugin = params
 	return nil

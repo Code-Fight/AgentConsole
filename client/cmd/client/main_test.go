@@ -1079,6 +1079,10 @@ func (r *notifyingRuntime) SetMCPServerEnabled(serverID string, enabled bool) er
 	return nil
 }
 
+func (r *notifyingRuntime) ReloadMCPServers() error {
+	return nil
+}
+
 func (r *notifyingRuntime) InstallPlugin(params agenttypes.InstallPluginParams) error {
 	r.lastPluginInstall.pluginID = params.PluginID
 	r.lastPluginInstall.marketplacePath = params.MarketplacePath
