@@ -82,7 +82,7 @@ test("renders global default and machine override settings", async () => {
   expect(await scope.findByText("Using global default")).toBeInTheDocument();
   expect(scope.getByText("Codex")).toBeInTheDocument();
   expect(scope.getByText("Machine 01")).toBeInTheDocument();
-  expect(scope.getByRole("button", { name: "Edit gateway endpoint" })).toBeDisabled();
+  expect(scope.getByLabelText("Console URL")).toBeInTheDocument();
 });
 
 test("saving global default sends put request", async () => {

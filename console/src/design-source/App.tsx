@@ -137,7 +137,7 @@ export default function App({
           />
         );
       case "environment":
-        return <Environment />;
+        return <Environment machines={managementMachines} />;
       case "settings":
         return <Settings />;
       default:

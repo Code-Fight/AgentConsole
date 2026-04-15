@@ -1,6 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
+import mainEntrySource from "../main.tsx?raw";
+import environmentSource from "../design-source/components/Environment.tsx?raw";
+import settingsSource from "../design-source/components/Settings.tsx?raw";
 import { resetConsolePreferencesStoreForTests } from "../gateway/use-console-preferences";
 import { DesignSourceAppRoot } from "../design-host/app-root";
 
@@ -64,6 +67,17 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+test("main entry only loads the design-source styles for the active figma-driven console", () => {
+  expect(mainEntrySource).not.toContain('import "./styles.css";');
+  expect(mainEntrySource).not.toContain('import "./design/styles/index.css";');
+  expect(mainEntrySource).toContain('import "./design-source/styles/index.css";');
+});
+
+test("environment and settings stay inside design-source instead of wrapping custom design views", () => {
+  expect(environmentSource).not.toContain("../../design");
+  expect(settingsSource).not.toContain("../../design");
 });
 
 test("loads gateway thread and machine lists for the active console shell", async () => {
