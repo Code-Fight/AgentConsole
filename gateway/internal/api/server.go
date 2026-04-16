@@ -118,6 +118,8 @@ type threadUpdateEmitter interface {
 	EmitThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string)
 }
 
+const optionalAuthBypassAPIKey = "__CAG_OPTIONAL_AUTH_BYPASS__"
+
 func resolveThreadRoute(router *routing.Router, idx *runtimeindex.Store, threadID string) (domain.ThreadRoute, bool) {
 	if router != nil {
 		if route, ok := router.ResolveThread(threadID); ok {
@@ -363,7 +365,7 @@ func resolveActiveTurnID(sender CommandSender, threadID string) string {
 }
 
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return NewServerWithAPIKey(reg, idx, router, sender, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
+	return NewServerWithAPIKey(reg, idx, router, sender, resolveOptionalAPIKey(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
 }
 
 func NewServerWithAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
@@ -454,7 +456,7 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 }
 
 func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return NewServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
+	return NewServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, resolveOptionalAPIKey(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
 }
 
 func NewServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
@@ -2207,7 +2209,7 @@ func NewServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 
 func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
 	expected := strings.TrimSpace(apiKey)
-	if expected == "" {
+	if expected == optionalAuthBypassAPIKey {
 		return next
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -2230,6 +2232,14 @@ func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		}
 	})
+}
+
+func resolveOptionalAPIKey(raw string) string {
+	apiKey := strings.TrimSpace(raw)
+	if apiKey == "" {
+		return optionalAuthBypassAPIKey
+	}
+	return apiKey
 }
 
 func requireConsoleAuthFunc(apiKey string, next http.HandlerFunc) http.HandlerFunc {

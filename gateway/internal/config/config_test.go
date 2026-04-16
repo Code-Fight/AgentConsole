@@ -17,7 +17,7 @@ func TestReadConfigFallsBackAndRejectsInvalidPort(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if cfg.Host != "0.0.0.0" || cfg.Port != 8080 || cfg.SettingsFilePath != "data/settings.json" {
+	if cfg.Host != "127.0.0.1" || cfg.Port != 8080 || cfg.SettingsFilePath != "data/settings.json" {
 		t.Fatalf("unexpected defaults: %+v", cfg)
 	}
 
@@ -49,6 +49,34 @@ func TestReadConfigLoadsTOMLAndEnvOverrides(t *testing.T) {
 		cfg.SettingsFilePath != "data/env.json" ||
 		cfg.APIKey != "env-key" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestReadConfigResolvesRelativeSettingsFileFromConfigDirectory(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "config")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(configDir, "gateway.toml")
+	if err := os.WriteFile(path, []byte("settings_file = \"data/custom.json\"\napi_key = \"file-key\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOST", "")
+	t.Setenv("PORT", "")
+	t.Setenv("SETTINGS_FILE", "")
+	t.Setenv("GATEWAY_CONFIG_FILE", path)
+	t.Setenv("GATEWAY_API_KEY", "")
+
+	cfg, err := Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expected := filepath.Join(configDir, "data/custom.json")
+	if cfg.SettingsFilePath != expected {
+		t.Fatalf("settings path = %q, expected %q", cfg.SettingsFilePath, expected)
 	}
 }
 

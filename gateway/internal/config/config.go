@@ -27,7 +27,7 @@ type fileConfig struct {
 
 func Read() (Config, error) {
 	cfg := Config{
-		Host:             "0.0.0.0",
+		Host:             "127.0.0.1",
 		Port:             8080,
 		SettingsFilePath: "data/settings.json",
 	}
@@ -83,7 +83,7 @@ func readFromTOML(path string) (Config, error) {
 	}
 
 	cfg := Config{
-		Host:             "0.0.0.0",
+		Host:             "127.0.0.1",
 		Port:             8080,
 		SettingsFilePath: "data/settings.json",
 		APIKey:           strings.TrimSpace(doc.APIKey),
@@ -99,7 +99,7 @@ func readFromTOML(path string) (Config, error) {
 		cfg.SettingsFilePath = settingsFilePath
 	}
 	if !filepath.IsAbs(cfg.SettingsFilePath) {
-		cfg.SettingsFilePath = filepath.Clean(cfg.SettingsFilePath)
+		cfg.SettingsFilePath = filepath.Clean(filepath.Join(filepath.Dir(path), cfg.SettingsFilePath))
 	}
 	return cfg, nil
 }
