@@ -52,21 +52,27 @@ function apiConfigurationCard(scope: Locator): Locator {
   return scope
     .getByRole("heading", { name: "API Configuration" })
     .first()
-    .locator("xpath=ancestor::div[contains(@class,'bg-zinc-900')][1]");
+    .locator(
+      "xpath=ancestor::div[.//*[@aria-label='Gateway URL'] and .//*[@aria-label='Gateway API Key'] and .//*[@aria-label='Save Gateway Connection']][1]",
+    );
 }
 
 function globalDefaultCard(scope: Locator): Locator {
   return scope
     .getByRole("heading", { name: "Global Default" })
     .first()
-    .locator("xpath=ancestor::div[contains(@class,'bg-zinc-900')][1]");
+    .locator(
+      "xpath=ancestor::div[.//*[@aria-label='Global Default TOML'] and .//*[@aria-label='Save Global Default']][1]",
+    );
 }
 
 function machineOverrideCard(scope: Locator): Locator {
   return scope
     .getByRole("heading", { name: "Machine Override" })
     .first()
-    .locator("xpath=ancestor::div[contains(@class,'bg-zinc-900')][1]");
+    .locator(
+      "xpath=ancestor::div[.//*[@aria-label='Machine Override TOML'] and .//*[@aria-label='Save Machine Override']][1]",
+    );
 }
 
 async function clickEnabledButton(scope: Locator, ariaLabel: string): Promise<void> {
