@@ -52,13 +52,15 @@ corepack pnpm test
 corepack pnpm build
 corepack pnpm e2e
 cd ..
-./testenv/settings-e2e/run.sh
+./testing/environments/settings-e2e/run.sh
 ```
+
+后续新增的集成测试套件统一放在 `/testing`（例如 `testing/playwright`、`testing/environments`），不要再新增到 `console/tests/` 或 `testenv/`。
 
 如果要看联调效果：
 
 ```bash
-./testenv/dev-integration/run.sh restart
+./testing/environments/dev-integration/run.sh restart
 ```
 
 访问：

@@ -11,10 +11,10 @@
 ## 用法
 
 ```bash
-./testenv/dev-integration/run.sh up
-./testenv/dev-integration/run.sh ps
-./testenv/dev-integration/run.sh logs
-./testenv/dev-integration/run.sh down
+./testing/environments/dev-integration/run.sh up
+./testing/environments/dev-integration/run.sh ps
+./testing/environments/dev-integration/run.sh logs
+./testing/environments/dev-integration/run.sh down
 ```
 
 启动后默认访问地址：
@@ -40,5 +40,5 @@
 - 如需回退 fake runtime，可以显式设置：
 
 ```bash
-CAG_CLIENT_RUNTIME_MODE=fake ./testenv/dev-integration/run.sh up
+CAG_CLIENT_RUNTIME_MODE=fake ./testing/environments/dev-integration/run.sh up
 ```

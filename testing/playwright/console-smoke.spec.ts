@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../console/node_modules/@playwright/test";
 
 test("navigates to thread workspace", async ({ page }) => {
   await page.route("**/overview/metrics", async (route) => {

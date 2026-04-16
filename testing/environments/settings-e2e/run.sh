@@ -2,7 +2,7 @@
 set -euo pipefail
 
 STACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${STACK_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${STACK_DIR}/../../.." && pwd)"
 COMPOSE_FILE="${STACK_DIR}/docker-compose.yml"
 PROJECT_NAME="${CAG_SETTINGS_E2E_PROJECT:-cag-settings-e2e}"
 GATEWAY_PORT="${CAG_SETTINGS_E2E_GATEWAY_PORT:-18081}"

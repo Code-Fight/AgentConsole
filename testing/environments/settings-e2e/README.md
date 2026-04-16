@@ -5,17 +5,17 @@
 ## 用法
 
 ```bash
-./testenv/settings-e2e/run.sh
+./testing/environments/settings-e2e/run.sh
 ```
 
 默认会：
 
 1. 构建并启动 `gateway + client + console`
 2. 等待名为 `Settings E2E Client` 的测试机器注册成功
-3. 运行 `console/tests/settings-e2e.spec.ts`
+3. 运行 `testing/playwright/settings-e2e.spec.ts`
 4. 自动清理容器
 
 临时目录会放在：
 
-- `testenv/settings-e2e/.tmp/<project>/client-home`
-- `testenv/settings-e2e/.tmp/<project>/gateway-data`
+- `testing/environments/settings-e2e/.tmp/<project>/client-home`
+- `testing/environments/settings-e2e/.tmp/<project>/gateway-data`
