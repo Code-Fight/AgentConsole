@@ -5,8 +5,8 @@ import {
 
 function toWebSocketOrigin(gatewayUrl: string): string {
   const parsedUrl = new URL(gatewayUrl);
-  parsedUrl.protocol = parsedUrl.protocol === "https:" ? "wss:" : "ws:";
-  return parsedUrl.toString().replace(/\/$/, "");
+  const wsProtocol = parsedUrl.protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProtocol}//${parsedUrl.host}`;
 }
 
 export function buildConsoleSocketUrl(threadId?: string): string | null {

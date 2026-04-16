@@ -363,7 +363,8 @@ func resolveActiveTurnID(sender CommandSender, threadID string) string {
 }
 
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS, false)
+	apiKey, hasAPIKey := os.LookupEnv("GATEWAY_API_KEY")
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, strings.TrimSpace(apiKey), clientWS, consoleWS, hasAPIKey)
 }
 
 func NewServerWithAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
@@ -454,7 +455,8 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 }
 
 func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS, false)
+	apiKey, hasAPIKey := os.LookupEnv("GATEWAY_API_KEY")
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, strings.TrimSpace(apiKey), clientWS, consoleWS, hasAPIKey)
 }
 
 func NewServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {

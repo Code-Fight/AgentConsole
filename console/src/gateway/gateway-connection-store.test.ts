@@ -13,6 +13,7 @@ import {
 afterEach(() => {
   clearGatewayConnectionCookies();
   document.cookie = "";
+  vi.unstubAllGlobals();
 });
 
 test("reads gateway connection from cookies", () => {
@@ -52,6 +53,35 @@ test("saves and clears gateway cookies", () => {
 
   clearGatewayConnectionCookies();
   expect(readGatewayConnectionFromCookies()).toBeNull();
+});
+
+test("adds Secure to cookie writes on https", () => {
+  const setCookieSpy = vi.spyOn(Document.prototype, "cookie", "set");
+  vi.stubGlobal("location", { protocol: "https:" });
+
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+
+  const writes = setCookieSpy.mock.calls.map(([value]) => value);
+  expect(writes).toHaveLength(2);
+  expect(writes[0]).toContain("; Secure");
+  expect(writes[1]).toContain("; Secure");
+});
+
+test("keeps cookie writes unchanged on http", () => {
+  const setCookieSpy = vi.spyOn(Document.prototype, "cookie", "set");
+  vi.stubGlobal("location", { protocol: "http:" });
+
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+
+  const writes = setCookieSpy.mock.calls.map(([value]) => value);
+  expect(writes).toHaveLength(2);
+  expect(writes.every((value) => !value.includes("; Secure"))).toBe(true);
 });
 
 test("tracks missing, ready, and authFailed states", () => {

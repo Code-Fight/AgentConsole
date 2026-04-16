@@ -90,7 +90,8 @@ function writeCookie(name: string, value: string, maxAgeSeconds?: number): void 
   }
 
   const maxAgePart = typeof maxAgeSeconds === "number" ? `; Max-Age=${maxAgeSeconds}` : "";
-  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; SameSite=Lax${maxAgePart}`;
+  const securePart = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; SameSite=Lax${securePart}${maxAgePart}`;
 }
 
 function syncGatewayConnectionFromCookies(): void {

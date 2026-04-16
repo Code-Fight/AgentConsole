@@ -215,6 +215,105 @@ func TestServerWithExplicitBlankAPIKeyFailsClosed(t *testing.T) {
 	}
 }
 
+func TestServerWithBlankEnvAPIKeyFailsClosed(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "   ")
+	consoleCalled := false
+	handler := NewServer(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			consoleCalled = true
+			w.WriteHeader(http.StatusSwitchingProtocols)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/machines returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/health returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws/client", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("/ws/client returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/ws returned %d", rec.Code)
+	}
+	if consoleCalled {
+		t.Fatal("/ws console handler should not be invoked")
+	}
+}
+
+func TestServerWithSettingsAndBlankEnvAPIKeyFailsClosed(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "   ")
+	consoleCalled := false
+	handler := NewServerWithSettings(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		settings.NewMemoryStore(defaultAgentDescriptors()),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			consoleCalled = true
+			w.WriteHeader(http.StatusSwitchingProtocols)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/machines returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/health returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws/client", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("/ws/client returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/ws returned %d", rec.Code)
+	}
+	if consoleCalled {
+		t.Fatal("/ws console handler should not be invoked")
+	}
+}
+
 func TestConsoleSettingsEndpointExposesOnlyScopedFields(t *testing.T) {
 	t.Setenv("GATEWAY_API_KEY", "test-key")
 	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{

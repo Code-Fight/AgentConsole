@@ -69,6 +69,15 @@ test("builds thread websocket url for workspace placeholders", () => {
   expect(buildThreadSocketUrl("thread 1")).toBe(expectedUrl);
 });
 
+test("uses gateway origin for websocket url when gateway path is configured", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080/api";
+  document.cookie = "cag_gateway_api_key=test-key";
+  const expectedUrl =
+    "ws://localhost:18080/ws?threadId=thread+1&apiKey=test-key";
+
+  expect(buildThreadSocketUrl("thread 1")).toBe(expectedUrl);
+});
+
 test("connects without a thread filter when no thread id is provided", () => {
   document.cookie = "cag_gateway_url=http://localhost:18080";
   document.cookie = "cag_gateway_api_key=test-key";
