@@ -1,4 +1,4 @@
-import { expect, test } from "../../console/node_modules/@playwright/test";
+import { expect, test } from "../../console/playwright-test";
 import fs from "node:fs";
 import path from "node:path";
 

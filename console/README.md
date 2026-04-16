@@ -43,7 +43,7 @@ When a new design export arrives, use this flow:
    - `corepack pnpm test`
    - `corepack pnpm build`
    - `corepack pnpm e2e`
-   - `./testing/environments/settings-e2e/run.sh`
+   - `../testing/environments/settings-e2e/run.sh`
 
 Future integration suites belong under `/testing` (for example `testing/playwright` and `testing/environments`) instead of `console/tests/` or `testenv/`.
 
