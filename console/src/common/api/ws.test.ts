@@ -114,7 +114,7 @@ test("reconnects with bounded backoff after socket close", () => {
   expect(FakeWebSocket.instances).toHaveLength(3);
 });
 
-test("does not reconnect on error until close occurs", () => {
+test("recovers when error occurs without a matching close event", () => {
   document.cookie = "cag_gateway_url=http://localhost:18080";
   document.cookie = "cag_gateway_api_key=test-key";
   vi.useFakeTimers();
@@ -123,11 +123,9 @@ test("does not reconnect on error until close occurs", () => {
   connectConsoleSocket("thread-1", vi.fn());
   expect(FakeWebSocket.instances).toHaveLength(1);
 
+  const firstSocket = FakeWebSocket.instances[0];
   FakeWebSocket.instances[0].emit("error", new Event("error"));
-  vi.advanceTimersByTime(10_000);
-  expect(FakeWebSocket.instances).toHaveLength(1);
-
-  FakeWebSocket.instances[0].emit("close", new CloseEvent("close"));
+  expect(firstSocket.close).toHaveBeenCalledOnce();
   vi.advanceTimersByTime(999);
   expect(FakeWebSocket.instances).toHaveLength(1);
   vi.advanceTimersByTime(1);

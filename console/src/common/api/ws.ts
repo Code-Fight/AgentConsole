@@ -77,7 +77,10 @@ export function connectConsoleSocket(
 
   const handleError = () => {
     if (socket !== null) {
-      return;
+      // Some runtimes can emit error without close; force closure and reconnect.
+      const activeSocket = socket;
+      socket = null;
+      activeSocket.close();
     }
 
     scheduleReconnect();
