@@ -118,8 +118,6 @@ type threadUpdateEmitter interface {
 	EmitThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string)
 }
 
-const optionalAuthBypassAPIKey = "__CAG_OPTIONAL_AUTH_BYPASS__"
-
 func resolveThreadRoute(router *routing.Router, idx *runtimeindex.Store, threadID string) (domain.ThreadRoute, bool) {
 	if router != nil {
 		if route, ok := router.ResolveThread(threadID); ok {
@@ -365,11 +363,11 @@ func resolveActiveTurnID(sender CommandSender, threadID string) string {
 }
 
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return NewServerWithAPIKey(reg, idx, router, sender, resolveOptionalAPIKey(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS, false)
 }
 
 func NewServerWithAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return NewServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, apiKey, clientWS, consoleWS)
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, apiKey, clientWS, consoleWS, true)
 }
 
 func defaultAgentDescriptors() []domain.AgentDescriptor {
@@ -456,10 +454,14 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 }
 
 func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return NewServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, resolveOptionalAPIKey(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS, false)
 }
 
 func NewServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, apiKey, clientWS, consoleWS, true)
+}
+
+func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, apiKey string, clientWS http.Handler, consoleWS http.Handler, failClosedOnBlankKey bool) http.Handler {
 	mux := http.NewServeMux()
 	var deletedThreadsMu sync.RWMutex
 	deletedThreads := map[string]struct{}{}
@@ -2204,17 +2206,19 @@ func NewServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID, "enabled": false})
 	})
 
+	if strings.TrimSpace(apiKey) == "" && !failClosedOnBlankKey {
+		return mux
+	}
 	return requireConsoleAuth(apiKey, mux)
 }
 
 func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
 	expected := strings.TrimSpace(apiKey)
-	if expected == optionalAuthBypassAPIKey {
-		return next
-	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/health", "/ws/client":
+			// Intentionally open: this endpoint is for local client bridge connections and
+			// relies on loopback-by-default host posture.
 			next.ServeHTTP(w, r)
 			return
 		case "/ws":
@@ -2232,14 +2236,6 @@ func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		}
 	})
-}
-
-func resolveOptionalAPIKey(raw string) string {
-	apiKey := strings.TrimSpace(raw)
-	if apiKey == "" {
-		return optionalAuthBypassAPIKey
-	}
-	return apiKey
 }
 
 func requireConsoleAuthFunc(apiKey string, next http.HandlerFunc) http.HandlerFunc {
