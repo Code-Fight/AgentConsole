@@ -370,8 +370,6 @@ test("renders remote console preferences from gateway settings", async () => {
     if (path === "/settings/console" && (!init?.method || init.method === "GET")) {
       return jsonResponse({
         preferences: {
-          consoleUrl: "http://localhost:3200",
-          apiKey: "remote-key",
           profile: "dev",
           safetyPolicy: "strict",
           lastThreadId: "",
@@ -409,7 +407,8 @@ test("renders remote console preferences from gateway settings", async () => {
   );
 
   const scope = await getMainScope();
-  expect(await scope.findByLabelText("Console URL")).toHaveValue("http://localhost:3200");
+  expect(scope.queryByLabelText("Console URL")).not.toBeInTheDocument();
+  expect(scope.getByLabelText("Gateway API Key")).toBeInTheDocument();
   expect(scope.getByLabelText("Console Profile")).toHaveValue("dev");
   expect(scope.getByLabelText("Safety Policy")).toHaveValue("strict");
   expect(scope.getByRole("button", { name: "Save Console Settings" })).toBeInTheDocument();
@@ -421,8 +420,6 @@ test("saving remote console preferences uses settings endpoint", async () => {
     if (path === "/settings/console" && (!init?.method || init.method === "GET")) {
       return jsonResponse({
         preferences: {
-          consoleUrl: "",
-          apiKey: "",
           profile: "",
           safetyPolicy: "",
           lastThreadId: "",
@@ -464,9 +461,6 @@ test("saving remote console preferences uses settings endpoint", async () => {
   );
 
   const scope = await getMainScope();
-  fireEvent.change(await scope.findByLabelText("Console URL"), {
-    target: { value: "http://localhost:3200" },
-  });
   fireEvent.change(scope.getByLabelText("Console Profile"), {
     target: { value: "dev" },
   });
@@ -483,8 +477,6 @@ test("saving remote console preferences uses settings endpoint", async () => {
     const body = putCall?.[1]?.body ? JSON.parse(String(putCall[1]?.body)) : null;
     expect(body).toEqual({
       preferences: {
-        consoleUrl: "http://localhost:3200",
-        apiKey: "",
         profile: "dev",
         safetyPolicy: "strict",
         lastThreadId: "",

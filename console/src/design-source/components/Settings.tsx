@@ -10,8 +10,6 @@ import { useConsolePreferences } from "../../gateway/use-console-preferences";
 import { useSettingsPage } from "../../gateway/use-settings-page";
 
 const emptyConsolePreferences: ConsolePreferences = {
-  consoleUrl: "",
-  apiKey: "",
   profile: "",
   safetyPolicy: "",
   lastThreadId: "",
@@ -246,40 +244,6 @@ export default function Settings() {
             </div>
 
             <div className="space-y-4">
-              <div>
-                <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-url">
-                  Console URL
-                </label>
-                <input
-                  id="console-url"
-                  aria-label="Console URL"
-                  type="text"
-                  value={draftPreferences.consoleUrl}
-                  onChange={(event) =>
-                    handleConsolePreferenceChange({ consoleUrl: event.target.value })
-                  }
-                  disabled={!connection.remoteEnabled}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-cyan-500 transition-colors disabled:bg-zinc-900/60 disabled:text-zinc-500"
-                />
-              </div>
-
-              <div>
-                <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-preferences-api-key">
-                  API Key
-                </label>
-                <input
-                  id="console-preferences-api-key"
-                  aria-label="API Key"
-                  type="password"
-                  value={draftPreferences.apiKey}
-                  onChange={(event) =>
-                    handleConsolePreferenceChange({ apiKey: event.target.value })
-                  }
-                  disabled={!connection.remoteEnabled}
-                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-cyan-500 transition-colors disabled:bg-zinc-900/60 disabled:text-zinc-500"
-                />
-              </div>
-
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-profile">

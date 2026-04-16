@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -34,13 +35,35 @@ func TestReadConfigLoadsTOMLAndEnvOverrides(t *testing.T) {
 	}
 
 	t.Setenv("GATEWAY_CONFIG_FILE", path)
+	t.Setenv("HOST", "0.0.0.0")
+	t.Setenv("PORT", "8088")
+	t.Setenv("SETTINGS_FILE", "data/env.json")
 	t.Setenv("GATEWAY_API_KEY", "env-key")
 
 	cfg, err := Read()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.APIKey != "env-key" || cfg.SettingsFilePath != "data/custom.json" {
+	if cfg.Host != "0.0.0.0" ||
+		cfg.Port != 8088 ||
+		cfg.SettingsFilePath != "data/env.json" ||
+		cfg.APIKey != "env-key" {
 		t.Fatalf("unexpected config: %+v", cfg)
+	}
+}
+
+func TestReadConfigRequiresAPIKey(t *testing.T) {
+	t.Setenv("HOST", "")
+	t.Setenv("PORT", "")
+	t.Setenv("SETTINGS_FILE", "")
+	t.Setenv("GATEWAY_CONFIG_FILE", "")
+	t.Setenv("GATEWAY_API_KEY", "")
+
+	_, err := Read()
+	if err == nil {
+		t.Fatal("expected missing api key error")
+	}
+	if !strings.Contains(err.Error(), "GATEWAY_API_KEY is required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

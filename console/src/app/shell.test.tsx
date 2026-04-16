@@ -124,7 +124,7 @@ test("settings stays local when gateway cookies are missing", async () => {
   render(<DesignSourceAppRoot />);
 
   expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
-  expect(screen.getAllByLabelText("API Key").length).toBeGreaterThan(0);
+  expect(screen.getAllByLabelText("Gateway API Key").length).toBeGreaterThan(0);
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
@@ -137,7 +137,7 @@ test("nested settings routes stay reachable when gateway cookies are missing", a
   render(<DesignSourceAppRoot />);
 
   expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
-  expect(screen.getAllByLabelText("API Key").length).toBeGreaterThan(0);
+  expect(screen.getAllByLabelText("Gateway API Key").length).toBeGreaterThan(0);
   expect(screen.queryByText(/Gateway 连接未配置/)).not.toBeInTheDocument();
   expect(fetchSpy).not.toHaveBeenCalled();
 });
@@ -411,8 +411,6 @@ test("clears persisted last thread when restore fails", async () => {
     if (path === "/settings/console") {
       return jsonResponse({
         preferences: {
-          consoleUrl: "",
-          apiKey: "",
           profile: "",
           safetyPolicy: "",
           lastThreadId: "missing-thread",
