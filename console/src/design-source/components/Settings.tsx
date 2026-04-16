@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Key, Save, Server } from "lucide-react";
+import type { ConsolePreferences } from "../../common/api/types";
 import { useConsoleConnectionState } from "../../design-host/use-console-host";
 import {
   readGatewayConnectionFromCookies,
@@ -8,17 +9,34 @@ import {
 import { useConsolePreferences } from "../../gateway/use-console-preferences";
 import { useSettingsPage } from "../../gateway/use-settings-page";
 
+const emptyConsolePreferences: ConsolePreferences = {
+  consoleUrl: "",
+  apiKey: "",
+  profile: "",
+  safetyPolicy: "",
+  lastThreadId: "",
+};
+
 export default function Settings() {
   const connection = useConsoleConnectionState();
   const vm = useSettingsPage({ enabled: connection.remoteEnabled });
   const {
+    preferences,
     isLoading: preferencesLoading,
+    isSaving: preferencesSaving,
     loadError: preferencesLoadError,
     saveError: preferencesSaveError,
+    hasAttempted: preferencesAttempted,
+    savePreferences,
   } = useConsolePreferences({ enabled: connection.remoteEnabled });
   const [draftGatewayUrl, setDraftGatewayUrl] = useState("");
   const [draftApiKey, setDraftApiKey] = useState("");
+  const [draftPreferences, setDraftPreferences] = useState<ConsolePreferences>(
+    emptyConsolePreferences,
+  );
+  const [hasDraftPreferences, setHasDraftPreferences] = useState(false);
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
+  const [consoleStatusMessage, setConsoleStatusMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const localConnection = readGatewayConnectionFromCookies();
@@ -26,9 +44,29 @@ export default function Settings() {
     setDraftApiKey(localConnection?.apiKey ?? "");
   }, []);
 
+  useEffect(() => {
+    if (!connection.remoteEnabled) {
+      setDraftPreferences(emptyConsolePreferences);
+      setHasDraftPreferences(true);
+      return;
+    }
+
+    if (preferences) {
+      setDraftPreferences(preferences);
+      setHasDraftPreferences(true);
+      return;
+    }
+
+    if (preferencesAttempted) {
+      setDraftPreferences(emptyConsolePreferences);
+      setHasDraftPreferences(true);
+    }
+  }, [connection.remoteEnabled, preferences, preferencesAttempted]);
+
   const combinedError = vm.error ?? preferencesLoadError ?? preferencesSaveError;
-  const combinedStatusMessage = connectionMessage ?? vm.statusMessage;
-  const combinedLoading = vm.isLoading || preferencesLoading;
+  const combinedStatusMessage = connectionMessage ?? consoleStatusMessage ?? vm.statusMessage;
+  const combinedLoading =
+    vm.isLoading || (connection.remoteEnabled && (preferencesLoading || !hasDraftPreferences));
 
   const selectedAgentLabel = useMemo(
     () =>
@@ -51,7 +89,25 @@ export default function Settings() {
       gatewayUrl: draftGatewayUrl.trim(),
       apiKey: draftApiKey.trim(),
     });
+    setConsoleStatusMessage(null);
     setConnectionMessage("Gateway connection saved.");
+  };
+
+  const handleConsolePreferenceChange = (patch: Partial<ConsolePreferences>) => {
+    setConnectionMessage(null);
+    setConsoleStatusMessage(null);
+    setDraftPreferences((current) => ({ ...current, ...patch }));
+  };
+
+  const handleSaveConsolePreferences = async () => {
+    if (!connection.remoteEnabled) {
+      return;
+    }
+
+    const response = await savePreferences(draftPreferences);
+    if (response) {
+      setConsoleStatusMessage("Console settings saved.");
+    }
   };
 
   return (
@@ -101,11 +157,11 @@ export default function Settings() {
 
             <div className="space-y-4">
               <div>
-                <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-url">
+                <label className="block text-sm text-zinc-400 mb-2" htmlFor="gateway-url">
                   Gateway URL
                 </label>
                 <input
-                  id="console-url"
+                  id="gateway-url"
                   aria-label="Gateway URL"
                   type="text"
                   value={draftGatewayUrl}
@@ -118,12 +174,12 @@ export default function Settings() {
               </div>
 
               <div>
-                <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-api-key">
+                <label className="block text-sm text-zinc-400 mb-2" htmlFor="gateway-api-key">
                   API Key
                 </label>
                 <input
-                  id="console-api-key"
-                  aria-label="API Key"
+                  id="gateway-api-key"
+                  aria-label="Gateway API Key"
                   type="password"
                   value={draftApiKey}
                   onChange={(event) => {
@@ -143,6 +199,103 @@ export default function Settings() {
                 >
                   <Save className="size-4" />
                   保存 Gateway 连接
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2 bg-zinc-800 rounded-lg">
+                <Key className="size-5 text-cyan-400" />
+              </div>
+              <div>
+                <h2 className="text-base text-zinc-100">Console Preferences</h2>
+                <p className="text-xs text-zinc-500">远程 Console 偏好配置</p>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-url">
+                  Console URL
+                </label>
+                <input
+                  id="console-url"
+                  aria-label="Console URL"
+                  type="text"
+                  value={draftPreferences.consoleUrl}
+                  onChange={(event) =>
+                    handleConsolePreferenceChange({ consoleUrl: event.target.value })
+                  }
+                  disabled={!connection.remoteEnabled}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-cyan-500 transition-colors disabled:bg-zinc-900/60 disabled:text-zinc-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-preferences-api-key">
+                  API Key
+                </label>
+                <input
+                  id="console-preferences-api-key"
+                  aria-label="API Key"
+                  type="password"
+                  value={draftPreferences.apiKey}
+                  onChange={(event) =>
+                    handleConsolePreferenceChange({ apiKey: event.target.value })
+                  }
+                  disabled={!connection.remoteEnabled}
+                  className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-cyan-500 transition-colors disabled:bg-zinc-900/60 disabled:text-zinc-500"
+                />
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                <div>
+                  <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-profile">
+                    Console Profile
+                  </label>
+                  <input
+                    id="console-profile"
+                    aria-label="Console Profile"
+                    type="text"
+                    value={draftPreferences.profile}
+                    onChange={(event) =>
+                      handleConsolePreferenceChange({ profile: event.target.value })
+                    }
+                    disabled={!connection.remoteEnabled}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-cyan-500 transition-colors disabled:bg-zinc-900/60 disabled:text-zinc-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-safety-policy">
+                    Safety Policy
+                  </label>
+                  <input
+                    id="console-safety-policy"
+                    aria-label="Safety Policy"
+                    type="text"
+                    value={draftPreferences.safetyPolicy}
+                    onChange={(event) =>
+                      handleConsolePreferenceChange({ safetyPolicy: event.target.value })
+                    }
+                    disabled={!connection.remoteEnabled}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-cyan-500 transition-colors disabled:bg-zinc-900/60 disabled:text-zinc-500"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end pt-2">
+                <button
+                  type="button"
+                  aria-label="Save Console Settings"
+                  disabled={!connection.remoteEnabled || preferencesSaving}
+                  onClick={() => void handleSaveConsolePreferences()}
+                  className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg text-sm transition-colors"
+                >
+                  <Save className="size-4" />
+                  保存 Console 配置
                 </button>
               </div>
             </div>

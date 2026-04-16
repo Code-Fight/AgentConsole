@@ -99,8 +99,9 @@ test("main entry only loads the design-source styles for the active figma-driven
 });
 
 test("environment and settings stay inside design-source instead of wrapping custom design views", () => {
-  expect(environmentSource).not.toContain("../../design");
+  expect(environmentSource).not.toContain('from "../../design";');
   expect(settingsSource).not.toContain('from "../../design";');
+  expect(environmentSource).toContain("useEnvironmentPage({ enabled: connection.remoteEnabled })");
 });
 
 test("shows a blocking connection dialog when gateway cookies are missing", async () => {

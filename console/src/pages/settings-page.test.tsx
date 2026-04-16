@@ -309,7 +309,7 @@ test("saving local gateway connection writes cookies before any remote settings 
   fireEvent.change(await scope.findByLabelText("Gateway URL"), {
     target: { value: "http://localhost:3100" },
   });
-  fireEvent.change(scope.getByLabelText("API Key"), {
+  fireEvent.change(scope.getByLabelText("Gateway API Key"), {
     target: { value: "test-key" },
   });
   fireEvent.click(scope.getByRole("button", { name: "Save Gateway Connection" }));
@@ -321,6 +321,135 @@ test("saving local gateway connection writes cookies before any remote settings 
 
   await waitFor(() => {
     expect(events.length).toBeGreaterThan(0);
+  });
+});
+
+test("renders remote console preferences from gateway settings", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = getPath(input);
+    if (path === "/settings/console" && (!init?.method || init.method === "GET")) {
+      return jsonResponse({
+        preferences: {
+          consoleUrl: "http://localhost:3200",
+          apiKey: "remote-key",
+          profile: "dev",
+          safetyPolicy: "strict",
+          lastThreadId: "",
+        },
+      });
+    }
+    if (path === "/settings/agents") {
+      return jsonResponse({ items: [{ agentType: "codex", displayName: "Codex" }] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [{ id: "machine-01", name: "Machine 01", status: "online", runtimeStatus: "running" }],
+      });
+    }
+    if (path === "/settings/agents/codex/global") {
+      return jsonResponse({ document: null });
+    }
+    if (path === "/settings/machines/machine-01/agents/codex") {
+      return jsonResponse({
+        machineId: "machine-01",
+        agentType: "codex",
+        globalDefault: null,
+        machineOverride: null,
+        usesGlobalDefault: true,
+      });
+    }
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  expect(await scope.findByLabelText("Console URL")).toHaveValue("http://localhost:3200");
+  expect(scope.getByLabelText("Console Profile")).toHaveValue("dev");
+  expect(scope.getByLabelText("Safety Policy")).toHaveValue("strict");
+  expect(scope.getByRole("button", { name: "Save Console Settings" })).toBeInTheDocument();
+});
+
+test("saving remote console preferences uses settings endpoint", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = getPath(input);
+    if (path === "/settings/console" && (!init?.method || init.method === "GET")) {
+      return jsonResponse({
+        preferences: {
+          consoleUrl: "",
+          apiKey: "",
+          profile: "",
+          safetyPolicy: "",
+          lastThreadId: "",
+        },
+      });
+    }
+    if (path === "/settings/console" && init?.method === "PUT") {
+      const body = init.body ? JSON.parse(String(init.body)) : { preferences: null };
+      return jsonResponse(body);
+    }
+    if (path === "/settings/agents") {
+      return jsonResponse({ items: [{ agentType: "codex", displayName: "Codex" }] });
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [{ id: "machine-01", name: "Machine 01", status: "online", runtimeStatus: "running" }],
+      });
+    }
+    if (path === "/settings/agents/codex/global") {
+      return jsonResponse({ document: null });
+    }
+    if (path === "/settings/machines/machine-01/agents/codex") {
+      return jsonResponse({
+        machineId: "machine-01",
+        agentType: "codex",
+        globalDefault: null,
+        machineOverride: null,
+        usesGlobalDefault: true,
+      });
+    }
+    throw new Error(`Unexpected request: ${path}`);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  fireEvent.change(await scope.findByLabelText("Console URL"), {
+    target: { value: "http://localhost:3200" },
+  });
+  fireEvent.change(scope.getByLabelText("Console Profile"), {
+    target: { value: "dev" },
+  });
+  fireEvent.change(scope.getByLabelText("Safety Policy"), {
+    target: { value: "strict" },
+  });
+  fireEvent.click(scope.getByRole("button", { name: "Save Console Settings" }));
+
+  await waitFor(() => {
+    const putCall = fetchMock.mock.calls.find(
+      ([input, init]) => getPath(input) === "/settings/console" && init?.method === "PUT",
+    );
+    expect(putCall).toBeTruthy();
+    const body = putCall?.[1]?.body ? JSON.parse(String(putCall[1]?.body)) : null;
+    expect(body).toEqual({
+      preferences: {
+        consoleUrl: "http://localhost:3200",
+        apiKey: "",
+        profile: "dev",
+        safetyPolicy: "strict",
+        lastThreadId: "",
+      },
+    });
   });
 });
 
