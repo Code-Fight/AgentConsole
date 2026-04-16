@@ -23,7 +23,7 @@ services:
       context: ../..
       dockerfile: testenv/dev-integration/Dockerfile.client
     environment:
-      MACHINE_ID: "${CAG_MACHINE_ID:-machine-01}"
+      MACHINE_NAME: "${CAG_MACHINE_NAME:-Settings E2E Client}"
       GATEWAY_URL: "ws://gateway:8080/ws/client"
       CODEX_RUNTIME_MODE: "${CAG_CLIENT_RUNTIME_MODE:-fake}"
       CODEX_BIN: "${CAG_CODEX_BIN:-codex}"

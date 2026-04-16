@@ -14,26 +14,30 @@ import (
 type Sender func([]byte) error
 
 type Session struct {
-	machineID string
-	send      Sender
-	now       func() time.Time
-	sendMu    sync.Mutex
+	machineID   string
+	machineName string
+	send        Sender
+	now         func() time.Time
+	sendMu      sync.Mutex
 }
 
-func NewSession(machineID string, send Sender, now func() time.Time) *Session {
+func NewSession(machineID string, machineName string, send Sender, now func() time.Time) *Session {
 	if now == nil {
 		now = time.Now
 	}
 
 	return &Session{
-		machineID: machineID,
-		send:      send,
-		now:       now,
+		machineID:   machineID,
+		machineName: machineName,
+		send:        send,
+		now:         now,
 	}
 }
 
 func (s *Session) Register() error {
-	return s.sendEnvelope(protocol.CategorySystem, "client.register", "", struct{}{})
+	return s.sendEnvelope(protocol.CategorySystem, "client.register", "", protocol.ClientRegisterPayload{
+		Name: s.machineName,
+	})
 }
 
 func (s *Session) Heartbeat() error {

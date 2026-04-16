@@ -22,11 +22,13 @@ services:
       args:
         CODEX_NPM_VERSION: "${CAG_CODEX_NPM_VERSION:-0.118.0}"
     environment:
-      MACHINE_ID: "${CAG_MACHINE_ID:-machine-01}"
+      MACHINE_NAME: "${CAG_MACHINE_NAME:-Dev Integration Client}"
       GATEWAY_URL: "ws://gateway:8080/ws/client"
       CODEX_RUNTIME_MODE: "${CAG_CLIENT_RUNTIME_MODE:-appserver}"
       CODEX_BIN: "${CAG_CODEX_BIN:-codex}"
       HOME: /home/appuser
+    volumes:
+      - client-state:/home/appuser/.code-agent-gateway
     depends_on:
       gateway:
         condition: service_healthy
@@ -43,3 +45,6 @@ services:
     depends_on:
       gateway:
         condition: service_healthy
+
+volumes:
+  client-state:

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -53,11 +54,11 @@ func TestSettingsSystemScenarios(t *testing.T) {
 		{
 			name: "put and get machine override",
 			run: func(t *testing.T, system *liveSettingsSystem) {
-				rec := system.request(http.MethodPut, "/settings/machines/machine-01/agents/codex", `{"content":"model = \"gpt-5.2\"\n"}`)
+				rec := system.request(http.MethodPut, system.machineAgentPath("codex"), `{"content":"model = \"gpt-5.2\"\n"}`)
 				if rec.Code != http.StatusOK {
 					t.Fatalf("put machine override returned %d: %s", rec.Code, rec.Body)
 				}
-				rec = system.request(http.MethodGet, "/settings/machines/machine-01/agents/codex", "")
+				rec = system.request(http.MethodGet, system.machineAgentPath("codex"), "")
 				if rec.Code != http.StatusOK {
 					t.Fatalf("get machine override returned %d", rec.Code)
 				}
@@ -74,12 +75,12 @@ func TestSettingsSystemScenarios(t *testing.T) {
 			name: "delete machine override falls back to global default",
 			run: func(t *testing.T, system *liveSettingsSystem) {
 				system.mustStoreGlobal(t, "model = \"gpt-5.4\"\n")
-				system.mustStoreMachine(t, "machine-01", "model = \"gpt-5.2\"\n")
-				rec := system.request(http.MethodDelete, "/settings/machines/machine-01/agents/codex", "")
+				system.mustStoreMachine(t, system.machineID, "model = \"gpt-5.2\"\n")
+				rec := system.request(http.MethodDelete, system.machineAgentPath("codex"), "")
 				if rec.Code != http.StatusNoContent {
 					t.Fatalf("delete machine override returned %d", rec.Code)
 				}
-				rec = system.request(http.MethodGet, "/settings/machines/machine-01/agents/codex", "")
+				rec = system.request(http.MethodGet, system.machineAgentPath("codex"), "")
 				var body domain.MachineAgentConfigAssignment
 				if err := json.Unmarshal([]byte(rec.Body), &body); err != nil {
 					t.Fatal(err)
@@ -93,7 +94,7 @@ func TestSettingsSystemScenarios(t *testing.T) {
 			name: "apply global default writes config file",
 			run: func(t *testing.T, system *liveSettingsSystem) {
 				system.mustStoreGlobal(t, "model = \"gpt-5.4\"\n")
-				rec := system.request(http.MethodPost, "/settings/machines/machine-01/agents/codex/apply", "")
+				rec := system.request(http.MethodPost, system.machineApplyPath("codex"), "")
 				if rec.Code != http.StatusOK {
 					t.Fatalf("apply returned %d: %s", rec.Code, rec.Body)
 				}
@@ -106,8 +107,8 @@ func TestSettingsSystemScenarios(t *testing.T) {
 			name: "apply machine override writes config file",
 			run: func(t *testing.T, system *liveSettingsSystem) {
 				system.mustStoreGlobal(t, "model = \"gpt-5.4\"\n")
-				system.mustStoreMachine(t, "machine-01", "model = \"gpt-5.2\"\n")
-				rec := system.request(http.MethodPost, "/settings/machines/machine-01/agents/codex/apply", "")
+				system.mustStoreMachine(t, system.machineID, "model = \"gpt-5.2\"\n")
+				rec := system.request(http.MethodPost, system.machineApplyPath("codex"), "")
 				if rec.Code != http.StatusOK {
 					t.Fatalf("apply returned %d: %s", rec.Code, rec.Body)
 				}
@@ -119,7 +120,7 @@ func TestSettingsSystemScenarios(t *testing.T) {
 		{
 			name: "apply without any config returns conflict",
 			run: func(t *testing.T, system *liveSettingsSystem) {
-				rec := system.request(http.MethodPost, "/settings/machines/machine-01/agents/codex/apply", "")
+				rec := system.request(http.MethodPost, system.machineApplyPath("codex"), "")
 				if rec.Code != http.StatusConflict {
 					t.Fatalf("expected 409, got %d", rec.Code)
 				}
@@ -200,6 +201,7 @@ type liveSettingsSystem struct {
 	server        *httptest.Server
 	settingsStore settings.Store
 	clientHome    string
+	machineID     string
 	cancel        context.CancelFunc
 	clientOutput  *bytes.Buffer
 }
@@ -230,7 +232,7 @@ func newLiveSettingsSystem(t *testing.T, clientBinary string) *liveSettingsSyste
 	command := exec.CommandContext(ctx, clientBinary)
 	command.Dir = repoRoot(t)
 	command.Env = append(os.Environ(),
-		"MACHINE_ID=machine-01",
+		"MACHINE_NAME=Settings System Test Client",
 		"GATEWAY_URL=ws"+server.URL[4:]+"/ws/client",
 		"CODEX_RUNTIME_MODE=fake",
 		"HOME="+clientHome,
@@ -248,12 +250,13 @@ func newLiveSettingsSystem(t *testing.T, clientBinary string) *liveSettingsSyste
 		server.Close()
 	})
 
-	waitForMachineRegistration(t, server.URL+"/machines", "machine-01")
+	machineID := waitForMachineRegistration(t, server.URL+"/machines")
 
 	return &liveSettingsSystem{
 		server:        server,
 		settingsStore: settingsStore,
 		clientHome:    clientHome,
+		machineID:     machineID,
 		cancel:        cancel,
 		clientOutput:  output,
 	}
@@ -286,6 +289,14 @@ func (s *liveSettingsSystem) request(method string, path string, body string) ht
 		Code: response.StatusCode,
 		Body: string(content),
 	}
+}
+
+func (s *liveSettingsSystem) machineAgentPath(agentType string) string {
+	return fmt.Sprintf("/settings/machines/%s/agents/%s", s.machineID, agentType)
+}
+
+func (s *liveSettingsSystem) machineApplyPath(agentType string) string {
+	return fmt.Sprintf("/settings/machines/%s/agents/%s/apply", s.machineID, agentType)
 }
 
 func (s *liveSettingsSystem) mustStoreGlobal(t *testing.T, content string) {
@@ -331,7 +342,11 @@ func (s *liveSettingsSystem) readAppliedConfigFile(t *testing.T, responseBody st
 func buildClientBinary(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "client")
-	command := exec.Command("/opt/homebrew/bin/go", "build", "-o", path, "./client/cmd/client")
+	goBinary, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatalf("locate go binary: %v", err)
+	}
+	command := exec.Command(goBinary, "build", "-o", path, "./client/cmd/client")
 	command.Dir = repoRoot(t)
 	output, err := command.CombinedOutput()
 	if err != nil {
@@ -349,7 +364,7 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(cwd, "..", "..", ".."))
 }
 
-func waitForMachineRegistration(t *testing.T, machinesURL string, machineID string) {
+func waitForMachineRegistration(t *testing.T, machinesURL string) string {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
@@ -361,8 +376,8 @@ func waitForMachineRegistration(t *testing.T, machinesURL string, machineID stri
 			if decodeErr := json.NewDecoder(response.Body).Decode(&body); decodeErr == nil {
 				_ = response.Body.Close()
 				for _, machine := range body.Items {
-					if machine.ID == machineID && machine.Status == domain.MachineStatusOnline {
-						return
+					if machine.ID != "" && machine.Status == domain.MachineStatusOnline {
+						return machine.ID
 					}
 				}
 			} else {
@@ -371,5 +386,6 @@ func waitForMachineRegistration(t *testing.T, machinesURL string, machineID stri
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("machine %q did not register in time", machineID)
+	t.Fatal("no online machine registered in time")
+	return ""
 }

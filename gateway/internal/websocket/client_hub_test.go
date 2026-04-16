@@ -21,7 +21,7 @@ import (
 )
 
 func TestClientHubAcceptsRegisterMessage(t *testing.T) {
-	hub := NewClientHub()
+	hub := NewClientHubWithStores(registry.NewStore(), nil)
 	server := httptest.NewServer(hub.Handler())
 	defer server.Close()
 
@@ -31,11 +31,16 @@ func TestClientHubAcceptsRegisterMessage(t *testing.T) {
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "done")
 
-	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.register","machineId":"machine-01","timestamp":"2026-04-07T10:00:00Z","version":"v1","payload":{}}`)); err != nil {
+	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.register","machineId":"machine-01","timestamp":"2026-04-07T10:00:00Z","version":"v1","payload":{"name":"Workstation Alpha"}}`)); err != nil {
 		t.Fatal(err)
 	}
 
 	waitForCount(t, hub, 1, 1*time.Second)
+
+	waitForCondition(t, 1*time.Second, func() bool {
+		machines := hub.registry.List()
+		return len(machines) == 1 && machines[0].Name == "Workstation Alpha"
+	})
 
 	time.Sleep(20 * time.Millisecond)
 	if err := conn.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.heartbeat","machineId":"machine-01","timestamp":"2026-04-07T10:00:05Z","version":"v1","payload":{}}`)); err != nil {
@@ -44,7 +49,7 @@ func TestClientHubAcceptsRegisterMessage(t *testing.T) {
 }
 
 func TestClientHubReconnectKeepsLatestConnectionOwner(t *testing.T) {
-	hub := NewClientHub()
+	hub := NewClientHubWithStores(registry.NewStore(), nil)
 	server := httptest.NewServer(hub.Handler())
 	defer server.Close()
 
@@ -54,7 +59,7 @@ func TestClientHubReconnectKeepsLatestConnectionOwner(t *testing.T) {
 	}
 	defer conn1.Close(websocket.StatusNormalClosure, "done")
 
-	if err := conn1.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.register","machineId":"machine-01","timestamp":"2026-04-07T10:00:00Z","version":"v1","payload":{}}`)); err != nil {
+	if err := conn1.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.register","machineId":"machine-01","timestamp":"2026-04-07T10:00:00Z","version":"v1","payload":{"name":"Workstation Alpha"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	waitForCount(t, hub, 1, 1*time.Second)
@@ -65,10 +70,15 @@ func TestClientHubReconnectKeepsLatestConnectionOwner(t *testing.T) {
 	}
 	defer conn2.Close(websocket.StatusNormalClosure, "done")
 
-	if err := conn2.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.register","machineId":"machine-01","timestamp":"2026-04-07T10:00:05Z","version":"v1","payload":{}}`)); err != nil {
+	if err := conn2.Write(context.Background(), websocket.MessageText, []byte(`{"category":"system","name":"client.register","machineId":"machine-01","timestamp":"2026-04-07T10:00:05Z","version":"v1","payload":{"name":"Workstation Beta"}}`)); err != nil {
 		t.Fatal(err)
 	}
 	waitForCount(t, hub, 1, 1*time.Second)
+
+	waitForCondition(t, 1*time.Second, func() bool {
+		machines := hub.registry.List()
+		return len(machines) == 1 && machines[0].Name == "Workstation Beta"
+	})
 
 	if err := conn1.Close(websocket.StatusNormalClosure, "old-conn-closed"); err != nil {
 		t.Fatal(err)

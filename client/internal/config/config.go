@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 )
@@ -12,17 +13,19 @@ const (
 
 type Config struct {
 	MachineID        string
+	MachineName      string
 	GatewayURL       string
 	RuntimeMode      string
 	CodexBin         string
 	ManagedAgentsDir string
 }
 
-func Read() Config {
-	machineID := os.Getenv("MACHINE_ID")
-	if machineID == "" {
-		machineID = "machine-01"
+func Read() (Config, error) {
+	machineID, err := loadOrCreateMachineID()
+	if err != nil {
+		return Config{}, fmt.Errorf("load machine identity: %w", err)
 	}
+	machineName := resolveMachineName(machineID)
 
 	gatewayURL := os.Getenv("GATEWAY_URL")
 	if gatewayURL == "" {
@@ -55,9 +58,10 @@ func Read() Config {
 
 	return Config{
 		MachineID:        machineID,
+		MachineName:      machineName,
 		GatewayURL:       gatewayURL,
 		RuntimeMode:      runtimeMode,
 		CodexBin:         codexBin,
 		ManagedAgentsDir: managedAgentsDir,
-	}
+	}, nil
 }

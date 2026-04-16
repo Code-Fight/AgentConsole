@@ -16,6 +16,7 @@ ARG CODEX_NPM_VERSION=0.118.0
 RUN npm install -g "@openai/codex@${CODEX_NPM_VERSION}"
 
 RUN useradd --system --create-home --home-dir /home/appuser appuser
+RUN mkdir -p /home/appuser/.code-agent-gateway && chown -R appuser:appuser /home/appuser
 USER appuser
 ENV HOME=/home/appuser
 

@@ -15,7 +15,7 @@ func TestSessionFrames(t *testing.T) {
 	var sent [][]byte
 	now := time.Date(2026, 4, 7, 10, 0, 0, 0, time.UTC)
 
-	session := NewSession("machine-01", func(msg []byte) error {
+	session := NewSession("machine-01", "Workstation Alpha", func(msg []byte) error {
 		copyMsg := append([]byte(nil), msg...)
 		sent = append(sent, copyMsg)
 		return nil
@@ -42,7 +42,7 @@ func TestSessionSnapshotFramesUseEnvelopeShape(t *testing.T) {
 	var sent [][]byte
 	now := time.Date(2026, 4, 8, 11, 0, 0, 0, time.UTC)
 
-	session := NewSession("machine-01", func(msg []byte) error {
+	session := NewSession("machine-01", "Workstation Alpha", func(msg []byte) error {
 		copyMsg := append([]byte(nil), msg...)
 		sent = append(sent, copyMsg)
 		return nil
@@ -89,7 +89,7 @@ func TestSessionCommandRejectedFrameUsesEnvelopeShape(t *testing.T) {
 	var sent [][]byte
 	now := time.Date(2026, 4, 8, 11, 5, 0, 0, time.UTC)
 
-	session := NewSession("machine-01", func(msg []byte) error {
+	session := NewSession("machine-01", "Workstation Alpha", func(msg []byte) error {
 		copyMsg := append([]byte(nil), msg...)
 		sent = append(sent, copyMsg)
 		return nil
@@ -135,6 +135,12 @@ func assertFrame(t *testing.T, raw []byte, expectedName string, now time.Time) {
 	var payload map[string]any
 	if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
 		t.Fatalf("decode payload failed: %v", err)
+	}
+	if expectedName == "client.register" {
+		if payload["name"] != "Workstation Alpha" {
+			t.Fatalf("expected register payload to include machine name, got %v", payload)
+		}
+		return
 	}
 	if len(payload) != 0 {
 		t.Fatalf("expected empty payload, got %v", payload)

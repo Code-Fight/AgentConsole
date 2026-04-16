@@ -21,6 +21,10 @@ type MachineSnapshotPayload struct {
 	Machine domain.Machine `json:"machine"`
 }
 
+type ClientRegisterPayload struct {
+	Name string `json:"name,omitempty"`
+}
+
 type ThreadSnapshotPayload struct {
 	Threads []domain.Thread `json:"threads"`
 }

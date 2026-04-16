@@ -57,7 +57,7 @@ func TestSendLiveSnapshotRebuildsRuntimeStateOnEveryCall(t *testing.T) {
 	mgr := manager.New(registry)
 
 	var sent [][]byte
-	session := newClientSession("machine-01", func(msg []byte) error {
+	session := newClientSession("machine-01", "machine-01", func(msg []byte) error {
 		sent = append(sent, append([]byte(nil), msg...))
 		return nil
 	}, func() time.Time {
@@ -854,11 +854,26 @@ func TestBuildRuntimeUsesAppServerByDefault(t *testing.T) {
 	}
 }
 
+func TestBuildMachineSnapshotUsesFriendlyMachineName(t *testing.T) {
+	machine := buildMachineSnapshot("machine-01", "Workstation Alpha", nil)
+
+	if machine.ID != "machine-01" {
+		t.Fatalf("expected machine id, got %+v", machine)
+	}
+	if machine.Name != "Workstation Alpha" {
+		t.Fatalf("expected friendly machine name, got %+v", machine)
+	}
+	if machine.RuntimeStatus != domain.MachineRuntimeStatusUnknown {
+		t.Fatalf("expected unknown runtime status without supervisor, got %+v", machine)
+	}
+}
+
 func TestRunClientReportsBootstrapFailureAndReturnsNonZero(t *testing.T) {
 	var stderr bytes.Buffer
 
 	exitCode := runClient(context.Background(), &stderr, config.Config{
 		MachineID:        "machine-01",
+		MachineName:      "Workstation Alpha",
 		RuntimeMode:      config.RuntimeModeAppServer,
 		ManagedAgentsDir: t.TempDir(),
 	}, time.Now, runtimeFactories{
@@ -877,7 +892,7 @@ func TestRunClientReportsBootstrapFailureAndReturnsNonZero(t *testing.T) {
 
 func newRecordingSession() (*clientSession, *[][]byte) {
 	sent := make([][]byte, 0, 1)
-	session := newClientSession("machine-01", func(msg []byte) error {
+	session := newClientSession("machine-01", "machine-01", func(msg []byte) error {
 		sent = append(sent, append([]byte(nil), msg...))
 		return nil
 	}, func() time.Time {

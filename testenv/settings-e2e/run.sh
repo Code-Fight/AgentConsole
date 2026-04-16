@@ -7,6 +7,7 @@ COMPOSE_FILE="${STACK_DIR}/docker-compose.yml"
 PROJECT_NAME="${CAG_SETTINGS_E2E_PROJECT:-cag-settings-e2e}"
 GATEWAY_PORT="${CAG_SETTINGS_E2E_GATEWAY_PORT:-18081}"
 CONSOLE_PORT="${CAG_SETTINGS_E2E_CONSOLE_PORT:-14174}"
+MACHINE_NAME="${CAG_MACHINE_NAME:-Settings E2E Client}"
 TMP_ROOT="${STACK_DIR}/.tmp/${PROJECT_NAME}"
 REPORT_PATH="${TMP_ROOT}/playwright-settings-report.json"
 
@@ -35,10 +36,11 @@ wait_for_http() {
 
 wait_for_machine() {
   local url="http://localhost:${GATEWAY_PORT}/machines"
-  local timeout="${1:-120}"
+  local machine_name="${1}"
+  local timeout="${2:-120}"
   local started_at
   started_at="$(date +%s)"
-  until python3 - "${url}" <<'PY'
+  until python3 - "${url}" "${machine_name}" <<'PY'
 import json
 import sys
 import urllib.request
@@ -47,14 +49,14 @@ with urllib.request.urlopen(sys.argv[1], timeout=3) as response:
     payload = json.load(response)
 
 for item in payload.get("items", []):
-    if item.get("id") == "machine-01" and item.get("status") == "online":
+    if item.get("name") == sys.argv[2] and item.get("status") == "online":
         raise SystemExit(0)
 
 raise SystemExit(1)
 PY
   do
     if (( "$(date +%s)" - started_at >= timeout )); then
-      echo "Timed out waiting for machine-01 registration" >&2
+      echo "Timed out waiting for ${MACHINE_NAME} registration" >&2
       return 1
     fi
     sleep 2
@@ -70,7 +72,7 @@ trap cleanup EXIT
 compose up --build -d
 wait_for_http "http://localhost:${GATEWAY_PORT}/health"
 wait_for_http "http://localhost:${CONSOLE_PORT}"
-wait_for_machine
+wait_for_machine "${MACHINE_NAME}"
 
 PLAYWRIGHT_BASE_URL="http://127.0.0.1:${CONSOLE_PORT}" \
 SETTINGS_E2E_CLIENT_HOME="${CAG_SETTINGS_E2E_CLIENT_HOME}" \

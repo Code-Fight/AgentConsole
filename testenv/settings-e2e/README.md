@@ -11,7 +11,7 @@
 默认会：
 
 1. 构建并启动 `gateway + client + console`
-2. 等待 `machine-01` 注册成功
+2. 等待名为 `Settings E2E Client` 的测试机器注册成功
 3. 运行 `console/tests/settings-e2e.spec.ts`
 4. 自动清理容器
 

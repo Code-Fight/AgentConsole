@@ -30,7 +30,13 @@ import (
 )
 
 func main() {
-	exitCode := runClient(context.Background(), os.Stderr, config.Read(), time.Now, defaultRuntimeFactories())
+	cfg, err := config.Read()
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "config bootstrap failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	exitCode := runClient(context.Background(), os.Stderr, cfg, time.Now, defaultRuntimeFactories())
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}
@@ -76,7 +82,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 		_ = supervisor.StopAll()
 	}()
 
-	machine := buildMachineSnapshot(cfg.MachineID, supervisor)
+	machine := buildMachineSnapshot(cfg.MachineID, cfg.MachineName, supervisor)
 
 	backoff := time.Duration(0)
 	for {
@@ -95,7 +101,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 			continue
 		}
 
-		session := newClientSession(cfg.MachineID, func(msg []byte) error {
+		session := newClientSession(cfg.MachineID, cfg.MachineName, func(msg []byte) error {
 			return conn.Write(shutdownCtx, cws.MessageText, msg)
 		}, now)
 		bindAllManagedRuntimeEvents(runtimeRegistry, session, agentManager)
@@ -107,7 +113,7 @@ func runClient(parentCtx context.Context, stderr io.Writer, cfg config.Config, n
 			}
 			continue
 		}
-		machine = buildMachineSnapshot(cfg.MachineID, supervisor)
+		machine = buildMachineSnapshot(cfg.MachineID, cfg.MachineName, supervisor)
 		if err := sendLiveSnapshot(session, machine, agentManager, runtimeRegistry); err != nil {
 			_ = conn.Close(cws.StatusNormalClosure, "snapshot-failed")
 			backoff = nextBackoff(backoff, reconnectMaxBackoff)
@@ -311,6 +317,7 @@ func (c *runtimeController) Close() error {
 type clientSession struct {
 	delegate     *gateway.Session
 	machineID    string
+	machineName  string
 	send         gateway.Sender
 	now          func() time.Time
 	sendMu       sync.Mutex
@@ -318,13 +325,14 @@ type clientSession struct {
 	approvalByID map[string]approvalContext
 }
 
-func newClientSession(machineID string, send gateway.Sender, now func() time.Time) *clientSession {
+func newClientSession(machineID string, machineName string, send gateway.Sender, now func() time.Time) *clientSession {
 	if now == nil {
 		now = time.Now
 	}
 
 	session := &clientSession{
 		machineID:    machineID,
+		machineName:  machineName,
 		now:          now,
 		approvalByID: map[string]approvalContext{},
 	}
@@ -333,7 +341,7 @@ func newClientSession(machineID string, send gateway.Sender, now func() time.Tim
 		defer session.sendMu.Unlock()
 		return send(msg)
 	}
-	session.delegate = gateway.NewSession(machineID, session.send, now)
+	session.delegate = gateway.NewSession(machineID, machineName, session.send, now)
 	return session
 }
 
@@ -1148,7 +1156,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.RuntimeStopCommandResult{}); err != nil {
 			return err
 		}
-		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, session.machineName, supervisor), mgr, registry)
 	case "runtime.start":
 		var payload protocol.RuntimeStartCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -1164,7 +1172,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.RuntimeStartCommandResult{}); err != nil {
 			return err
 		}
-		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, session.machineName, supervisor), mgr, registry)
 	case "machine.agent.install":
 		var payload protocol.MachineAgentInstallCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -1184,7 +1192,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 		}); err != nil {
 			return err
 		}
-		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, session.machineName, supervisor), mgr, registry)
 	case "machine.agent.delete":
 		var payload protocol.MachineAgentDeleteCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -1201,7 +1209,7 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 		}); err != nil {
 			return err
 		}
-		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, supervisor), mgr, registry)
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, session.machineName, supervisor), mgr, registry)
 	case "machine.agent.config.read":
 		var payload protocol.MachineAgentConfigReadCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
@@ -1486,10 +1494,13 @@ func refreshEnvironmentSnapshot(session *clientSession, mgr *manager.Manager, re
 	return session.EnvironmentSnapshot(snap.Environment)
 }
 
-func buildMachineSnapshot(machineID string, supervisor *manager.Supervisor) domain.Machine {
+func buildMachineSnapshot(machineID string, machineName string, supervisor *manager.Supervisor) domain.Machine {
+	if strings.TrimSpace(machineName) == "" {
+		machineName = machineID
+	}
 	machine := domain.Machine{
 		ID:     machineID,
-		Name:   machineID,
+		Name:   machineName,
 		Status: domain.MachineStatusOnline,
 	}
 	if supervisor == nil {

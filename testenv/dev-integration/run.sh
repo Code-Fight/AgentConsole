@@ -6,7 +6,7 @@ COMPOSE_FILE="${STACK_DIR}/docker-compose.yml"
 PROJECT_NAME="${CAG_TESTENV_PROJECT:-cag-dev-integration}"
 GATEWAY_PORT="${CAG_GATEWAY_PORT:-18080}"
 CONSOLE_PORT="${CAG_CONSOLE_PORT:-14173}"
-MACHINE_ID="${CAG_MACHINE_ID:-machine-01}"
+MACHINE_NAME="${CAG_MACHINE_NAME:-Dev Integration Client}"
 GATEWAY_URL="http://localhost:${GATEWAY_PORT}"
 CONSOLE_URL="http://localhost:${CONSOLE_PORT}"
 export CAG_CLIENT_RUNTIME_MODE="${CAG_CLIENT_RUNTIME_MODE:-appserver}"
@@ -36,28 +36,47 @@ wait_for_machine() {
   local started_at
   started_at="$(date +%s)"
 
-  until python3 - "${GATEWAY_URL}/machines" "${MACHINE_ID}" <<'PY'
+  until python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" <<'PY'
 import json
 import sys
 import urllib.request
 
-url, machine_id = sys.argv[1], sys.argv[2]
+url, machine_name = sys.argv[1], sys.argv[2]
 with urllib.request.urlopen(url, timeout=3) as response:
     payload = json.load(response)
 
 for item in payload.get("items", []):
-    if item.get("id") == machine_id and item.get("status") == "online":
+    if item.get("name") == machine_name and item.get("status") == "online":
         raise SystemExit(0)
 
 raise SystemExit(1)
 PY
   do
     if (( "$(date +%s)" - started_at >= timeout )); then
-      echo "Timed out waiting for client machine ${MACHINE_ID} to register" >&2
+      echo "Timed out waiting for client machine ${MACHINE_NAME} to register" >&2
       return 1
     fi
     sleep 2
   done
+}
+
+fetch_machine_id() {
+  python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" <<'PY'
+import json
+import sys
+import urllib.request
+
+url, machine_name = sys.argv[1], sys.argv[2]
+with urllib.request.urlopen(url, timeout=3) as response:
+    payload = json.load(response)
+
+for item in payload.get("items", []):
+    if item.get("name") == machine_name:
+        print(item.get("id", ""))
+        raise SystemExit(0)
+
+raise SystemExit(1)
+PY
 }
 
 cmd="${1:-up}"
@@ -68,9 +87,11 @@ case "${cmd}" in
     wait_for_http "gateway health" "${GATEWAY_URL}/health"
     wait_for_http "console" "${CONSOLE_URL}"
     wait_for_machine
+    machine_id="$(fetch_machine_id)"
     echo "Gateway: ${GATEWAY_URL}"
     echo "Console: ${CONSOLE_URL}"
-    echo "Machine: ${MACHINE_ID}"
+    echo "Machine Name: ${MACHINE_NAME}"
+    echo "Machine ID: ${machine_id}"
     echo
     echo "Quick checks:"
     echo "  curl ${GATEWAY_URL}/machines"
@@ -85,7 +106,8 @@ case "${cmd}" in
     wait_for_http "gateway health" "${GATEWAY_URL}/health"
     wait_for_http "console" "${CONSOLE_URL}"
     wait_for_machine
-    echo "Restarted stack at ${GATEWAY_URL} and ${CONSOLE_URL}"
+    machine_id="$(fetch_machine_id)"
+    echo "Restarted stack at ${GATEWAY_URL} and ${CONSOLE_URL} (${MACHINE_NAME} / ${machine_id})"
     ;;
   logs)
     compose logs -f

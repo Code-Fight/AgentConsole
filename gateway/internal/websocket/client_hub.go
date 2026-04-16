@@ -201,6 +201,13 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 			return
 		}
 
+		registerPayload := protocol.ClientRegisterPayload{}
+		if len(envelope.Payload) > 0 {
+			if err := transport.Decode(envelope.Payload, &registerPayload); err != nil {
+				registerPayload = protocol.ClientRegisterPayload{}
+			}
+		}
+
 		var waiters []pendingCommandWaiter
 		disconnectedMachineID := ""
 		h.mu.Lock()
@@ -221,9 +228,12 @@ func (h *ClientHub) handleSystemEnvelope(conn *cws.Conn, envelope protocol.Envel
 
 		machine := domain.Machine{
 			ID:            envelope.MachineID,
-			Name:          envelope.MachineID,
+			Name:          strings.TrimSpace(registerPayload.Name),
 			Status:        domain.MachineStatusOnline,
 			RuntimeStatus: domain.MachineRuntimeStatusUnknown,
+		}
+		if machine.Name == "" {
+			machine.Name = envelope.MachineID
 		}
 		if h.registry != nil {
 			h.registry.Upsert(machine)
