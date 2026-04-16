@@ -1,0 +1,87 @@
+import { afterEach, expect, test, vi } from "vitest";
+import {
+  clearGatewayConnectionCookies,
+  getGatewayConnectionConfig,
+  getGatewayConnectionState,
+  markGatewayAuthFailed,
+  readGatewayConnectionFromCookies,
+  saveGatewayConnectionToCookies,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
+
+afterEach(() => {
+  clearGatewayConnectionCookies();
+  document.cookie = "";
+});
+
+test("reads gateway connection from cookies", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
+
+  expect(readGatewayConnectionFromCookies()).toEqual({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+});
+
+test("treats blank or invalid gateway url as missing", () => {
+  document.cookie = "cag_gateway_url=   ";
+  document.cookie = "cag_gateway_api_key=test-key";
+  expect(readGatewayConnectionFromCookies()).toBeNull();
+
+  document.cookie = "cag_gateway_url=not-a-url";
+  document.cookie = "cag_gateway_api_key=test-key";
+  expect(readGatewayConnectionFromCookies()).toBeNull();
+});
+
+test("saves and clears gateway cookies", () => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+  expect(document.cookie).toContain("cag_gateway_url=http%3A%2F%2Flocalhost%3A18080");
+  expect(document.cookie).toContain("cag_gateway_api_key=test-key");
+
+  clearGatewayConnectionCookies();
+  expect(readGatewayConnectionFromCookies()).toBeNull();
+});
+
+test("tracks missing, ready, and authFailed states", () => {
+  clearGatewayConnectionCookies();
+  expect(getGatewayConnectionState()).toBe("missing");
+  expect(getGatewayConnectionConfig()).toBeNull();
+
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+  expect(getGatewayConnectionState()).toBe("ready");
+  expect(getGatewayConnectionConfig()).toEqual({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+
+  markGatewayAuthFailed();
+  expect(getGatewayConnectionState()).toBe("authFailed");
+});
+
+test("notifies subscribers on state changes", () => {
+  const listener = vi.fn();
+  const unsubscribe = subscribeGatewayConnection(listener);
+
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+  markGatewayAuthFailed();
+  clearGatewayConnectionCookies();
+
+  expect(listener).toHaveBeenCalledTimes(3);
+
+  unsubscribe();
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "test-key",
+  });
+  expect(listener).toHaveBeenCalledTimes(3);
+});

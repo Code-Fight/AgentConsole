@@ -1,4 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest";
+import {
+  clearGatewayConnectionCookies,
+  getGatewayConnectionState,
+} from "../../gateway/gateway-connection-store";
 import { buildThreadSocketUrl, connectConsoleSocket } from "./ws";
 
 class FakeWebSocket {
@@ -29,22 +33,25 @@ class FakeWebSocket {
 }
 
 afterEach(() => {
+  clearGatewayConnectionCookies();
+  document.cookie = "";
   FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
-test("uses an origin-aware websocket default url", () => {
+test("uses configured gateway websocket url", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
   const onMessage = vi.fn();
   const disconnect = connectConsoleSocket("thread-1", onMessage);
 
   const socket = FakeWebSocket.instances[0];
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const expectedUrl = `${protocol}://${window.location.host}/ws?threadId=thread-1`;
-
-  expect(socket.url).toBe(expectedUrl);
+  expect(socket.url).toBe(
+    "ws://localhost:18080/ws?threadId=thread-1&apiKey=test-key",
+  );
 
   disconnect();
 
@@ -54,28 +61,32 @@ test("uses an origin-aware websocket default url", () => {
 });
 
 test("builds thread websocket url for workspace placeholders", () => {
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  const expectedUrl = `${protocol}://${window.location.host}/ws?threadId=thread%201`;
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
+  const expectedUrl =
+    "ws://localhost:18080/ws?threadId=thread+1&apiKey=test-key";
 
   expect(buildThreadSocketUrl("thread 1")).toBe(expectedUrl);
 });
 
 test("connects without a thread filter when no thread id is provided", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
   const onMessage = vi.fn();
   const disconnect = connectConsoleSocket(undefined, onMessage);
 
   const socket = FakeWebSocket.instances[0];
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-
-  expect(socket.url).toBe(`${protocol}://${window.location.host}/ws`);
+  expect(socket.url).toBe("ws://localhost:18080/ws?apiKey=test-key");
 
   disconnect();
   expect(socket.close).toHaveBeenCalledOnce();
 });
 
 test("reconnects with bounded backoff after socket close", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
   vi.useFakeTimers();
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
@@ -100,4 +111,29 @@ test("reconnects with bounded backoff after socket close", () => {
   FakeWebSocket.instances[2].emit("close", new Event("close"));
   vi.advanceTimersByTime(5_000);
   expect(FakeWebSocket.instances).toHaveLength(3);
+});
+
+test("fails closed when gateway cookies are missing", () => {
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  const disconnect = connectConsoleSocket("thread-1", vi.fn());
+  expect(FakeWebSocket.instances).toHaveLength(0);
+
+  disconnect();
+});
+
+test("marks auth failed and stops reconnecting on auth close", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
+  vi.useFakeTimers();
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  connectConsoleSocket("thread-1", vi.fn());
+  expect(FakeWebSocket.instances).toHaveLength(1);
+
+  FakeWebSocket.instances[0].emit("close", new CloseEvent("close", { code: 1008 }));
+  vi.advanceTimersByTime(5_000);
+
+  expect(FakeWebSocket.instances).toHaveLength(1);
+  expect(getGatewayConnectionState()).toBe("authFailed");
 });

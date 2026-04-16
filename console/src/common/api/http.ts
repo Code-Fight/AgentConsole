@@ -1,4 +1,7 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+import {
+  getGatewayConnectionConfig,
+  markGatewayAuthFailed,
+} from "../../gateway/gateway-connection-store";
 
 export function buildThreadApiPath(threadId: string, resource?: string): string {
   const encodedThreadId = encodeURIComponent(threadId);
@@ -14,15 +17,24 @@ export async function http<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const headers = new Headers(init?.headers);
-  if (!headers.has("Accept")) {
-    headers.set("Accept", "application/json");
+  const config = getGatewayConnectionConfig();
+  if (!config) {
+    throw new Error("Gateway connection is not configured.");
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const headers = new Headers(init?.headers);
+  headers.set("Accept", "application/json");
+  headers.set("Authorization", `Bearer ${config.apiKey}`);
+
+  const response = await fetch(`${config.gatewayUrl}${path}`, {
     ...init,
     headers
   });
+
+  if (response.status === 401) {
+    markGatewayAuthFailed();
+    throw new Error("Gateway authentication failed.");
+  }
 
   if (!response.ok) {
     throw new Error(`Request failed with status ${response.status}`);
