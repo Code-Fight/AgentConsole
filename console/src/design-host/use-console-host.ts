@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { buildThreadApiPath, http } from "../common/api/http";
 import type {
   CreateThreadResponse,
@@ -8,6 +8,11 @@ import type {
   ThreadSummary,
 } from "../common/api/types";
 import { useCapabilities } from "../gateway/capabilities";
+import {
+  getGatewayConnectionState,
+  subscribeGatewayConnection,
+  type GatewayConnectionState,
+} from "../gateway/gateway-connection-store";
 import { formatThreadStatus } from "../gateway/thread-view-model";
 import { useConsolePreferences } from "../gateway/use-console-preferences";
 import { useThreadHub } from "../gateway/use-thread-hub";
@@ -64,6 +69,9 @@ export interface ConsoleMachine {
 
 export interface ConsoleHostViewModel {
   activePage: AppPage;
+  connectionStatus: ConsoleConnectionStatus;
+  connectionMessage: string;
+  remoteEnabled: boolean;
   machines: ConsoleMachine[];
   selectedSession: ConsoleSession | null;
   selectedMachine: ConsoleMachine | null;
@@ -101,11 +109,54 @@ interface UseConsoleHostOptions {
   navigate: (path: string) => void;
 }
 
+export type ConsoleConnectionStatus = "unconfigured" | "ready" | "authFailed";
+
+export interface ConsoleConnectionState {
+  status: ConsoleConnectionStatus;
+  message: string;
+  remoteEnabled: boolean;
+}
+
+function mapGatewayConnectionState(state: GatewayConnectionState): ConsoleConnectionState {
+  if (state === "ready") {
+    return {
+      status: "ready",
+      message: "",
+      remoteEnabled: true,
+    };
+  }
+
+  if (state === "authFailed") {
+    return {
+      status: "authFailed",
+      message: "Gateway 鉴权失败，请检查 API Key 后重试。",
+      remoteEnabled: false,
+    };
+  }
+
+  return {
+    status: "unconfigured",
+    message: "请先在设置页填写 Gateway URL 与 API Key。",
+    remoteEnabled: false,
+  };
+}
+
+export function useConsoleConnectionState(): ConsoleConnectionState {
+  const gatewayState = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionState,
+    getGatewayConnectionState,
+  );
+  return useMemo(() => mapGatewayConnectionState(gatewayState), [gatewayState]);
+}
+
 export function useConsoleHost({
   activePage,
   threadId,
   navigate,
 }: UseConsoleHostOptions): ConsoleHostViewModel {
+  const connection = useConsoleConnectionState();
+  const remoteEnabled = connection.remoteEnabled;
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [restoreAttempted, setRestoreAttempted] = useState(false);
@@ -115,15 +166,15 @@ export function useConsoleHost({
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
 
-  useCapabilities();
-  const hub = useThreadHub({ enabled: activePage !== "settings" });
+  useCapabilities(remoteEnabled);
+  const hub = useThreadHub({ enabled: remoteEnabled && activePage !== "settings" });
   const {
     preferences,
     isLoading: preferencesLoading,
     hasAttempted: preferencesAttempted,
     hasLoadedSuccessfully: preferencesLoadedSuccessfully,
     updatePreferences,
-  } = useConsolePreferences();
+  } = useConsolePreferences({ enabled: remoteEnabled });
 
   useEffect(() => {
     if (activePage !== "threads") {
@@ -132,7 +183,8 @@ export function useConsoleHost({
   }, [activePage]);
 
   useEffect(() => {
-    if (activePage !== "overview") {
+    if (!remoteEnabled || activePage !== "overview") {
+      setOverviewLoading(false);
       return;
     }
 
@@ -164,10 +216,16 @@ export function useConsoleHost({
     return () => {
       active = false;
     };
-  }, [activePage]);
+  }, [activePage, remoteEnabled]);
 
   useEffect(() => {
-    if (threadId || restoreAttempted || preferencesLoading || !preferencesAttempted) {
+    if (
+      !remoteEnabled ||
+      threadId ||
+      restoreAttempted ||
+      preferencesLoading ||
+      !preferencesAttempted
+    ) {
       return;
     }
 
@@ -186,6 +244,7 @@ export function useConsoleHost({
     setRestoredThreadId(lastThreadId);
     navigate(`/threads/${lastThreadId}`);
   }, [
+    remoteEnabled,
     threadId,
     restoreAttempted,
     preferencesLoading,
@@ -195,10 +254,11 @@ export function useConsoleHost({
     navigate,
   ]);
 
-  const workspace = useThreadWorkspace(threadId ?? "");
+  const workspace = useThreadWorkspace(threadId ?? "", { enabled: remoteEnabled });
 
   useEffect(() => {
     if (
+      !remoteEnabled ||
       !threadId ||
       lastVerifiedThreadId === threadId ||
       preferencesLoading ||
@@ -244,6 +304,7 @@ export function useConsoleHost({
       active = false;
     };
   }, [
+    remoteEnabled,
     threadId,
     lastVerifiedThreadId,
     preferencesLoading,
@@ -369,7 +430,7 @@ export function useConsoleHost({
   const handleCreateThread = useCallback(
     async (machineId: string, agentId: string, title: string) => {
       const nextTitle = title.trim();
-      if (!machineId || !agentId || nextTitle === "") {
+      if (!remoteEnabled || !machineId || !agentId || nextTitle === "") {
         return;
       }
 
@@ -389,30 +450,34 @@ export function useConsoleHost({
         navigate(`/threads/${created.thread.threadId}`);
       }
     },
-    [hub, navigate],
+    [hub, navigate, remoteEnabled],
   );
 
   const handleDeleteSession = useCallback(
     async (sessionId: string) => {
-      if (!sessionId) {
+      if (!remoteEnabled || !sessionId) {
         return;
       }
 
       await hub.handleDelete(sessionId);
     },
-    [hub],
+    [hub, remoteEnabled],
   );
 
   const handleRenameSession = useCallback(
     async (sessionId: string, newTitle: string) => {
+      if (!remoteEnabled) {
+        return;
+      }
+
       await hub.handleRename(sessionId, newTitle);
     },
-    [hub],
+    [hub, remoteEnabled],
   );
 
   const handleInstallAgent = useCallback(
     async (machineId: string, agentType: string, agentName: string) => {
-      if (!machineId || !agentType || !agentName.trim()) {
+      if (!remoteEnabled || !machineId || !agentType || !agentName.trim()) {
         return;
       }
 
@@ -428,12 +493,12 @@ export function useConsoleHost({
       });
       await hub.reload();
     },
-    [hub],
+    [hub, remoteEnabled],
   );
 
   const handleDeleteAgent = useCallback(
     async (machineId: string, agentId: string) => {
-      if (!machineId || !agentId) {
+      if (!remoteEnabled || !machineId || !agentId) {
         return;
       }
 
@@ -442,12 +507,12 @@ export function useConsoleHost({
       });
       await hub.reload();
     },
-    [hub],
+    [hub, remoteEnabled],
   );
 
   const handleUpdateAgentConfig = useCallback(
     async (machineId: string, agentId: string, config: string) => {
-      if (!machineId || !agentId) {
+      if (!remoteEnabled || !machineId || !agentId) {
         return;
       }
 
@@ -460,12 +525,12 @@ export function useConsoleHost({
       });
       await hub.reload();
     },
-    [hub],
+    [hub, remoteEnabled],
   );
 
   const handleStartRuntime = useCallback(
     async (machineId: string) => {
-      if (!machineId) {
+      if (!remoteEnabled || !machineId) {
         return;
       }
       await http(`/machines/${encodeURIComponent(machineId)}/runtime/start`, {
@@ -473,12 +538,12 @@ export function useConsoleHost({
       });
       await hub.reload();
     },
-    [hub],
+    [hub, remoteEnabled],
   );
 
   const handleStopRuntime = useCallback(
     async (machineId: string) => {
-      if (!machineId) {
+      if (!remoteEnabled || !machineId) {
         return;
       }
       await http(`/machines/${encodeURIComponent(machineId)}/runtime/stop`, {
@@ -486,11 +551,14 @@ export function useConsoleHost({
       });
       await hub.reload();
     },
-    [hub],
+    [hub, remoteEnabled],
   );
 
   return {
     activePage,
+    connectionStatus: connection.status,
+    connectionMessage: connection.message,
+    remoteEnabled,
     machines: consoleMachines,
     selectedSession,
     selectedMachine,

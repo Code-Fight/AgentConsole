@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { http } from "../common/api/http";
 import type {
   ConsolePreferences,
   ConsolePreferencesRequest,
@@ -67,7 +66,32 @@ export function resetConsolePreferencesStoreForTests() {
   emitChange();
 }
 
-export function useConsolePreferences() {
+interface UseConsolePreferencesOptions {
+  enabled?: boolean;
+}
+
+const asyncNull = async () => null;
+
+async function requestConsolePreferences(
+  init?: RequestInit,
+): Promise<ConsolePreferencesResponse> {
+  const response = await fetch("/settings/console", {
+    ...init,
+    headers: {
+      Accept: "application/json",
+      ...(init?.headers ?? {}),
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Request failed with status ${response.status}`);
+  }
+
+  return (await response.json()) as ConsolePreferencesResponse;
+}
+
+export function useConsolePreferences(options?: UseConsolePreferencesOptions) {
+  const enabled = options?.enabled ?? true;
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   const loadPreferences = useCallback(async () => {
@@ -77,7 +101,7 @@ export function useConsolePreferences() {
     setStoreState({ isLoading: true, loadError: null });
     loadPromise = (async () => {
       try {
-        const response = await http<ConsolePreferencesResponse>("/settings/console");
+        const response = await requestConsolePreferences();
         setStoreState({
           preferences: response.preferences,
           loadError: null,
@@ -103,17 +127,20 @@ export function useConsolePreferences() {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     if (!store.state.hasAttempted && !store.state.isLoading) {
       void loadPreferences();
     }
-  }, [loadPreferences]);
+  }, [enabled, loadPreferences]);
 
   const savePreferences = useCallback(
     async (next: ConsolePreferences) => {
       setStoreState({ isSaving: true, saveError: null });
       try {
         const payload: ConsolePreferencesRequest = { preferences: next };
-        const response = await http<ConsolePreferencesResponse>("/settings/console", {
+        const response = await requestConsolePreferences({
           method: "PUT",
           headers: {
             "Content-Type": "application/json",
@@ -157,6 +184,22 @@ export function useConsolePreferences() {
     }
     return snapshot.hasAttempted ? emptyPreferences : null;
   }, [snapshot.preferences, snapshot.loadError, snapshot.hasAttempted]);
+
+  if (!enabled) {
+    return {
+      preferences: null,
+      isLoading: false,
+      isSaving: false,
+      error: null,
+      loadError: null,
+      saveError: null,
+      hasAttempted: false,
+      hasLoadedSuccessfully: false,
+      reload: asyncNull,
+      savePreferences: asyncNull,
+      updatePreferences: asyncNull,
+    };
+  }
 
   return {
     preferences: normalized,

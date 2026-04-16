@@ -32,7 +32,12 @@ type PendingApproval = ApprovalRequiredPayload & { requestId: string };
 
 export type ThreadWorkspaceViewModel = ReturnType<typeof useThreadWorkspace>;
 
-export function useThreadWorkspace(threadId: string) {
+interface UseThreadWorkspaceOptions {
+  enabled?: boolean;
+}
+
+export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspaceOptions) {
+  const enabled = options?.enabled ?? true;
   const [prompt, setPrompt] = useState("");
   const [steerPrompt, setSteerPrompt] = useState("");
   const [messages, setMessages] = useState<WorkspaceMessageViewModel[]>([]);
@@ -57,7 +62,7 @@ export function useThreadWorkspace(threadId: string) {
   }, [threadId]);
 
   const loadWorkspace = useCallback(async () => {
-    if (!threadId) {
+    if (!enabled || !threadId) {
       return;
     }
 
@@ -103,14 +108,17 @@ export function useThreadWorkspace(threadId: string) {
         detailError instanceof Error ? detailError.message : "Unable to load thread.",
       );
     }
-  }, [threadId]);
+  }, [enabled, threadId]);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     void loadWorkspace();
-  }, [loadWorkspace]);
+  }, [enabled, loadWorkspace]);
 
   useEffect(() => {
-    if (!threadId) {
+    if (!enabled || !threadId) {
       return undefined;
     }
 
@@ -200,11 +208,11 @@ export function useThreadWorkspace(threadId: string) {
         setMessages((current) => [...current, toTurnCompletedMessage(payload)]);
       }
     });
-  }, [threadId]);
+  }, [enabled, threadId]);
 
   const handleApprovalDecision = useCallback(
     async (requestId: string, decision: ApprovalDecision, answers?: ApprovalAnswerMap) => {
-      if (!supportsCapability("approvals")) {
+      if (!enabled || !supportsCapability("approvals")) {
         return;
       }
 
@@ -229,12 +237,12 @@ export function useThreadWorkspace(threadId: string) {
         );
       }
     },
-    [],
+    [enabled],
   );
 
   const handlePromptSubmit = useCallback(async () => {
     const input = prompt.trim();
-    if (!threadId || input === "" || !supportsCapability("startTurn")) {
+    if (!enabled || !threadId || input === "" || !supportsCapability("startTurn")) {
       return;
     }
 
@@ -267,11 +275,17 @@ export function useThreadWorkspace(threadId: string) {
     } finally {
       setIsSubmitting(false);
     }
-  }, [prompt, threadId]);
+  }, [enabled, prompt, threadId]);
 
   const handleSteerSubmit = useCallback(async () => {
     const input = steerPrompt.trim();
-    if (!threadId || !activeTurnId || input === "" || !supportsCapability("steerTurn")) {
+    if (
+      !enabled ||
+      !threadId ||
+      !activeTurnId ||
+      input === "" ||
+      !supportsCapability("steerTurn")
+    ) {
       return;
     }
 
@@ -291,10 +305,10 @@ export function useThreadWorkspace(threadId: string) {
         steerError instanceof Error ? steerError.message : "Unable to steer turn.",
       );
     }
-  }, [activeTurnId, steerPrompt, threadId]);
+  }, [activeTurnId, enabled, steerPrompt, threadId]);
 
   const handleInterrupt = useCallback(async () => {
-    if (!threadId || !activeTurnId || !supportsCapability("interruptTurn")) {
+    if (!enabled || !threadId || !activeTurnId || !supportsCapability("interruptTurn")) {
       return;
     }
 
@@ -312,7 +326,7 @@ export function useThreadWorkspace(threadId: string) {
           : "Unable to interrupt turn.",
       );
     }
-  }, [activeTurnId, threadId]);
+  }, [activeTurnId, enabled, threadId]);
 
   const handleApprovalAnswerChange = useCallback(
     (requestId: string, questionId: string, value: string) => {
@@ -352,9 +366,9 @@ export function useThreadWorkspace(threadId: string) {
     prompt,
     steerPrompt,
     isSubmitting,
-    canStartTurn: supportsCapability("startTurn"),
-    canSteerTurn: supportsCapability("steerTurn") && Boolean(activeTurnId),
-    canInterruptTurn: supportsCapability("interruptTurn") && Boolean(activeTurnId),
+    canStartTurn: enabled && supportsCapability("startTurn"),
+    canSteerTurn: enabled && supportsCapability("steerTurn") && Boolean(activeTurnId),
+    canInterruptTurn: enabled && supportsCapability("interruptTurn") && Boolean(activeTurnId),
     setPrompt,
     setSteerPrompt,
     handlePromptSubmit,

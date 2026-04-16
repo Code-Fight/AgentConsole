@@ -1,50 +1,34 @@
 import { useEffect, useMemo, useState } from "react";
 import { Bot, Key, Save, Server } from "lucide-react";
-import type { ConsolePreferences } from "../../common/api/types";
+import { useConsoleConnectionState } from "../../design-host/use-console-host";
+import {
+  readGatewayConnectionFromCookies,
+  saveGatewayConnectionToCookies,
+} from "../../gateway/gateway-connection-store";
 import { useConsolePreferences } from "../../gateway/use-console-preferences";
 import { useSettingsPage } from "../../gateway/use-settings-page";
 
-const emptyConsolePreferences: ConsolePreferences = {
-  consoleUrl: "",
-  apiKey: "",
-  profile: "",
-  safetyPolicy: "",
-  lastThreadId: "",
-};
-
 export default function Settings() {
-  const vm = useSettingsPage();
+  const connection = useConsoleConnectionState();
+  const vm = useSettingsPage({ enabled: connection.remoteEnabled });
   const {
-    preferences,
     isLoading: preferencesLoading,
-    isSaving: preferencesSaving,
     loadError: preferencesLoadError,
     saveError: preferencesSaveError,
-    hasAttempted: preferencesAttempted,
-    savePreferences,
-  } = useConsolePreferences();
-  const [draftPreferences, setDraftPreferences] = useState<ConsolePreferences>(
-    emptyConsolePreferences,
-  );
-  const [hasDraftPreferences, setHasDraftPreferences] = useState(false);
-  const [consoleStatusMessage, setConsoleStatusMessage] = useState<string | null>(null);
+  } = useConsolePreferences({ enabled: connection.remoteEnabled });
+  const [draftGatewayUrl, setDraftGatewayUrl] = useState("");
+  const [draftApiKey, setDraftApiKey] = useState("");
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    if (preferences) {
-      setDraftPreferences(preferences);
-      setHasDraftPreferences(true);
-      return;
-    }
-
-    if (preferencesAttempted) {
-      setDraftPreferences(emptyConsolePreferences);
-      setHasDraftPreferences(true);
-    }
-  }, [preferences, preferencesAttempted]);
+    const localConnection = readGatewayConnectionFromCookies();
+    setDraftGatewayUrl(localConnection?.gatewayUrl ?? "");
+    setDraftApiKey(localConnection?.apiKey ?? "");
+  }, []);
 
   const combinedError = vm.error ?? preferencesLoadError ?? preferencesSaveError;
-  const combinedStatusMessage = consoleStatusMessage ?? vm.statusMessage;
-  const combinedLoading = vm.isLoading || preferencesLoading || !hasDraftPreferences;
+  const combinedStatusMessage = connectionMessage ?? vm.statusMessage;
+  const combinedLoading = vm.isLoading || preferencesLoading;
 
   const selectedAgentLabel = useMemo(
     () =>
@@ -62,16 +46,12 @@ export default function Settings() {
     [vm.machines, vm.selectedMachineId],
   );
 
-  const handleConsolePreferenceChange = (patch: Partial<ConsolePreferences>) => {
-    setConsoleStatusMessage(null);
-    setDraftPreferences((current) => ({ ...current, ...patch }));
-  };
-
-  const handleSaveConsolePreferences = async () => {
-    const response = await savePreferences(draftPreferences);
-    if (response) {
-      setConsoleStatusMessage("Console settings saved.");
-    }
+  const handleSaveGatewayConnection = () => {
+    saveGatewayConnectionToCookies({
+      gatewayUrl: draftGatewayUrl.trim(),
+      apiKey: draftApiKey.trim(),
+    });
+    setConnectionMessage("Gateway connection saved.");
   };
 
   return (
@@ -115,23 +95,24 @@ export default function Settings() {
               </div>
               <div>
                 <h2 className="text-base text-zinc-100">API Configuration</h2>
-                <p className="text-xs text-zinc-500">管理 Console URL、API Key 和运行偏好</p>
+                <p className="text-xs text-zinc-500">管理本地 Gateway 连接配置</p>
               </div>
             </div>
 
             <div className="space-y-4">
               <div>
                 <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-url">
-                  Console URL
+                  Gateway URL
                 </label>
                 <input
                   id="console-url"
-                  aria-label="Console URL"
+                  aria-label="Gateway URL"
                   type="text"
-                  value={draftPreferences.consoleUrl}
-                  onChange={(event) =>
-                    handleConsolePreferenceChange({ consoleUrl: event.target.value })
-                  }
+                  value={draftGatewayUrl}
+                  onChange={(event) => {
+                    setConnectionMessage(null);
+                    setDraftGatewayUrl(event.target.value);
+                  }}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-blue-500 transition-colors"
                 />
               </div>
@@ -144,58 +125,24 @@ export default function Settings() {
                   id="console-api-key"
                   aria-label="API Key"
                   type="password"
-                  value={draftPreferences.apiKey}
-                  onChange={(event) =>
-                    handleConsolePreferenceChange({ apiKey: event.target.value })
-                  }
+                  value={draftApiKey}
+                  onChange={(event) => {
+                    setConnectionMessage(null);
+                    setDraftApiKey(event.target.value);
+                  }}
                   className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-blue-500 transition-colors"
                 />
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div>
-                  <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-profile">
-                    Console Profile
-                  </label>
-                  <input
-                    id="console-profile"
-                    aria-label="Console Profile"
-                    type="text"
-                    value={draftPreferences.profile}
-                    onChange={(event) =>
-                      handleConsolePreferenceChange({ profile: event.target.value })
-                    }
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-blue-500 transition-colors"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm text-zinc-400 mb-2" htmlFor="console-safety-policy">
-                    Safety Policy
-                  </label>
-                  <input
-                    id="console-safety-policy"
-                    aria-label="Safety Policy"
-                    type="text"
-                    value={draftPreferences.safetyPolicy}
-                    onChange={(event) =>
-                      handleConsolePreferenceChange({ safetyPolicy: event.target.value })
-                    }
-                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-300 focus:outline-none focus:border-blue-500 transition-colors"
-                  />
-                </div>
               </div>
 
               <div className="flex items-center justify-end pt-2">
                 <button
                   type="button"
-                  aria-label="Save Console Settings"
-                  disabled={preferencesSaving}
-                  onClick={() => void handleSaveConsolePreferences()}
+                  aria-label="Save Gateway Connection"
+                  onClick={handleSaveGatewayConnection}
                   className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg text-sm transition-colors"
                 >
                   <Save className="size-4" />
-                  保存 Console 配置
+                  保存 Gateway 连接
                 </button>
               </div>
             </div>

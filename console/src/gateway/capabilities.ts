@@ -65,7 +65,7 @@ export async function refreshCapabilities(): Promise<CapabilitySnapshot> {
   return loadPromise;
 }
 
-export function useCapabilities(): CapabilitySnapshot {
+export function useCapabilities(enabled = true): CapabilitySnapshot {
   const [snapshot, setSnapshot] = useState<CapabilitySnapshot>(currentSnapshot);
 
   useEffect(() => {
@@ -77,8 +77,11 @@ export function useCapabilities(): CapabilitySnapshot {
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
     void refreshCapabilities();
-  }, []);
+  }, [enabled]);
 
   return snapshot;
 }
