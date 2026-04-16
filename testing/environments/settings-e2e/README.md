@@ -12,8 +12,9 @@
 
 1. 构建并启动 `gateway + client + console`
 2. 通过 `Authorization: Bearer <GATEWAY_API_KEY>` 轮询 `/machines`，等待名为 `Settings E2E Client` 的测试机器注册成功
-3. 运行 `testing/playwright/settings-e2e.spec.ts`
-4. 自动清理容器
+3. 向 Playwright 注入 `SETTINGS_E2E_GATEWAY_URL=http://127.0.0.1:<console-port>/api`（走 console 同源 `/api` 代理）
+4. 运行 `testing/playwright/settings-e2e.spec.ts`
+5. 自动清理容器
 
 临时目录会放在：
 

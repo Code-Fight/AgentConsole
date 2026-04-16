@@ -12,6 +12,7 @@ MACHINE_NAME="${CAG_MACHINE_NAME:-Settings E2E Client}"
 TMP_ROOT="${STACK_DIR}/.tmp/${PROJECT_NAME}"
 REPORT_PATH="${TMP_ROOT}/playwright-settings-report.json"
 
+rm -rf "${TMP_ROOT}"
 mkdir -p "${TMP_ROOT}/client-home" "${TMP_ROOT}/gateway-data"
 
 export CAG_SETTINGS_E2E_CLIENT_HOME="${TMP_ROOT}/client-home"
@@ -83,7 +84,7 @@ wait_for_machine "${MACHINE_NAME}"
 
 PLAYWRIGHT_BASE_URL="http://127.0.0.1:${CONSOLE_PORT}" \
 SETTINGS_E2E_CLIENT_HOME="${CAG_SETTINGS_E2E_CLIENT_HOME}" \
-SETTINGS_E2E_GATEWAY_URL="http://127.0.0.1:${GATEWAY_PORT}" \
+SETTINGS_E2E_GATEWAY_URL="http://127.0.0.1:${CONSOLE_PORT}/api" \
 SETTINGS_E2E_GATEWAY_API_KEY="${GATEWAY_API_KEY}" \
 corepack pnpm --dir "${REPO_ROOT}/console" exec playwright test --config playwright.settings.config.ts --reporter=json > "${REPORT_PATH}"
 
