@@ -1,3 +1,18 @@
+x-client-common: &client-common
+  build:
+    context: ../..
+    dockerfile: testenv/dev-integration/Dockerfile.client
+    args:
+      CODEX_NPM_VERSION: "${CAG_CODEX_NPM_VERSION:-0.118.0}"
+  environment: &client-environment
+    GATEWAY_URL: "ws://gateway:8080/ws/client"
+    CODEX_RUNTIME_MODE: "${CAG_CLIENT_RUNTIME_MODE:-appserver}"
+    CODEX_BIN: "${CAG_CODEX_BIN:-codex}"
+    HOME: /home/appuser
+  depends_on:
+    gateway:
+      condition: service_healthy
+
 services:
   gateway:
     build:
@@ -15,23 +30,27 @@ services:
       retries: 20
       start_period: 3s
 
-  client:
-    build:
-      context: ../..
-      dockerfile: testenv/dev-integration/Dockerfile.client
-      args:
-        CODEX_NPM_VERSION: "${CAG_CODEX_NPM_VERSION:-0.118.0}"
+  client-default:
+    <<: *client-common
     environment:
-      MACHINE_NAME: "${CAG_MACHINE_NAME:-Dev Integration Client}"
-      GATEWAY_URL: "ws://gateway:8080/ws/client"
-      CODEX_RUNTIME_MODE: "${CAG_CLIENT_RUNTIME_MODE:-appserver}"
-      CODEX_BIN: "${CAG_CODEX_BIN:-codex}"
-      HOME: /home/appuser
+      <<: *client-environment
+      MACHINE_NAME: "${CAG_MACHINE_NAME_DEFAULT:-Dev Integration Client}"
     volumes:
-      - client-state:/home/appuser/.code-agent-gateway
-    depends_on:
-      gateway:
-        condition: service_healthy
+      - client-default-state:/home/appuser/.code-agent-gateway
+
+  client-hostname:
+    <<: *client-common
+    hostname: "${CAG_HOSTNAME_FALLBACK_NAME:-hostname-fallback-client}"
+    volumes:
+      - client-hostname-state:/home/appuser/.code-agent-gateway
+
+  client-not-agent:
+    <<: *client-common
+    environment:
+      <<: *client-environment
+      MACHINE_NAME: "${CAG_MACHINE_NAME_NOT_AGENT:-Not Agent}"
+    volumes:
+      - client-not-agent-state:/home/appuser/.code-agent-gateway
 
   console:
     build:
@@ -47,4 +66,6 @@ services:
         condition: service_healthy
 
 volumes:
-  client-state:
+  client-default-state:
+  client-hostname-state:
+  client-not-agent-state:
