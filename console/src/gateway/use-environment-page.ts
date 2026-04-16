@@ -95,6 +95,7 @@ export function useEnvironmentPage(options?: UseEnvironmentPageOptions) {
     setMcpForm(null);
     setSkillForm(null);
     setPluginForm(null);
+    setError(null);
   }, [connectionIdentity]);
 
   useEffect(() => {
