@@ -6,10 +6,17 @@ COMPOSE_FILE="${STACK_DIR}/docker-compose.yml"
 PROJECT_NAME="${CAG_TESTENV_PROJECT:-cag-dev-integration}"
 GATEWAY_PORT="${CAG_GATEWAY_PORT:-18080}"
 CONSOLE_PORT="${CAG_CONSOLE_PORT:-14173}"
-MACHINE_NAME="${CAG_MACHINE_NAME:-Dev Integration Client}"
+DEFAULT_MACHINE_NAME="${CAG_MACHINE_NAME_DEFAULT:-Dev Integration Client}"
+HOSTNAME_FALLBACK_NAME="${CAG_HOSTNAME_FALLBACK_NAME:-hostname-fallback-client}"
+NOT_AGENT_MACHINE_NAME="${CAG_MACHINE_NAME_NOT_AGENT:-Not Agent}"
 GATEWAY_URL="http://localhost:${GATEWAY_PORT}"
 CONSOLE_URL="http://localhost:${CONSOLE_PORT}"
 export CAG_CLIENT_RUNTIME_MODE="${CAG_CLIENT_RUNTIME_MODE:-appserver}"
+EXPECTED_MACHINE_NAMES=(
+  "${DEFAULT_MACHINE_NAME}"
+  "${HOSTNAME_FALLBACK_NAME}"
+  "${NOT_AGENT_MACHINE_NAME}"
+)
 
 compose() {
   docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" "$@"
@@ -31,52 +38,66 @@ wait_for_http() {
   done
 }
 
-wait_for_machine() {
+wait_for_machines() {
   local timeout="${1:-120}"
   local started_at
   started_at="$(date +%s)"
 
-  until python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" <<'PY'
+  until python3 - "${GATEWAY_URL}/machines" "${EXPECTED_MACHINE_NAMES[@]}" <<'PY'
 import json
 import sys
 import urllib.request
 
-url, machine_name = sys.argv[1], sys.argv[2]
+url = sys.argv[1]
+expected_names = sys.argv[2:]
 with urllib.request.urlopen(url, timeout=3) as response:
     payload = json.load(response)
 
-for item in payload.get("items", []):
-    if item.get("name") == machine_name and item.get("status") == "online":
-        raise SystemExit(0)
+online_names = {
+    item.get("name")
+    for item in payload.get("items", [])
+    if item.get("status") == "online"
+}
+missing = [name for name in expected_names if name not in online_names]
+if not missing:
+    raise SystemExit(0)
 
 raise SystemExit(1)
 PY
   do
     if (( "$(date +%s)" - started_at >= timeout )); then
-      echo "Timed out waiting for client machine ${MACHINE_NAME} to register" >&2
+      echo "Timed out waiting for client machines: ${EXPECTED_MACHINE_NAMES[*]}" >&2
       return 1
     fi
     sleep 2
   done
 }
 
-fetch_machine_id() {
-  python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" <<'PY'
+fetch_machine_rows() {
+  python3 - "${GATEWAY_URL}/machines" "${EXPECTED_MACHINE_NAMES[@]}" <<'PY'
 import json
 import sys
 import urllib.request
 
-url, machine_name = sys.argv[1], sys.argv[2]
+url = sys.argv[1]
+expected_names = sys.argv[2:]
 with urllib.request.urlopen(url, timeout=3) as response:
     payload = json.load(response)
 
-for item in payload.get("items", []):
-    if item.get("name") == machine_name:
-        print(item.get("id", ""))
-        raise SystemExit(0)
-
-raise SystemExit(1)
+items = {
+    item.get("name"): item.get("id", "")
+    for item in payload.get("items", [])
+}
+for name in expected_names:
+    print(f"{name}\t{items.get(name, '')}")
 PY
+}
+
+print_machine_summary() {
+  while IFS=$'\t' read -r machine_name machine_id; do
+    echo "Machine Name: ${machine_name}"
+    echo "Machine ID: ${machine_id}"
+  done < <(fetch_machine_rows)
 }
 
 cmd="${1:-up}"
@@ -86,12 +107,10 @@ case "${cmd}" in
     compose up --build -d
     wait_for_http "gateway health" "${GATEWAY_URL}/health"
     wait_for_http "console" "${CONSOLE_URL}"
-    wait_for_machine
-    machine_id="$(fetch_machine_id)"
+    wait_for_machines
     echo "Gateway: ${GATEWAY_URL}"
     echo "Console: ${CONSOLE_URL}"
-    echo "Machine Name: ${MACHINE_NAME}"
-    echo "Machine ID: ${machine_id}"
+    print_machine_summary
     echo
     echo "Quick checks:"
     echo "  curl ${GATEWAY_URL}/machines"
@@ -105,9 +124,9 @@ case "${cmd}" in
     compose up --build -d
     wait_for_http "gateway health" "${GATEWAY_URL}/health"
     wait_for_http "console" "${CONSOLE_URL}"
-    wait_for_machine
-    machine_id="$(fetch_machine_id)"
-    echo "Restarted stack at ${GATEWAY_URL} and ${CONSOLE_URL} (${MACHINE_NAME} / ${machine_id})"
+    wait_for_machines
+    echo "Restarted stack at ${GATEWAY_URL} and ${CONSOLE_URL}"
+    print_machine_summary
     ;;
   logs)
     compose logs -f
