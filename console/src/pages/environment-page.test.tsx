@@ -1,8 +1,20 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ConsoleHostRouter } from "../design-host/console-host-router";
+import {
+  clearGatewayConnectionCookies,
+  saveGatewayConnectionToCookies,
+} from "../gateway/gateway-connection-store";
+
+function getPath(input: RequestInfo | URL | string): string {
+  const raw = typeof input === "string" ? input : input.toString();
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    return new URL(raw).pathname;
+  }
+  return raw;
+}
 
 const connectConsoleSocketMock = vi.fn();
 const capabilitySnapshot = vi.hoisted(() => ({
@@ -35,13 +47,21 @@ vi.mock("../common/api/ws", () => ({
 
 afterEach(() => {
   connectConsoleSocketMock.mockReset();
+  clearGatewayConnectionCookies();
   vi.unstubAllGlobals();
+});
+
+beforeEach(() => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "environment-test-key",
+  });
 });
 
 test("renders the active environment surface with gateway resources and enabled environment write actions", async () => {
   connectConsoleSocketMock.mockReturnValue(() => {});
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const path = typeof input === "string" ? input : input.toString();
+    const path = getPath(input);
     const bootstrap = bootstrapResponse(path);
     if (bootstrap) {
       return bootstrap;
@@ -125,7 +145,7 @@ test("renders the active environment surface with gateway resources and enabled 
 test("sync catalog, restart bridge, and open marketplace are wired in the active environment surface", async () => {
   connectConsoleSocketMock.mockReturnValue(() => {});
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = typeof input === "string" ? input : input.toString();
+    const path = getPath(input);
     const bootstrap = bootstrapResponse(path);
     if (bootstrap) {
       return bootstrap;
@@ -158,11 +178,11 @@ test("sync catalog, restart bridge, and open marketplace are wired in the active
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/sync",
+      expect.stringContaining("/environment/sync"),
       expect.objectContaining({ method: "POST" }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/mcps/restart-bridge",
+      expect.stringContaining("/environment/mcps/restart-bridge"),
       expect.objectContaining({ method: "POST" }),
     );
   });
@@ -242,14 +262,14 @@ test("clicking a skill action sends the path-based resource id and machineId", a
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      `/environment/skills/${encodedSkillPath}/disable`,
+      expect.stringContaining(`/environment/skills/${encodedSkillPath}/disable`),
       expect.objectContaining({
         body: JSON.stringify({ machineId: "machine-9" }),
         method: "POST",
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      `/environment/skills/${encodedSkillPath}`,
+      expect.stringContaining(`/environment/skills/${encodedSkillPath}`),
       expect.objectContaining({
         body: JSON.stringify({ machineId: "machine-9" }),
         method: "DELETE",
@@ -308,7 +328,7 @@ test("submits skill scaffold create requests", async () => {
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/skills",
+      expect.stringContaining("/environment/skills"),
       expect.objectContaining({
         body: JSON.stringify({
           machineId: "machine-22",
@@ -370,7 +390,7 @@ test("submits MCP config through the create form", async () => {
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/mcps",
+      expect.stringContaining("/environment/mcps"),
       expect.objectContaining({
         body: JSON.stringify({
           machineId: "machine-1",
@@ -483,7 +503,7 @@ test("edits MCP config and issues enable, disable, and delete actions", async ()
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/mcps",
+      expect.stringContaining("/environment/mcps"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
@@ -497,21 +517,21 @@ test("edits MCP config and issues enable, disable, and delete actions", async ()
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/mcps/slack/enable",
+      expect.stringContaining("/environment/mcps/slack/enable"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ machineId: "machine-1" }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/mcps/github/disable",
+      expect.stringContaining("/environment/mcps/github/disable"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ machineId: "machine-1" }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/mcps/github",
+      expect.stringContaining("/environment/mcps/github"),
       expect.objectContaining({
         method: "DELETE",
         body: JSON.stringify({ machineId: "machine-1" }),
@@ -630,7 +650,7 @@ test("renders plugin detail contents and install action for marketplace plugins"
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/plugins/gmail%40openai-curated/install",
+      expect.stringContaining("/environment/plugins/gmail%40openai-curated/install"),
       expect.objectContaining({
         body: JSON.stringify({
           machineId: "machine-1",
@@ -700,14 +720,14 @@ test("plugin disable and uninstall send the machine id", async () => {
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/plugins/plugin-installed/disable",
+      expect.stringContaining("/environment/plugins/plugin-installed/disable"),
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({ machineId: "machine-1" }),
       }),
     );
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/plugins/plugin-installed",
+      expect.stringContaining("/environment/plugins/plugin-installed"),
       expect.objectContaining({
         method: "DELETE",
         body: JSON.stringify({ machineId: "machine-1" }),
@@ -766,7 +786,7 @@ test("submits plugin install requests for add plugin record", async () => {
 
   await waitFor(() => {
     expect(fetchMock).toHaveBeenCalledWith(
-      "/environment/plugins/install",
+      expect.stringContaining("/environment/plugins/install"),
       expect.objectContaining({
         body: JSON.stringify({
           machineId: "machine-3",
@@ -828,13 +848,14 @@ async function getMainScope() {
 }
 
 function bootstrapResponse(path: string): Response | null {
-  if (path === "/settings/console") {
+  const normalizedPath = getPath(path);
+  if (normalizedPath === "/settings/console") {
     return jsonResponse({ preferences: null });
   }
-  if (path === "/threads") {
+  if (normalizedPath === "/threads") {
     return jsonResponse({ items: [] });
   }
-  if (path === "/machines") {
+  if (normalizedPath === "/machines") {
     return jsonResponse({ items: [] });
   }
   return null;

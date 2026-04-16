@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState, useSyncExternalStore } from "react";
 import { http } from "../common/api/http";
 import type {
   EventEnvelope,
@@ -7,6 +7,10 @@ import type {
 } from "../common/api/types";
 import { connectConsoleSocket } from "../common/api/ws";
 import { supportsCapability } from "./capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 
 interface EnvironmentSections {
   skills: EnvironmentResource[];
@@ -66,6 +70,11 @@ export function extractMCPConfig(resource: EnvironmentResource): Record<string, 
 
 export function useEnvironmentPage(options?: UseEnvironmentPageOptions) {
   const enabled = options?.enabled ?? true;
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const [sections, setSections] = useState<EnvironmentSections>({
     skills: [],
     mcps: [],
@@ -89,6 +98,7 @@ export function useEnvironmentPage(options?: UseEnvironmentPageOptions) {
     }
 
     let cancelled = false;
+    setIsLoading(true);
 
     async function loadEnvironment() {
       try {
@@ -127,7 +137,7 @@ export function useEnvironmentPage(options?: UseEnvironmentPageOptions) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, refreshNonce]);
+  }, [enabled, connectionIdentity, refreshNonce]);
 
   useEffect(
     () => {
@@ -151,7 +161,7 @@ export function useEnvironmentPage(options?: UseEnvironmentPageOptions) {
       })
       );
     },
-    [enabled],
+    [enabled, connectionIdentity],
   );
 
   function openCreateMCPForm() {

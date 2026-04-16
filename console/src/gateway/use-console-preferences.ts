@@ -5,6 +5,10 @@ import type {
   ConsolePreferencesRequest,
   ConsolePreferencesResponse,
 } from "../common/api/types";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 
 const emptyPreferences: ConsolePreferences = {
   consoleUrl: "",
@@ -22,6 +26,7 @@ interface ConsolePreferencesState {
   isSaving: boolean;
   loadError: string | null;
   saveError: string | null;
+  loadedIdentity: string | null;
 }
 
 const initialState: ConsolePreferencesState = {
@@ -32,6 +37,7 @@ const initialState: ConsolePreferencesState = {
   isSaving: false,
   loadError: null,
   saveError: null,
+  loadedIdentity: null,
 };
 
 const store = {
@@ -76,6 +82,11 @@ const asyncNull = async () => null;
 export function useConsolePreferences(options?: UseConsolePreferencesOptions) {
   const enabled = options?.enabled ?? true;
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
 
   const loadPreferences = useCallback(async () => {
     if (loadPromise) {
@@ -91,6 +102,7 @@ export function useConsolePreferences(options?: UseConsolePreferencesOptions) {
           saveError: null,
           hasAttempted: true,
           hasLoadedSuccessfully: true,
+          loadedIdentity: connectionIdentity,
         });
       } catch (loadError) {
         setStoreState({
@@ -100,6 +112,7 @@ export function useConsolePreferences(options?: UseConsolePreferencesOptions) {
               : "Unable to load console preferences.",
           hasAttempted: true,
           hasLoadedSuccessfully: false,
+          loadedIdentity: connectionIdentity,
         });
       } finally {
         loadPromise = null;
@@ -107,16 +120,24 @@ export function useConsolePreferences(options?: UseConsolePreferencesOptions) {
       }
     })();
     return loadPromise;
-  }, []);
+  }, [connectionIdentity]);
 
   useEffect(() => {
     if (!enabled) {
       return;
     }
-    if (!store.state.hasAttempted && !store.state.isLoading) {
+    if (store.state.isLoading) {
+      return;
+    }
+
+    const shouldReload =
+      !store.state.hasLoadedSuccessfully ||
+      store.state.loadedIdentity !== connectionIdentity;
+
+    if (shouldReload) {
       void loadPreferences();
     }
-  }, [enabled, loadPreferences]);
+  }, [enabled, connectionIdentity, loadPreferences]);
 
   const savePreferences = useCallback(
     async (next: ConsolePreferences) => {

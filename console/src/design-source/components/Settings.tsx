@@ -35,6 +35,7 @@ export default function Settings() {
     emptyConsolePreferences,
   );
   const [hasDraftPreferences, setHasDraftPreferences] = useState(false);
+  const [gatewayErrorMessage, setGatewayErrorMessage] = useState<string | null>(null);
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
   const [consoleStatusMessage, setConsoleStatusMessage] = useState<string | null>(null);
 
@@ -63,7 +64,12 @@ export default function Settings() {
     }
   }, [connection.remoteEnabled, preferences, preferencesAttempted]);
 
-  const combinedError = vm.error ?? preferencesLoadError ?? preferencesSaveError;
+  const combinedError =
+    gatewayErrorMessage ??
+    vm.error ??
+    preferencesLoadError ??
+    preferencesSaveError ??
+    (!connection.remoteEnabled ? connection.message : null);
   const combinedStatusMessage = connectionMessage ?? consoleStatusMessage ?? vm.statusMessage;
   const combinedLoading =
     vm.isLoading || (connection.remoteEnabled && (preferencesLoading || !hasDraftPreferences));
@@ -85,15 +91,37 @@ export default function Settings() {
   );
 
   const handleSaveGatewayConnection = () => {
+    const gatewayUrl = draftGatewayUrl.trim();
+    const apiKey = draftApiKey.trim();
+
+    let parsedUrl: URL | null = null;
+    try {
+      parsedUrl = new URL(gatewayUrl);
+    } catch {
+      parsedUrl = null;
+    }
+    const hasValidUrl =
+      parsedUrl !== null &&
+      (parsedUrl.protocol === "http:" || parsedUrl.protocol === "https:");
+    const hasApiKey = apiKey.length > 0;
+    if (!hasValidUrl || !hasApiKey) {
+      setGatewayErrorMessage("Please enter a valid Gateway URL and API key.");
+      setConnectionMessage(null);
+      setConsoleStatusMessage(null);
+      return;
+    }
+
+    setGatewayErrorMessage(null);
     saveGatewayConnectionToCookies({
-      gatewayUrl: draftGatewayUrl.trim(),
-      apiKey: draftApiKey.trim(),
+      gatewayUrl,
+      apiKey,
     });
     setConsoleStatusMessage(null);
     setConnectionMessage("Gateway connection saved.");
   };
 
   const handleConsolePreferenceChange = (patch: Partial<ConsolePreferences>) => {
+    setGatewayErrorMessage(null);
     setConnectionMessage(null);
     setConsoleStatusMessage(null);
     setDraftPreferences((current) => ({ ...current, ...patch }));
@@ -166,6 +194,7 @@ export default function Settings() {
                   type="text"
                   value={draftGatewayUrl}
                   onChange={(event) => {
+                    setGatewayErrorMessage(null);
                     setConnectionMessage(null);
                     setDraftGatewayUrl(event.target.value);
                   }}
@@ -183,6 +212,7 @@ export default function Settings() {
                   type="password"
                   value={draftApiKey}
                   onChange={(event) => {
+                    setGatewayErrorMessage(null);
                     setConnectionMessage(null);
                     setDraftApiKey(event.target.value);
                   }}

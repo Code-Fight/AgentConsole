@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { http } from "../common/api/http";
 import type {
   CreateThreadResponse,
@@ -10,6 +10,10 @@ import type {
 } from "../common/api/types";
 import { connectConsoleSocket } from "../common/api/ws";
 import { supportsCapability } from "./capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 import { parseEnvelope, toThreadHubItem } from "./thread-view-model";
 
 interface UseThreadHubOptions {
@@ -20,6 +24,11 @@ export type ThreadHubViewModel = ReturnType<typeof useThreadHub>;
 
 export function useThreadHub(options?: UseThreadHubOptions) {
   const enabled = options?.enabled ?? true;
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [machines, setMachines] = useState<Record<string, MachineSummary>>({});
   const [error, setError] = useState<string | null>(null);
@@ -58,8 +67,11 @@ export function useThreadHub(options?: UseThreadHubOptions) {
       setError(null);
       return;
     }
+    setThreads([]);
+    setMachines({});
+    setError(null);
     void loadHubData();
-  }, [enabled, loadHubData]);
+  }, [enabled, connectionIdentity, loadHubData]);
 
   useEffect(
     () => {
@@ -80,7 +92,7 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         void loadHubData();
       });
     },
-    [enabled, loadHubData],
+    [enabled, connectionIdentity, loadHubData],
   );
 
   const handleCreateThread = useCallback(

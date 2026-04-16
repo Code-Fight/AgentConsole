@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { buildThreadApiPath, http } from "../common/api/http";
 import type {
   ApprovalDecision,
@@ -15,6 +15,10 @@ import type {
 } from "../common/api/types";
 import { connectConsoleSocket } from "../common/api/ws";
 import { supportsCapability } from "./capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 import {
   buildDefaultApprovalAnswers,
   formatMachineStatus,
@@ -38,6 +42,11 @@ interface UseThreadWorkspaceOptions {
 
 export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspaceOptions) {
   const enabled = options?.enabled ?? true;
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const [prompt, setPrompt] = useState("");
   const [steerPrompt, setSteerPrompt] = useState("");
   const [messages, setMessages] = useState<WorkspaceMessageViewModel[]>([]);
@@ -59,7 +68,7 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     setActiveTurnId(null);
     setThreadTitle("");
     setError(null);
-  }, [threadId]);
+  }, [threadId, connectionIdentity]);
 
   const loadWorkspace = useCallback(async () => {
     if (!enabled || !threadId) {
@@ -115,7 +124,7 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
       return;
     }
     void loadWorkspace();
-  }, [enabled, loadWorkspace]);
+  }, [enabled, connectionIdentity, loadWorkspace]);
 
   useEffect(() => {
     if (!enabled || !threadId) {
@@ -208,7 +217,7 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
         setMessages((current) => [...current, toTurnCompletedMessage(payload)]);
       }
     });
-  }, [enabled, threadId]);
+  }, [enabled, threadId, connectionIdentity]);
 
   const handleApprovalDecision = useCallback(
     async (requestId: string, decision: ApprovalDecision, answers?: ApprovalAnswerMap) => {

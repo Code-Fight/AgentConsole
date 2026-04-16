@@ -1,6 +1,10 @@
 import { useEffect, useState } from "react";
 import { http } from "../common/api/http";
 import type { CapabilitySnapshot } from "../common/api/types";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 
 const defaultCapabilities: CapabilitySnapshot = {
   threadHub: false,
@@ -34,6 +38,8 @@ type CapabilityListener = (snapshot: CapabilitySnapshot) => void;
 let currentSnapshot: CapabilitySnapshot = { ...defaultCapabilities };
 let loadPromise: Promise<CapabilitySnapshot> | null = null;
 const listeners = new Set<CapabilityListener>();
+let loadedIdentity: string | null = null;
+let observedIdentity = getGatewayConnectionIdentity();
 
 function normalizeSnapshot(snapshot: Partial<CapabilitySnapshot>): CapabilitySnapshot {
   const merged = { ...defaultCapabilities, ...snapshot } as CapabilitySnapshot;
@@ -48,12 +54,47 @@ function updateSnapshot(snapshot: CapabilitySnapshot) {
   listeners.forEach((listener) => listener(snapshot));
 }
 
+function resetSnapshot() {
+  updateSnapshot({ ...defaultCapabilities });
+}
+
+subscribeGatewayConnection(() => {
+  const nextIdentity = getGatewayConnectionIdentity();
+  if (nextIdentity === observedIdentity) {
+    return;
+  }
+
+  observedIdentity = nextIdentity;
+  loadedIdentity = null;
+  loadPromise = null;
+  resetSnapshot();
+});
+
 export async function refreshCapabilities(): Promise<CapabilitySnapshot> {
+  const identity = getGatewayConnectionIdentity();
+  if (identity === "missing" || identity === "authFailed") {
+    if (loadedIdentity !== identity) {
+      loadedIdentity = identity;
+      resetSnapshot();
+    }
+    return currentSnapshot;
+  }
+
+  if (loadedIdentity !== identity) {
+    loadedIdentity = identity;
+    resetSnapshot();
+  }
+
   if (loadPromise) {
     return loadPromise;
   }
+
+  const requestIdentity = identity;
   loadPromise = http<CapabilitySnapshot>("/capabilities")
     .then((snapshot) => {
+      if (requestIdentity !== getGatewayConnectionIdentity()) {
+        return currentSnapshot;
+      }
       const next = normalizeSnapshot(snapshot ?? {});
       updateSnapshot(next);
       return next;

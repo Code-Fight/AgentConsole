@@ -324,6 +324,46 @@ test("saving local gateway connection writes cookies before any remote settings 
   });
 });
 
+test("shows connection status message on settings when gateway is not ready", async () => {
+  clearGatewayCookies();
+
+  vi.stubGlobal("fetch", vi.fn(async () => jsonResponse({ items: [] })));
+
+  render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  expect(await scope.findByText("请先在设置页填写 Gateway URL 与 API Key。")).toBeInTheDocument();
+});
+
+test("rejects invalid gateway connection input without success message", async () => {
+  clearGatewayCookies();
+  const fetchMock = vi.fn(async () => jsonResponse({ items: [] }));
+  vi.stubGlobal("fetch", fetchMock);
+
+  render(
+    <MemoryRouter initialEntries={["/settings"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  const scope = await getMainScope();
+  fireEvent.change(await scope.findByLabelText("Gateway URL"), {
+    target: { value: "not-a-url" },
+  });
+  fireEvent.change(scope.getByLabelText("Gateway API Key"), {
+    target: { value: "   " },
+  });
+  fireEvent.click(scope.getByRole("button", { name: "Save Gateway Connection" }));
+
+  expect(await scope.findByText("Please enter a valid Gateway URL and API key.")).toBeInTheDocument();
+  expect(scope.queryByText("Gateway connection saved.")).not.toBeInTheDocument();
+  expect(fetchMock).not.toHaveBeenCalled();
+});
+
 test("renders remote console preferences from gateway settings", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = getPath(input);

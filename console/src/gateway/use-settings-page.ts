@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { http } from "../common/api/http";
 import type {
   AgentConfigDocument,
@@ -10,6 +10,10 @@ import type {
   MachineSummary,
 } from "../common/api/types";
 import { supportsCapability } from "./capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 
 function emptyDocument(agentType: AgentType): AgentConfigDocument {
   return {
@@ -36,6 +40,11 @@ interface UseSettingsPageOptions {
 
 export function useSettingsPage(options?: UseSettingsPageOptions) {
   const enabled = options?.enabled ?? true;
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [machines, setMachines] = useState<MachineSummary[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<AgentType | null>(null);
@@ -71,6 +80,7 @@ export function useSettingsPage(options?: UseSettingsPageOptions) {
     }
 
     let cancelled = false;
+    setIsLoading(true);
 
     void (async () => {
       try {
@@ -101,7 +111,7 @@ export function useSettingsPage(options?: UseSettingsPageOptions) {
     return () => {
       cancelled = true;
     };
-  }, [enabled]);
+  }, [enabled, connectionIdentity]);
 
   useEffect(() => {
     if (!enabled || !selectedAgent) {
@@ -128,7 +138,7 @@ export function useSettingsPage(options?: UseSettingsPageOptions) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, selectedAgent]);
+  }, [enabled, selectedAgent, connectionIdentity]);
 
   useEffect(() => {
     if (!enabled || !selectedAgent || !selectedMachineId) {
@@ -158,7 +168,7 @@ export function useSettingsPage(options?: UseSettingsPageOptions) {
     return () => {
       cancelled = true;
     };
-  }, [enabled, selectedAgent, selectedMachineId]);
+  }, [enabled, selectedAgent, selectedMachineId, connectionIdentity]);
 
   async function saveGlobalDefault() {
     if (

@@ -1,6 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  clearGatewayConnectionCookies,
+  markGatewayAuthFailed,
+  saveGatewayConnectionToCookies,
+} from "./gateway-connection-store";
 
 const httpMock = vi.hoisted(() => vi.fn());
 
@@ -16,6 +21,7 @@ import {
 beforeEach(() => {
   resetConsolePreferencesStoreForTests();
   httpMock.mockReset();
+  clearGatewayConnectionCookies();
 });
 
 afterEach(() => {
@@ -68,4 +74,99 @@ test("keeps hook inert when disabled", () => {
   expect(result.current.preferences).toBeNull();
   expect(result.current.hasAttempted).toBe(false);
   expect(httpMock).not.toHaveBeenCalled();
+});
+
+test("reloads after gateway connection identity changes while enabled", async () => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "key-1",
+  });
+
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      consoleUrl: "http://localhost:3200",
+      apiKey: "a",
+      profile: "dev",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      consoleUrl: "http://localhost:3300",
+      apiKey: "b",
+      profile: "prod",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+
+  const { result } = renderHook(() => useConsolePreferences({ enabled: true }));
+  await waitFor(() => {
+    expect(result.current.preferences?.consoleUrl).toBe("http://localhost:3200");
+  });
+
+  await act(async () => {
+    saveGatewayConnectionToCookies({
+      gatewayUrl: "http://localhost:19090",
+      apiKey: "key-2",
+    });
+  });
+
+  await waitFor(() => {
+    expect(result.current.preferences?.consoleUrl).toBe("http://localhost:3300");
+  });
+});
+
+test("recovers after auth-failed -> new key -> re-enable", async () => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "old-key",
+  });
+
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      consoleUrl: "http://localhost:3200",
+      apiKey: "old",
+      profile: "dev",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      consoleUrl: "http://localhost:3400",
+      apiKey: "new",
+      profile: "dev",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+
+  let enabled = true;
+  const { result, rerender } = renderHook(() => useConsolePreferences({ enabled }));
+  await waitFor(() => {
+    expect(result.current.hasLoadedSuccessfully).toBe(true);
+  });
+
+  await act(async () => {
+    markGatewayAuthFailed();
+    enabled = false;
+    rerender();
+  });
+
+  expect(result.current.preferences).toBeNull();
+
+  await act(async () => {
+    saveGatewayConnectionToCookies({
+      gatewayUrl: "http://localhost:18080",
+      apiKey: "new-key",
+    });
+    enabled = true;
+    rerender();
+  });
+
+  await waitFor(() => {
+    expect(result.current.preferences?.consoleUrl).toBe("http://localhost:3400");
+  });
 });

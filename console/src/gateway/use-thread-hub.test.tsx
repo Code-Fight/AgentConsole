@@ -1,6 +1,10 @@
 import "@testing-library/jest-dom/vitest";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
+import {
+  clearGatewayConnectionCookies,
+  saveGatewayConnectionToCookies,
+} from "./gateway-connection-store";
 
 vi.mock("./capabilities", () => ({
   supportsCapability: (capability: string) => capability === "threadHub",
@@ -36,12 +40,29 @@ class FakeWebSocket {
   }
 }
 
+function getPath(input: RequestInfo | URL): string {
+  const raw = String(input);
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    return new URL(raw).pathname;
+  }
+  return raw;
+}
+
 afterEach(() => {
   FakeWebSocket.instances = [];
+  clearGatewayConnectionCookies();
   vi.unstubAllGlobals();
 });
 
+function seedGatewayConnection() {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "thread-hub-test-key",
+  });
+}
+
 test("enabled false prevents initial load and socket connection", async () => {
+  seedGatewayConnection();
   const fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
@@ -57,10 +78,11 @@ test("enabled false prevents initial load and socket connection", async () => {
 });
 
 test("initial load success maps gateway data into the thread hub view-model", async () => {
+  seedGatewayConnection();
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = getPath(input);
 
       if (path === "/threads") {
         return new Response(
@@ -124,6 +146,7 @@ test("initial load success maps gateway data into the thread hub view-model", as
 });
 
 test("initial load failure surfaces the hub error", async () => {
+  seedGatewayConnection();
   vi.stubGlobal(
     "fetch",
     vi.fn(async () => {
@@ -143,11 +166,12 @@ test("initial load failure surfaces the hub error", async () => {
 });
 
 test("create thread toggles submitting state and refreshes the hub data", async () => {
+  seedGatewayConnection();
   let createRequestResolved = false;
   let listVersion = 0;
   let resolveCreate: (() => void) | null = null;
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
+    const path = getPath(input);
 
     if (path === "/threads" && init?.method === "POST") {
       return new Promise<Response>((resolve) => {
@@ -256,24 +280,27 @@ test("create thread toggles submitting state and refreshes the hub data", async 
 
   expect(result.current.title).toBe("");
   expect(listVersion).toBe(2);
-  expect(fetchMock).toHaveBeenCalledWith(
-    "/threads",
-    expect.objectContaining({
-      method: "POST",
-      body: JSON.stringify({
-        machineId: "machine-1",
-        title: "Created thread",
-      }),
-    }),
-  );
+  expect(
+    fetchMock.mock.calls.some(
+      ([input, init]) =>
+        getPath(input as RequestInfo | URL) === "/threads" &&
+        (init as RequestInit | undefined)?.method === "POST" &&
+        (init as RequestInit | undefined)?.body ===
+          JSON.stringify({
+            machineId: "machine-1",
+            title: "Created thread",
+          }),
+    ),
+  ).toBe(true);
 });
 
 test("socket-triggered refresh updates the thread hub data", async () => {
+  seedGatewayConnection();
   let listVersion = 0;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = getPath(input);
 
       if (path === "/threads") {
         listVersion += 1;

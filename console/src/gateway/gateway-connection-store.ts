@@ -133,6 +133,20 @@ export function getGatewayConnectionState(): GatewayConnectionState {
   return gatewayConnectionState;
 }
 
+export function getGatewayConnectionIdentity(): string {
+  const state = getGatewayConnectionState();
+  if (state !== "ready") {
+    return state;
+  }
+
+  const config = getGatewayConnectionConfig();
+  if (!config) {
+    return "missing";
+  }
+
+  return `ready:${config.gatewayUrl}|${config.apiKey}`;
+}
+
 export function requireGatewayConnectionConfig(): GatewayConnectionConfig {
   const state = getGatewayConnectionState();
   if (state === "authFailed") {
