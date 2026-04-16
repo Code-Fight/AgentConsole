@@ -31,8 +31,6 @@ afterEach(() => {
 test("loads and saves console preferences through shared http transport", async () => {
   httpMock.mockResolvedValueOnce({
     preferences: {
-      consoleUrl: "http://localhost:3200",
-      apiKey: "key-1",
       profile: "dev",
       safetyPolicy: "strict",
       lastThreadId: "",
@@ -40,8 +38,6 @@ test("loads and saves console preferences through shared http transport", async 
   });
   httpMock.mockResolvedValueOnce({
     preferences: {
-      consoleUrl: "http://localhost:3200",
-      apiKey: "key-1",
       profile: "prod",
       safetyPolicy: "strict",
       lastThreadId: "",
@@ -84,8 +80,6 @@ test("reloads after gateway connection identity changes while enabled", async ()
 
   httpMock.mockResolvedValueOnce({
     preferences: {
-      consoleUrl: "http://localhost:3200",
-      apiKey: "a",
       profile: "dev",
       safetyPolicy: "strict",
       lastThreadId: "",
@@ -93,8 +87,6 @@ test("reloads after gateway connection identity changes while enabled", async ()
   });
   httpMock.mockResolvedValueOnce({
     preferences: {
-      consoleUrl: "http://localhost:3300",
-      apiKey: "b",
       profile: "prod",
       safetyPolicy: "strict",
       lastThreadId: "",
@@ -103,7 +95,7 @@ test("reloads after gateway connection identity changes while enabled", async ()
 
   const { result } = renderHook(() => useConsolePreferences({ enabled: true }));
   await waitFor(() => {
-    expect(result.current.preferences?.consoleUrl).toBe("http://localhost:3200");
+    expect(result.current.preferences?.profile).toBe("dev");
   });
 
   await act(async () => {
@@ -114,7 +106,7 @@ test("reloads after gateway connection identity changes while enabled", async ()
   });
 
   await waitFor(() => {
-    expect(result.current.preferences?.consoleUrl).toBe("http://localhost:3300");
+    expect(result.current.preferences?.profile).toBe("prod");
   });
 });
 
@@ -126,8 +118,6 @@ test("recovers after auth-failed -> new key -> re-enable", async () => {
 
   httpMock.mockResolvedValueOnce({
     preferences: {
-      consoleUrl: "http://localhost:3200",
-      apiKey: "old",
       profile: "dev",
       safetyPolicy: "strict",
       lastThreadId: "",
@@ -135,8 +125,6 @@ test("recovers after auth-failed -> new key -> re-enable", async () => {
   });
   httpMock.mockResolvedValueOnce({
     preferences: {
-      consoleUrl: "http://localhost:3400",
-      apiKey: "new",
       profile: "dev",
       safetyPolicy: "strict",
       lastThreadId: "",
@@ -167,6 +155,6 @@ test("recovers after auth-failed -> new key -> re-enable", async () => {
   });
 
   await waitFor(() => {
-    expect(result.current.preferences?.consoleUrl).toBe("http://localhost:3400");
+    expect(result.current.preferences?.profile).toBe("dev");
   });
 });

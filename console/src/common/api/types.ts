@@ -93,8 +93,6 @@ export interface OverviewMetrics {
 }
 
 export interface ConsolePreferences {
-  consoleUrl: string;
-  apiKey: string;
   profile: string;
   safetyPolicy: string;
   lastThreadId: string;

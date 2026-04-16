@@ -114,8 +114,6 @@ func TestMemoryStorePersistsConsolePreferences(t *testing.T) {
 	}
 
 	preferences := domain.ConsolePreferences{
-		ConsoleURL:   "http://localhost:3100",
-		APIKey:       "test-key",
 		Profile:      "dev",
 		SafetyPolicy: "strict",
 		LastThreadID: "thread-01",
@@ -128,7 +126,7 @@ func TestMemoryStorePersistsConsolePreferences(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || got.ConsoleURL != preferences.ConsoleURL || got.LastThreadID != preferences.LastThreadID {
+	if !ok || got.Profile != preferences.Profile || got.LastThreadID != preferences.LastThreadID {
 		t.Fatalf("unexpected console preferences: %+v ok=%v", got, ok)
 	}
 }
@@ -159,8 +157,6 @@ func TestFileStoreReloadsPersistedDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.PutConsolePreferences(domain.ConsolePreferences{
-		ConsoleURL:   "http://localhost:3100",
-		APIKey:       "test-key",
 		Profile:      "dev",
 		SafetyPolicy: "strict",
 		LastThreadID: "thread-01",
@@ -213,7 +209,7 @@ func TestFileStoreReloadsPersistedDocuments(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !ok || consolePrefs.ConsoleURL != "http://localhost:3100" || consolePrefs.LastThreadID != "thread-01" {
+	if !ok || consolePrefs.Profile != "dev" || consolePrefs.LastThreadID != "thread-01" {
 		t.Fatalf("unexpected console preferences after reload: %+v ok=%v", consolePrefs, ok)
 	}
 }

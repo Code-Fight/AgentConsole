@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -362,7 +363,11 @@ func resolveActiveTurnID(sender CommandSender, threadID string) string {
 }
 
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return NewServerWithSettings(reg, idx, router, sender, nil, clientWS, consoleWS)
+	return NewServerWithAPIKey(reg, idx, router, sender, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
+}
+
+func NewServerWithAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
+	return NewServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, apiKey, clientWS, consoleWS)
 }
 
 func defaultAgentDescriptors() []domain.AgentDescriptor {
@@ -449,6 +454,10 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 }
 
 func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, clientWS http.Handler, consoleWS http.Handler) http.Handler {
+	return NewServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, strings.TrimSpace(os.Getenv("GATEWAY_API_KEY")), clientWS, consoleWS)
+}
+
+func NewServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
 	mux := http.NewServeMux()
 	var deletedThreadsMu sync.RWMutex
 	deletedThreads := map[string]struct{}{}
@@ -2193,5 +2202,59 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID, "enabled": false})
 	})
 
-	return mux
+	return requireConsoleAuth(apiKey, mux)
+}
+
+func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
+	expected := strings.TrimSpace(apiKey)
+	if expected == "" {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health", "/ws/client":
+			next.ServeHTTP(w, r)
+			return
+		case "/ws":
+			if !validateWSAPIKey(r, expected) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		default:
+			if !validateBearerToken(r, expected) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		}
+	})
+}
+
+func requireConsoleAuthFunc(apiKey string, next http.HandlerFunc) http.HandlerFunc {
+	wrapped := requireConsoleAuth(apiKey, next)
+	return wrapped.ServeHTTP
+}
+
+func validateBearerToken(r *http.Request, expected string) bool {
+	if r == nil || strings.TrimSpace(expected) == "" {
+		return false
+	}
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	parts := strings.Fields(authorization)
+	if len(parts) != 2 {
+		return false
+	}
+	if !strings.EqualFold(parts[0], "Bearer") {
+		return false
+	}
+	return strings.TrimSpace(parts[1]) == strings.TrimSpace(expected)
+}
+
+func validateWSAPIKey(r *http.Request, expected string) bool {
+	if r == nil || strings.TrimSpace(expected) == "" {
+		return false
+	}
+	return strings.TrimSpace(r.URL.Query().Get("apiKey")) == strings.TrimSpace(expected)
 }

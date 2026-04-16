@@ -11,8 +11,6 @@ import {
 } from "./gateway-connection-store";
 
 const emptyPreferences: ConsolePreferences = {
-  consoleUrl: "",
-  apiKey: "",
   profile: "",
   safetyPolicy: "",
   lastThreadId: "",
