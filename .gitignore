@@ -25,6 +25,7 @@ testenv/*/.tmp/
 
 # Local tool state
 .superpowers/
+.worktrees/
 
 # Misc generated logs
 *.log
