@@ -9,6 +9,7 @@ import type {
 } from "../common/api/types";
 import { useCapabilities } from "../gateway/capabilities";
 import {
+  getGatewayConnectionIdentity,
   getGatewayConnectionState,
   subscribeGatewayConnection,
   type GatewayConnectionState,
@@ -156,6 +157,11 @@ export function useConsoleHost({
   navigate,
 }: UseConsoleHostOptions): ConsoleHostViewModel {
   const connection = useConsoleConnectionState();
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const remoteEnabled = connection.remoteEnabled;
   const [mobilePanelOpen, setMobilePanelOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -175,6 +181,15 @@ export function useConsoleHost({
     hasLoadedSuccessfully: preferencesLoadedSuccessfully,
     updatePreferences,
   } = useConsolePreferences({ enabled: remoteEnabled });
+
+  useEffect(() => {
+    setRestoreAttempted(false);
+    setRestoredThreadId(null);
+    setLastVerifiedThreadId(null);
+    setOverviewMetrics(null);
+    setOverviewLoading(false);
+    setOverviewError(null);
+  }, [connectionIdentity]);
 
   useEffect(() => {
     if (activePage !== "threads") {
@@ -216,7 +231,7 @@ export function useConsoleHost({
     return () => {
       active = false;
     };
-  }, [activePage, remoteEnabled]);
+  }, [activePage, remoteEnabled, connectionIdentity]);
 
   useEffect(() => {
     if (
@@ -244,6 +259,7 @@ export function useConsoleHost({
     setRestoredThreadId(lastThreadId);
     navigate(`/threads/${lastThreadId}`);
   }, [
+    connectionIdentity,
     remoteEnabled,
     threadId,
     restoreAttempted,
@@ -304,6 +320,7 @@ export function useConsoleHost({
       active = false;
     };
   }, [
+    connectionIdentity,
     remoteEnabled,
     threadId,
     lastVerifiedThreadId,

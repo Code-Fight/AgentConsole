@@ -8,7 +8,8 @@ function ConnectionGate() {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const open = connection.status !== "ready" && location.pathname !== "/settings";
+  const isSettingsRoute = location.pathname === "/settings" || location.pathname.startsWith("/settings/");
+  const open = connection.status !== "ready" && !isSettingsRoute;
 
   return (
     <ConnectionRequiredDialog

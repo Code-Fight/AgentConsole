@@ -90,6 +90,14 @@ export function useEnvironmentPage(options?: UseEnvironmentPageOptions) {
   const [pluginForm, setPluginForm] = useState<PluginFormState | null>(null);
 
   useEffect(() => {
+    setPendingActionKey(null);
+    setExpandedResourceKey(null);
+    setMcpForm(null);
+    setSkillForm(null);
+    setPluginForm(null);
+  }, [connectionIdentity]);
+
+  useEffect(() => {
     if (!enabled) {
       setSections({ skills: [], mcps: [], plugins: [] });
       setIsLoading(false);

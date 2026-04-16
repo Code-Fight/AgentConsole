@@ -128,6 +128,20 @@ test("settings stays local when gateway cookies are missing", async () => {
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
+test("nested settings routes stay reachable when gateway cookies are missing", async () => {
+  window.history.pushState({}, "", "/settings/advanced");
+  clearGatewayCookies();
+  const fetchSpy = vi.fn();
+  vi.stubGlobal("fetch", fetchSpy);
+
+  render(<DesignSourceAppRoot />);
+
+  expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
+  expect(screen.getAllByLabelText("API Key").length).toBeGreaterThan(0);
+  expect(screen.queryByText(/Gateway 连接未配置/)).not.toBeInTheDocument();
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
 test("loads gateway thread and machine lists for the active console shell", async () => {
   const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
     const path = getPath(input);

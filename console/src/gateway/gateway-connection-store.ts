@@ -74,6 +74,16 @@ function normalizeApiKey(value: string | null): string | null {
   return trimmed.length === 0 ? null : trimmed;
 }
 
+function hashIdentity(value: string): string {
+  // FNV-1a 32-bit hash for non-sensitive identity fingerprinting.
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
 function writeCookie(name: string, value: string, maxAgeSeconds?: number): void {
   if (typeof document === "undefined") {
     return;
@@ -144,7 +154,7 @@ export function getGatewayConnectionIdentity(): string {
     return "missing";
   }
 
-  return `ready:${config.gatewayUrl}|${config.apiKey}`;
+  return `ready:${hashIdentity(`${config.gatewayUrl}|${config.apiKey}`)}`;
 }
 
 export function requireGatewayConnectionConfig(): GatewayConnectionConfig {

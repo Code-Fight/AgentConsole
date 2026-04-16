@@ -2,6 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import {
   clearGatewayConnectionCookies,
   getGatewayConnectionConfig,
+  getGatewayConnectionIdentity,
   getGatewayConnectionState,
   markGatewayAuthFailed,
   readGatewayConnectionFromCookies,
@@ -91,4 +92,25 @@ test("notifies subscribers on state changes", () => {
     apiKey: "test-key",
   });
   expect(listener).toHaveBeenCalledTimes(3);
+});
+
+test("gateway identity changes with config and does not expose plaintext api key", () => {
+  clearGatewayConnectionCookies();
+  expect(getGatewayConnectionIdentity()).toBe("missing");
+
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "plain-secret-key",
+  });
+  const firstIdentity = getGatewayConnectionIdentity();
+  expect(firstIdentity).toContain("ready:");
+  expect(firstIdentity).not.toContain("plain-secret-key");
+  expect(firstIdentity).not.toContain("localhost:18080");
+
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "another-key",
+  });
+  const secondIdentity = getGatewayConnectionIdentity();
+  expect(secondIdentity).not.toBe(firstIdentity);
 });
