@@ -7,9 +7,11 @@ PROJECT_NAME="${CAG_TESTENV_PROJECT:-cag-dev-integration}"
 GATEWAY_PORT="${CAG_GATEWAY_PORT:-18080}"
 CONSOLE_PORT="${CAG_CONSOLE_PORT:-14173}"
 MACHINE_NAME="${CAG_MACHINE_NAME:-Dev Integration Client}"
+GATEWAY_API_KEY="${CAG_GATEWAY_API_KEY:-dev-integration-key}"
 GATEWAY_URL="http://localhost:${GATEWAY_PORT}"
 CONSOLE_URL="http://localhost:${CONSOLE_PORT}"
 export CAG_CLIENT_RUNTIME_MODE="${CAG_CLIENT_RUNTIME_MODE:-appserver}"
+export GATEWAY_API_KEY
 
 compose() {
   docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" "$@"
@@ -36,13 +38,17 @@ wait_for_machine() {
   local started_at
   started_at="$(date +%s)"
 
-  until python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" <<'PY'
+  until python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" "${GATEWAY_API_KEY}" <<'PY'
 import json
 import sys
 import urllib.request
 
-url, machine_name = sys.argv[1], sys.argv[2]
-with urllib.request.urlopen(url, timeout=3) as response:
+url, machine_name, gateway_api_key = sys.argv[1], sys.argv[2], sys.argv[3]
+request = urllib.request.Request(
+    url,
+    headers={"Authorization": f"Bearer {gateway_api_key}"},
+)
+with urllib.request.urlopen(request, timeout=3) as response:
     payload = json.load(response)
 
 for item in payload.get("items", []):
@@ -61,13 +67,17 @@ PY
 }
 
 fetch_machine_id() {
-  python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" <<'PY'
+  python3 - "${GATEWAY_URL}/machines" "${MACHINE_NAME}" "${GATEWAY_API_KEY}" <<'PY'
 import json
 import sys
 import urllib.request
 
-url, machine_name = sys.argv[1], sys.argv[2]
-with urllib.request.urlopen(url, timeout=3) as response:
+url, machine_name, gateway_api_key = sys.argv[1], sys.argv[2], sys.argv[3]
+request = urllib.request.Request(
+    url,
+    headers={"Authorization": f"Bearer {gateway_api_key}"},
+)
+with urllib.request.urlopen(request, timeout=3) as response:
     payload = json.load(response)
 
 for item in payload.get("items", []):
@@ -94,8 +104,8 @@ case "${cmd}" in
     echo "Machine ID: ${machine_id}"
     echo
     echo "Quick checks:"
-    echo "  curl ${GATEWAY_URL}/machines"
-    echo "  curl ${GATEWAY_URL}/threads"
+    echo "  curl -H \"Authorization: Bearer ${GATEWAY_API_KEY}\" ${GATEWAY_URL}/machines"
+    echo "  curl -H \"Authorization: Bearer ${GATEWAY_API_KEY}\" ${GATEWAY_URL}/threads"
     ;;
   down)
     compose down --remove-orphans

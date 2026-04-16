@@ -25,9 +25,9 @@ test("blocks HTTP when gateway cookies are missing", async () => {
 test("adds Bearer auth when gateway cookies exist", async () => {
   document.cookie = "cag_gateway_url=http://localhost:18080";
   document.cookie = "cag_gateway_api_key=test-key";
-  const fetchMock = vi.fn(
-    async () => new Response(JSON.stringify({ items: [] }), { status: 200 }),
-  );
+  const fetchMock = vi.fn<
+    (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  >(async () => new Response(JSON.stringify({ items: [] }), { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
 
   await http("/threads");
@@ -69,9 +69,9 @@ test("preserves default accept header when caller provides custom headers", asyn
 test("preserves caller provided Accept header", async () => {
   document.cookie = "cag_gateway_url=http://localhost:18080";
   document.cookie = "cag_gateway_api_key=test-key";
-  const fetchMock = vi.fn(
-    async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
-  );
+  const fetchMock = vi.fn<
+    (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+  >(async () => new Response(JSON.stringify({ ok: true }), { status: 200 }));
   vi.stubGlobal("fetch", fetchMock);
 
   await http<{ ok: boolean }>("/status", {

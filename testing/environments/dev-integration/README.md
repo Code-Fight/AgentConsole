@@ -26,6 +26,7 @@
 
 - `CAG_GATEWAY_PORT`
 - `CAG_CONSOLE_PORT`
+- `CAG_GATEWAY_API_KEY`（默认 `dev-integration-key`，会注入 gateway 并用于联调脚本的鉴权请求）
 - `CAG_MACHINE_NAME`
 - `CAG_CLIENT_RUNTIME_MODE`
 - `CAG_CODEX_BIN`
@@ -37,6 +38,12 @@
 - `client` 会首次生成并持久化自己的 `machineId`，不再依赖环境变量传入固定机器 ID
 - `CAG_MACHINE_NAME` 用于设置 Console 里展示的友好机器名；不设置时，client 默认取 hostname
 - `CAG_CLIENT_RUNTIME_MODE` 默认是 `appserver`
+- 访问受保护的 Gateway API 时需带 `Authorization: Bearer <CAG_GATEWAY_API_KEY>`，例如：
+
+```bash
+curl -H "Authorization: Bearer ${CAG_GATEWAY_API_KEY:-dev-integration-key}" http://localhost:18080/machines
+```
+
 - 如需回退 fake runtime，可以显式设置：
 
 ```bash
