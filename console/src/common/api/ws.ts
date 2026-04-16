@@ -76,6 +76,10 @@ export function connectConsoleSocket(
   };
 
   const handleError = () => {
+    if (socket !== null) {
+      return;
+    }
+
     scheduleReconnect();
   };
 

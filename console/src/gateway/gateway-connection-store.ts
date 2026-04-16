@@ -31,7 +31,11 @@ function parseCookieValue(name: string): string | null {
       continue;
     }
 
-    return decodeURIComponent(valueParts.join("="));
+    try {
+      return decodeURIComponent(valueParts.join("="));
+    } catch {
+      return null;
+    }
   }
 
   return null;
@@ -127,6 +131,20 @@ export function getGatewayConnectionConfig(): GatewayConnectionConfig | null {
 export function getGatewayConnectionState(): GatewayConnectionState {
   refreshGatewayConnectionFromCookies();
   return gatewayConnectionState;
+}
+
+export function requireGatewayConnectionConfig(): GatewayConnectionConfig {
+  const state = getGatewayConnectionState();
+  if (state === "authFailed") {
+    throw new Error("Gateway authentication failed.");
+  }
+
+  const config = getGatewayConnectionConfig();
+  if (!config) {
+    throw new Error("Gateway connection is not configured.");
+  }
+
+  return config;
 }
 
 export function markGatewayAuthFailed(): void {

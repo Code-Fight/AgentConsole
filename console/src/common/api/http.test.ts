@@ -1,5 +1,8 @@
 import { afterEach, expect, test, vi } from "vitest";
-import { clearGatewayConnectionCookies } from "../../gateway/gateway-connection-store";
+import {
+  clearGatewayConnectionCookies,
+  markGatewayAuthFailed,
+} from "../../gateway/gateway-connection-store";
 import { buildThreadApiPath, http } from "./http";
 
 afterEach(() => {
@@ -61,6 +64,33 @@ test("preserves default accept header when caller provides custom headers", asyn
       headers: expect.any(Headers)
     }),
   );
+});
+
+test("preserves caller provided Accept header", async () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
+  const fetchMock = vi.fn(
+    async () => new Response(JSON.stringify({ ok: true }), { status: 200 }),
+  );
+  vi.stubGlobal("fetch", fetchMock);
+
+  await http<{ ok: boolean }>("/status", {
+    headers: {
+      Accept: "text/plain",
+    },
+  });
+
+  const init = fetchMock.mock.calls[0]?.[1];
+  const headers = new Headers(init?.headers);
+  expect(headers.get("Accept")).toBe("text/plain");
+});
+
+test("returns auth failed error when gateway state is authFailed", async () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
+  markGatewayAuthFailed();
+
+  await expect(http("/threads")).rejects.toThrow("Gateway authentication failed.");
 });
 
 test("builds thread api path for workspace placeholders", () => {

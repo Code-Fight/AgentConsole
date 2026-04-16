@@ -101,6 +101,7 @@ test("reconnects with bounded backoff after socket close", () => {
   expect(FakeWebSocket.instances).toHaveLength(2);
 
   FakeWebSocket.instances[1].emit("error", new Event("error"));
+  FakeWebSocket.instances[1].emit("close", new CloseEvent("close"));
   vi.advanceTimersByTime(1999);
   expect(FakeWebSocket.instances).toHaveLength(2);
 
@@ -111,6 +112,26 @@ test("reconnects with bounded backoff after socket close", () => {
   FakeWebSocket.instances[2].emit("close", new Event("close"));
   vi.advanceTimersByTime(5_000);
   expect(FakeWebSocket.instances).toHaveLength(3);
+});
+
+test("does not reconnect on error until close occurs", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=test-key";
+  vi.useFakeTimers();
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  connectConsoleSocket("thread-1", vi.fn());
+  expect(FakeWebSocket.instances).toHaveLength(1);
+
+  FakeWebSocket.instances[0].emit("error", new Event("error"));
+  vi.advanceTimersByTime(10_000);
+  expect(FakeWebSocket.instances).toHaveLength(1);
+
+  FakeWebSocket.instances[0].emit("close", new CloseEvent("close"));
+  vi.advanceTimersByTime(999);
+  expect(FakeWebSocket.instances).toHaveLength(1);
+  vi.advanceTimersByTime(1);
+  expect(FakeWebSocket.instances).toHaveLength(2);
 });
 
 test("fails closed when gateway cookies are missing", () => {

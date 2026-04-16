@@ -1,6 +1,6 @@
 import {
-  getGatewayConnectionConfig,
   markGatewayAuthFailed,
+  requireGatewayConnectionConfig,
 } from "../../gateway/gateway-connection-store";
 
 export function buildThreadApiPath(threadId: string, resource?: string): string {
@@ -17,13 +17,12 @@ export async function http<T>(
   path: string,
   init?: RequestInit,
 ): Promise<T> {
-  const config = getGatewayConnectionConfig();
-  if (!config) {
-    throw new Error("Gateway connection is not configured.");
-  }
+  const config = requireGatewayConnectionConfig();
 
   const headers = new Headers(init?.headers);
-  headers.set("Accept", "application/json");
+  if (!headers.has("Accept")) {
+    headers.set("Accept", "application/json");
+  }
   headers.set("Authorization", `Bearer ${config.apiKey}`);
 
   const response = await fetch(`${config.gatewayUrl}${path}`, {

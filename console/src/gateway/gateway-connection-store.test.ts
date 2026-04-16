@@ -34,6 +34,13 @@ test("treats blank or invalid gateway url as missing", () => {
   expect(readGatewayConnectionFromCookies()).toBeNull();
 });
 
+test("treats malformed cookie encoding as missing", () => {
+  document.cookie = "cag_gateway_url=http://localhost:18080";
+  document.cookie = "cag_gateway_api_key=%E0%A4%A";
+
+  expect(readGatewayConnectionFromCookies()).toBeNull();
+});
+
 test("saves and clears gateway cookies", () => {
   saveGatewayConnectionToCookies({
     gatewayUrl: "http://localhost:18080",
