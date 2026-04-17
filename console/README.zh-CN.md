@@ -1,114 +1,136 @@
 # Console
 
-`console/` 现在采用的是 `design source first` 策略。
+`console/` 现在采用的是 `upstream-source first` 策略。
 
-当前阶段的目标不是“参考设计稿重写一版前端”，而是把生成出来的设计源码尽量原样落进项目里，这样后续设计稿再次迭代时，可以快速重新引入，而不需要每次都手工合并 UI。
+当前 Console 的上游界面代码不再来自 Figma 导出同步流程，而是来自这个 Git 仓库：
+
+- `git@github.com:Code-Fight/Agentconsolewebsite.git`
+
+`src/design-source/` 仍然保留为上游镜像层，但它现在镜像的是上游 Git 仓库中的前端代码，而不是设计导出源码。当前仓库继续在镜像层之外承载 Gateway 接入、路由、宿主控制，以及后续用于稳定接缝的本地适配层。
+
+## 唯一上游来源
+
+- 上游 UI 仓库：`git@github.com:Code-Fight/Agentconsolewebsite.git`
+- 机器可读同步契约：`console/upstream-sync.manifest.json`
+- 详细策略与接缝清单：`docs/superpowers/specs/2026-04-18-console-upstream-git-sync-design.md`
+
+旧的 Figma 导出假设、`design-source-sync` 工作流，以及任何 `scale` 方案，都已经不再适用于当前 Console，后续同步时不能再使用。
 
 ## 架构分层
 
-当前 Console 分成三层：
+当前策略定义四层边界：
 
 1. `src/design-source/`
-   上游生成的设计源码镜像。这里应当视为近似只读，尽量保持和最新设计导出一致，不要把 Gateway 业务逻辑塞进去。
-2. `src/design-host/`
-   最薄的一层宿主兼容层。只负责挂载上游设计源码，以及处理运行时兼容、入口包装、样式接入、构建修补等问题。
-3. `src/gateway/`
-   后续 Gateway 对接层。HTTP、WebSocket、能力策略、view-model 映射都应该放在这里，而不是写回 `design-source`。
+   上游镜像层。这里是上游 UI 仓库在当前仓库中的镜像，预期允许按整包替换。
+2. `src/design-bridge/`
+   本地受保护接缝层。这里用于放稳定的本地桥接逻辑，用来把上游组件改造成可持续接入 Gateway 的视图接口。
+3. `src/design-host/`
+   宿主控制层。入口挂载、全局引导、路由宿主控制等问题放在这里。
+4. `src/gateway/`
+   Gateway 接入层。HTTP、WebSocket、capability policy、transport helper、view-model 组装都放在这里。
 
-`src/app/` 仍然用于应用装配，例如 router 或 providers，但当前 1:1 设计接入阶段，真正渲染入口是 `src/design-host/`。
+`src/common/api/` 和 `src/pages/` 仍然属于本地实现区域，不属于上游镜像层。
 
-## 目录职责
+## 当前状态
 
-- 上游设计源码：`src/design-source/`
-- 宿主兼容层：`src/design-host/`
-- Gateway 接入层：`src/gateway/`
+当前运行时仍然通过 `src/design-host/` 挂载 active Console，并复用本地 Gateway hooks。本次策略迭代只是正式引入 `src/design-bridge/` 作为长期受保护的接缝层，当前运行时代码尚未全部迁移到该层。后续新增适配时，应当朝这个方向迁移，而不是继续把业务逻辑塞回 `src/design-source/`。
 
-## 基本规则
+## 允许写入的区域
 
-- 不要在 `src/design-source/` 里直接写业务逻辑。
-- 不要为了“代码风格统一”就把设计源码重写成我们自己的组件体系。
-- 如果设计更新导致构建出问题，优先修 `design-host`、构建配置或样式入口，而不是改坏上游设计源码。
-- 如果某个设计控件后端暂时不支持，也不要在 `design-source` 里伪造本地成功逻辑。
+同步上游代码时，只允许覆盖 `console/upstream-sync.manifest.json` 中声明的镜像目标。
 
-## 设计源码更新流程
+本地适配应写在这些目录中：
 
-当上游设计再次更新时，按下面流程处理：
+- `src/design-bridge/`
+- `src/design-host/`
+- `src/gateway/`
+- `src/common/api/`
+- `src/pages/`
+- 测试
 
-1. 获取最新生成的设计源码。
-2. 只覆盖 `src/design-source/` 下对应文件。
-3. 保持设计源码尽量原样，不把 Gateway 逻辑混进去。
-4. 在 `src/design-host/` 和构建层补最小兼容修复。
-5. 如果设计接口或文案变化影响到外围逻辑，再更新：
-   - `src/design-host/`
-   - `src/gateway/`
-   - 测试
-6. 跑完整验证。
+## 受保护目录
 
-验证命令：
+同步上游 UI 代码时，禁止覆盖以下路径：
+
+- `console/src/design-bridge/`
+- `console/src/design-host/`
+- `console/src/gateway/`
+- `console/src/common/api/`
+- `console/src/pages/`
+- `console/tests/`
+- `testing/`
+- `testenv/`
+
+## AI 同步契约
+
+任何 AI Agent 在更新上游 UI 代码时，都必须按以下流程执行：
+
+1. 先读本 README 和 `console/upstream-sync.manifest.json`
+2. 把 `git@github.com:Code-Fight/Agentconsolewebsite.git` 拉到临时目录
+3. checkout 目标分支或 commit
+4. 严格按照 `console/upstream-sync.manifest.json` 中的路径映射同步镜像层
+5. 不允许擅自扩大覆盖范围
+6. 同步后必须检查 manifest 中列出的关键接缝组件：
+   - `App`
+   - `SetupWizard`
+   - `Settings`
+   - `MachinePanel`
+   - `ThreadItem`
+   - `SessionChat`
+   - `Machines`
+   - `Environment`
+7. 如果上游结构变化影响本地运行时接入：
+   - 优先修 `src/design-bridge/`
+   - 其次修 `src/design-host/`
+   - 只有在本地 view-model 契约真的变化时，才更新 `src/gateway/`
+8. 不要为了“先接通再说”把 Gateway 逻辑、mock 清理、连接流程或路由控制直接补进 `src/design-source/`
+
+## 禁止事项
+
+在同步和集成过程中，不要做这些事情：
+
+- 不要继续使用旧的 Figma 导出同步流程
+- 不要继续依赖 `design-source-sync` skill 处理当前 Console
+- 不要再使用任何 `scale` 方案
+- 不要把 Gateway HTTP / WebSocket 逻辑写进 `src/design-source/`
+- 不要把上游 mock 运行时状态继续保留在 active runtime 主路径中
+- 不要在镜像替换时覆盖本地保护区
+
+## 上游同步流程
+
+标准同步链路应当是：
+
+`拉取上游仓库 -> 只替换镜像目标 -> 检查关键接缝组件 -> 如有必要只修 bridge/host 接缝 -> 重新验证`
+
+这就是当前要区分“上游镜像层”和“本地保护层”的原因。
+
+## 验证
+
+每次同步上游代码后，至少执行：
 
 ```bash
 cd console
 corepack pnpm test
 corepack pnpm build
+```
+
+如果变更影响到关键页面或交互流程，再执行：
+
+```bash
+cd console
 corepack pnpm e2e
 cd ..
 ./testing/environments/settings-e2e/run.sh
 ```
 
-后续新增的集成测试套件统一放在 `/testing`（例如 `testing/playwright`、`testing/environments`），不要再新增到 `console/tests/` 或 `testenv/`。
+## Manifest 说明
 
-如果要看联调效果：
+`console/upstream-sync.manifest.json` 是 AI Agent 的机器可读同步契约，里面记录：
 
-```bash
-./testing/environments/dev-integration/run.sh restart
-```
+- 上游仓库地址
+- 上游路径到本地镜像目标的映射
+- 本地受保护目录
+- 关键接缝组件
+- 必跑验证命令
 
-访问：
-
-- `http://localhost:14173`
-- `http://localhost:18080`
-
-## 项目内 Skill
-
-本项目已经沉淀了一个用于同步设计源码的 skill：
-
-- 路径：[`../skills/design-source-sync/SKILL.md`](/Users/zfcode/Documents/DEV/CodingAgentGateway/skills/design-source-sync/SKILL.md)
-- 名称：`design-source-sync`
-
-它的职责是指导你如何：
-
-- 重新拉取最新设计源码
-- 只替换 `src/design-source/`
-- 保留宿主兼容层
-- 避免把 Gateway 逻辑写进设计源码
-- 跑完整验证
-
-## 如何使用这个 Skill
-
-如果你后续要再次同步设计，可以直接这样告诉 Codex：
-
-```text
-使用 design-source-sync skill，把最新 design source 同步到 console
-```
-
-或者：
-
-```text
-Use the design-source-sync skill and refresh the latest design source into console/src/design-source
-```
-
-使用这个 skill 时，预期流程应该是：
-
-1. 拉取最新设计源码
-2. 替换 `src/design-source/`
-3. 保留并检查 `design-host`
-4. 跑测试、构建、e2e、settings harness
-
-## 当前阶段说明
-
-当前仓库已经进入 `gateway-backed active console` 阶段：
-
-- 运行入口仍然通过 `src/design-host/` 挂载上游设计源码
-- Thread Hub、Workspace、Environment、Settings、Managed Agents 和 Overview Metrics 都已经接入 Gateway
-- `src/design-source/` 继续保持展示优先，路由、状态和协议接入仍由 `src/design-host/` 与 `src/gateway/` 承担
-- 仍然保留为显式断开态的控件，应视为后续产品缺口，而不是本地 mock 行为
+AI Agent 在执行同步时，应把 manifest 视为本 README 的执行版配套文件。

@@ -1,0 +1,70 @@
+{
+  "upstream": {
+    "repo": "git@github.com:Code-Fight/Agentconsolewebsite.git",
+    "defaultRef": "main",
+    "sourceRoot": "src"
+  },
+  "mappings": [
+    {
+      "from": "src/app/App.tsx",
+      "to": "console/src/design-source/App.tsx"
+    },
+    {
+      "from": "src/app/components",
+      "to": "console/src/design-source/components"
+    },
+    {
+      "from": "src/app/data",
+      "to": "console/src/design-source/data"
+    },
+    {
+      "from": "src/app/utils",
+      "to": "console/src/design-source/utils"
+    },
+    {
+      "from": "src/styles",
+      "to": "console/src/design-source/styles"
+    }
+  ],
+  "protectedPaths": [
+    "console/src/design-bridge",
+    "console/src/design-host",
+    "console/src/gateway",
+    "console/src/common/api",
+    "console/src/pages",
+    "console/tests",
+    "testing",
+    "testenv"
+  ],
+  "criticalComponents": [
+    "src/app/App.tsx",
+    "src/app/components/SetupWizard.tsx",
+    "src/app/components/Settings.tsx",
+    "src/app/components/MachinePanel.tsx",
+    "src/app/components/ThreadItem.tsx",
+    "src/app/components/SessionChat.tsx",
+    "src/app/components/Machines.tsx",
+    "src/app/components/Environment.tsx"
+  ],
+  "upstreamMirrorOnlyComponents": [
+    "src/app/components/Agents.tsx",
+    "src/app/components/Dashboard.tsx",
+    "src/app/components/Logs.tsx",
+    "src/app/components/Requests.tsx"
+  ],
+  "verification": {
+    "required": [
+      "cd console && corepack pnpm test",
+      "cd console && corepack pnpm build"
+    ],
+    "optional": [
+      "cd console && corepack pnpm e2e",
+      "./testing/environments/settings-e2e/run.sh"
+    ]
+  },
+  "deprecatedSources": [
+    "Figma export sync",
+    "design-source-sync skill",
+    "scale strategy"
+  ]
+}
