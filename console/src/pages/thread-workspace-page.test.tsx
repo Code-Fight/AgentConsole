@@ -346,7 +346,7 @@ test("sending a prompt starts a real turn request", async () => {
 
 test("historical workspace messages are restored from thread detail on refresh", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = getPath(input);
 
     if (url === "/capabilities") {
       return new Response(JSON.stringify(capabilities), {
