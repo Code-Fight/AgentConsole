@@ -182,10 +182,18 @@ export interface ApprovalQuestion {
   options?: string[];
 }
 
+export interface ThreadHistoryMessage {
+  id: string;
+  kind: "user" | "agent" | "system";
+  text: string;
+  turnId?: string;
+}
+
 export interface ThreadDetailResponse {
   thread: ThreadSummary;
   activeTurnId?: string | null;
   pendingApprovals: ApprovalRequiredPayload[];
+  messages?: ThreadHistoryMessage[];
 }
 
 export interface StartTurnResponse {
@@ -209,6 +217,7 @@ export interface TurnStartedPayload {
 
 export interface TurnCompletedPayload {
   turn: TurnSummary;
+  errorMessage?: string;
 }
 
 export interface ApprovalRequiredPayload {

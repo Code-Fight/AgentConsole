@@ -1335,6 +1335,128 @@ func TestAppServerClientTranslatesNotificationsIntoTurnEvents(t *testing.T) {
 	}
 }
 
+func TestAppServerClientEmitsCompletedAgentMessageTextWhenNoDeltaArrives(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 3)
+	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		events = append(events, event)
+	})
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+	runner.emitNotification(t, "item/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"id":   "msg-1",
+			"type": "agentMessage",
+			"text": "hello",
+		},
+	})
+	runner.emitNotification(t, "turn/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+
+	if len(events) != 3 {
+		t.Fatalf("unexpected event count: %d", len(events))
+	}
+	if events[1].Type != agenttypes.RuntimeTurnEventTypeDelta || events[1].Sequence != 1 || events[1].Delta != "hello" {
+		t.Fatalf("unexpected completed agent message event: %+v", events[1])
+	}
+	if events[2].Type != agenttypes.RuntimeTurnEventTypeCompleted {
+		t.Fatalf("unexpected completed event: %+v", events[2])
+	}
+}
+
+func TestAppServerClientEmitsOnlyMissingCompletedAgentMessageSuffix(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 4)
+	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		events = append(events, event)
+	})
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+	runner.emitNotification(t, "item/agentMessage/delta", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "msg-1",
+		"delta":    "Down",
+	})
+	runner.emitNotification(t, "item/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"id":   "msg-1",
+			"type": "agentMessage",
+			"text": "Downstream unavailable",
+		},
+	})
+	runner.emitNotification(t, "turn/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+
+	if len(events) != 4 {
+		t.Fatalf("unexpected event count: %d", len(events))
+	}
+	if events[1].Type != agenttypes.RuntimeTurnEventTypeDelta || events[1].Sequence != 1 || events[1].Delta != "Down" {
+		t.Fatalf("unexpected first delta event: %+v", events[1])
+	}
+	if events[2].Type != agenttypes.RuntimeTurnEventTypeDelta || events[2].Sequence != 2 || events[2].Delta != "stream unavailable" {
+		t.Fatalf("unexpected completed suffix event: %+v", events[2])
+	}
+}
+
+func TestAppServerClientIncludesErrorMessageOnFailedTurnEvent(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 2)
+	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		events = append(events, event)
+	})
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+	runner.emitNotification(t, "error", map[string]any{
+		"threadId":  "thread-1",
+		"turnId":    "turn-1",
+		"willRetry": false,
+		"error": map[string]any{
+			"message": "Downstream unavailable",
+		},
+	})
+	runner.emitNotification(t, "turn/completed", map[string]any{
+		"threadId": "thread-1",
+		"turn": map[string]any{
+			"id":     "turn-1",
+			"status": "failed",
+		},
+	})
+
+	if len(events) != 2 {
+		t.Fatalf("unexpected event count: %d", len(events))
+	}
+	if events[1].Type != agenttypes.RuntimeTurnEventTypeFailed {
+		t.Fatalf("unexpected failed event: %+v", events[1])
+	}
+	if events[1].ErrorMessage != "Downstream unavailable" {
+		t.Fatalf("unexpected failed error message: %+v", events[1])
+	}
+}
+
 func TestAppServerClientRespondApprovalWritesStoredServerRequestResponse(t *testing.T) {
 	var gotID string
 	var gotResult map[string]any
@@ -1601,7 +1723,7 @@ func TestClientReadThreadUsesExpectedMethodAndPayload(t *testing.T) {
 			if !ok {
 				t.Fatalf("unexpected payload type: %T", gotPayload)
 			}
-			if payloadMap["threadId"] != tt.threadID || payloadMap["includeTurns"] != false {
+			if payloadMap["threadId"] != tt.threadID || payloadMap["includeTurns"] != true {
 				t.Fatalf("unexpected payload: %#v", payloadMap)
 			}
 
@@ -1618,6 +1740,69 @@ func TestClientReadThreadUsesExpectedMethodAndPayload(t *testing.T) {
 				t.Fatalf("unexpected thread: %+v", thread)
 			}
 		})
+	}
+}
+
+func TestClientReadThreadMapsHistoricalMessages(t *testing.T) {
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			if method != "thread/read" {
+				t.Fatalf("unexpected method: %s", method)
+			}
+			response := out.(*threadReadResponse)
+			response.Thread = threadRecord{
+				ID:     "thread-1",
+				Name:   "Investigate flaky test",
+				Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+				Turns: []turnRecord{
+					{
+						ID:     "turn-1",
+						Status: domain.TurnStatusCompleted,
+						Items: []threadItemRecord{
+							{
+								ID:   "user-1",
+								Type: "userMessage",
+								Content: []userInputRecord{
+									{Type: "text", Text: "hello"},
+								},
+							},
+							{
+								ID:   "agent-1",
+								Type: "agentMessage",
+								Text: "hi there",
+							},
+						},
+					},
+					{
+						ID:     "turn-2",
+						Status: domain.TurnStatusFailed,
+						Error: &turnErrorRecord{
+							Message: "Downstream unavailable",
+						},
+					},
+				},
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	thread, err := client.ReadThread("thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(thread.Messages) != 3 {
+		t.Fatalf("unexpected message count: %+v", thread.Messages)
+	}
+	if thread.Messages[0].Kind != domain.ThreadMessageKindUser || thread.Messages[0].Text != "hello" {
+		t.Fatalf("unexpected user message: %+v", thread.Messages[0])
+	}
+	if thread.Messages[1].Kind != domain.ThreadMessageKindAgent || thread.Messages[1].Text != "hi there" {
+		t.Fatalf("unexpected agent message: %+v", thread.Messages[1])
+	}
+	if thread.Messages[2].Kind != domain.ThreadMessageKindSystem || thread.Messages[2].Text != "Turn turn-2 failed: Downstream unavailable" {
+		t.Fatalf("unexpected failed system message: %+v", thread.Messages[2])
 	}
 }
 

@@ -124,6 +124,15 @@ export function toTurnStartedMessage(payload: TurnStartedPayload): WorkspaceMess
 }
 
 export function toTurnCompletedMessage(payload: TurnCompletedPayload): WorkspaceMessageViewModel {
+  if (payload.turn.status === "failed" && payload.errorMessage) {
+    return {
+      id: `completed:${payload.turn.turnId}`,
+      kind: "system",
+      text: `Turn ${payload.turn.turnId} failed: ${payload.errorMessage}`,
+      turnId: payload.turn.turnId,
+    };
+  }
+
   return {
     id: `completed:${payload.turn.turnId}`,
     kind: "system",

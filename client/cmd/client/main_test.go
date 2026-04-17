@@ -324,7 +324,8 @@ func TestBindRuntimeTurnEventsEmitsTurnFailedAndRefreshesSnapshot(t *testing.T) 
 	}
 
 	runtime.emit(agenttypes.RuntimeTurnEvent{
-		Type: agenttypes.RuntimeTurnEventTypeFailed,
+		Type:         agenttypes.RuntimeTurnEventTypeFailed,
+		ErrorMessage: "Downstream unavailable",
 		Turn: domain.Turn{
 			TurnID:   "turn-failed-1",
 			ThreadID: "thread-01",
@@ -337,6 +338,13 @@ func TestBindRuntimeTurnEventsEmitsTurnFailedAndRefreshesSnapshot(t *testing.T) 
 	}
 	if decodeEnvelope(t, (*sent)[0]).Name != "turn.failed" {
 		t.Fatalf("unexpected first envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	}
+	var failedPayload protocol.TurnCompletedPayload
+	if err := transport.Decode(decodeEnvelope(t, (*sent)[0]).Payload, &failedPayload); err != nil {
+		t.Fatalf("decode failed turn payload failed: %v", err)
+	}
+	if failedPayload.ErrorMessage != "Downstream unavailable" {
+		t.Fatalf("unexpected failed turn payload: %+v", failedPayload)
 	}
 	if decodeEnvelope(t, (*sent)[1]).Name != "thread.snapshot" {
 		t.Fatalf("unexpected second envelope: %+v", decodeEnvelope(t, (*sent)[1]))

@@ -35,6 +35,7 @@ type threadDetailResponse struct {
 	Thread           domain.Thread                      `json:"thread"`
 	ActiveTurnID     string                             `json:"activeTurnId,omitempty"`
 	PendingApprovals []protocol.ApprovalRequiredPayload `json:"pendingApprovals"`
+	Messages         []domain.ThreadMessage             `json:"messages,omitempty"`
 }
 
 type threadDeleteResponse struct {
@@ -1109,10 +1110,13 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 							}
 						}
 						clearDeleted(result.Thread.ThreadID)
+						messages := append([]domain.ThreadMessage(nil), result.Thread.Messages...)
+						result.Thread.Messages = nil
 						writeJSON(w, http.StatusOK, threadDetailResponse{
 							Thread:           result.Thread,
 							ActiveTurnID:     activeTurnID,
 							PendingApprovals: pendingApprovals,
+							Messages:         messages,
 						})
 						return
 					}
@@ -1134,10 +1138,13 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 			return
 		}
 		thread = applyThreadTitleOverride(thread, overrides)
+		messages := append([]domain.ThreadMessage(nil), thread.Messages...)
+		thread.Messages = nil
 		writeJSON(w, http.StatusOK, threadDetailResponse{
 			Thread:           thread,
 			ActiveTurnID:     activeTurnID,
 			PendingApprovals: pendingApprovals,
+			Messages:         messages,
 		})
 	})
 

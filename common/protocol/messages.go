@@ -319,7 +319,8 @@ type TurnStartedPayload struct {
 }
 
 type TurnCompletedPayload struct {
-	Turn domain.Turn `json:"turn"`
+	Turn         domain.Turn `json:"turn"`
+	ErrorMessage string      `json:"errorMessage,omitempty"`
 }
 
 type ApprovalRequiredPayload struct {
