@@ -689,7 +689,8 @@ func emitRuntimeTurnEvent(session *clientSession, agentID string, event agenttyp
 		})
 	case agenttypes.RuntimeTurnEventTypeFailed:
 		return session.TurnFailed(event.RequestID, protocol.TurnCompletedPayload{
-			Turn: publicTurnForAgent(agentID, event.Turn),
+			Turn:         publicTurnForAgent(agentID, event.Turn),
+			ErrorMessage: event.ErrorMessage,
 		})
 	default:
 		return nil

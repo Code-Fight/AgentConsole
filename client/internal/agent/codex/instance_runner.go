@@ -6,8 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"unicode"
 	"strings"
+	"unicode"
 
 	agenttypes "code-agent-gateway/client/internal/agent/types"
 	"code-agent-gateway/common/domain"
@@ -84,6 +84,9 @@ func NewIsolatedAppServerClient(ctx context.Context, codexBin string, layout Ins
 		if err := os.MkdirAll(layout.CodexHomeDir, 0o755); err != nil {
 			return nil, err
 		}
+		if err := seedSharedCodexFiles(layout); err != nil {
+			return nil, err
+		}
 
 		cmd := exec.CommandContext(ctx, name, args...)
 		cmd.Dir = layout.RootDir
@@ -106,4 +109,69 @@ func NewIsolatedAppServerClient(ctx context.Context, codexBin string, layout Ins
 		return nil, nil, err
 	}
 	return client, runner.Close, nil
+}
+
+func seedSharedCodexFiles(layout InstanceLayout) error {
+	homeDir, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(homeDir) == "" {
+		return nil
+	}
+
+	pairs := []struct {
+		source string
+		target string
+	}{
+		{
+			source: filepath.Join(homeDir, ".codex", "auth.json"),
+			target: filepath.Join(layout.CodexHomeDir, "auth.json"),
+		},
+		{
+			source: filepath.Join(homeDir, ".codex", "config.toml"),
+			target: layout.ConfigPath,
+		},
+	}
+
+	for _, pair := range pairs {
+		if err := copyIfPresent(pair.source, pair.target); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func copyIfPresent(sourcePath string, targetPath string) error {
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if sourceInfo.IsDir() {
+		return nil
+	}
+
+	sourceData, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	if targetData, err := os.ReadFile(targetPath); err == nil && string(targetData) == string(sourceData) {
+		return nil
+	} else if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return err
+	}
+
+	tempPath := targetPath + ".tmp"
+	if err := os.WriteFile(tempPath, sourceData, 0o600); err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	return os.Rename(tempPath, targetPath)
 }

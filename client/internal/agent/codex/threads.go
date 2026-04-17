@@ -10,7 +10,7 @@ func (c *AppServerClient) ReadThread(threadID string) (domain.Thread, error) {
 	var response threadReadResponse
 	if err := c.runner.Call("thread/read", map[string]any{
 		"threadId":     threadID,
-		"includeTurns": false,
+		"includeTurns": true,
 	}, &response); err != nil {
 		return domain.Thread{}, err
 	}

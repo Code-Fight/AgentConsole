@@ -1441,6 +1441,73 @@ func TestServerThreadDetailIncludesActiveTurnIDFromSenderState(t *testing.T) {
 	}
 }
 
+func TestServerThreadDetailIncludesHistoricalMessagesFromLiveRead(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:     "machine-01",
+		Name:   "machine-01",
+		Status: domain.MachineStatusOnline,
+	})
+
+	idx := runtimeindex.NewStore()
+	thread := domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		AgentID:   "agent-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Investigate flaky test",
+	}
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
+
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01", "agent-01")
+
+	handler := NewServer(reg, idx, router, &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" || name != "thread.read" {
+				t.Fatalf("unexpected live read call: machine=%s name=%s payload=%#v", machineID, name, payload)
+			}
+			return protocol.CommandCompletedPayload{
+				Result: mustMarshalJSON(t, protocol.ThreadReadCommandResult{
+					Thread: domain.Thread{
+						ThreadID:  "thread-01",
+						MachineID: "machine-01",
+						AgentID:   "agent-01",
+						Status:    domain.ThreadStatusIdle,
+						Title:     "Investigate flaky test",
+						Messages: []domain.ThreadMessage{
+							{ID: "user-1", Kind: domain.ThreadMessageKindUser, TurnID: "turn-1", Text: "hello"},
+							{ID: "agent-1", Kind: domain.ThreadMessageKindAgent, TurnID: "turn-1", Text: "hi there"},
+						},
+					},
+				}),
+			}, nil
+		},
+	}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Thread   domain.Thread          `json:"thread"`
+		Messages []domain.ThreadMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Thread.ThreadID != "thread-01" {
+		t.Fatalf("unexpected thread: %+v", body.Thread)
+	}
+	if len(body.Messages) != 2 || body.Messages[0].Text != "hello" || body.Messages[1].Text != "hi there" {
+		t.Fatalf("unexpected historical messages: %+v", body.Messages)
+	}
+}
+
 func TestServerThreadRenamePersistsTitleAcrossSnapshots(t *testing.T) {
 	idx := runtimeindex.NewStore()
 	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{

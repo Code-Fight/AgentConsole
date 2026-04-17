@@ -17,9 +17,70 @@ EXPECTED_MACHINE_NAMES=(
   "${HOSTNAME_FALLBACK_NAME}"
   "${NOT_AGENT_MACHINE_NAME}"
 )
+CLIENT_SERVICES=(
+  "client-default"
+  "client-hostname"
+  "client-not-agent"
+)
 
 compose() {
   docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" "$@"
+}
+
+wait_for_client_container() {
+  local service_name="$1"
+  local timeout="${2:-60}"
+  local started_at
+  started_at="$(date +%s)"
+
+  until [ -n "$(compose ps -q "${service_name}")" ]; do
+    if (( "$(date +%s)" - started_at >= timeout )); then
+      echo "Timed out waiting for ${service_name} container to be created" >&2
+      return 1
+    fi
+    sleep 1
+  done
+}
+
+copy_codex_file_if_present() {
+  local service_name="$1"
+  local source_path="$2"
+  local target_name="$3"
+
+  if [ ! -f "${source_path}" ]; then
+    return 0
+  fi
+
+  local container_id
+  container_id="$(compose ps -q "${service_name}")"
+  if [ -z "${container_id}" ]; then
+    echo "${service_name} container is unavailable for copying ${target_name}" >&2
+    return 1
+  fi
+
+  docker cp "${source_path}" "${container_id}:/home/appuser/.codex/${target_name}"
+  docker exec -u 0 "${container_id}" sh -lc \
+    "chown appuser:appuser /home/appuser/.codex/${target_name} && chmod 600 /home/appuser/.codex/${target_name}"
+}
+
+seed_codex_files() {
+  local copied=0
+
+  for service_name in "${CLIENT_SERVICES[@]}"; do
+    wait_for_client_container "${service_name}" 60
+    if [ -f "${HOME}/.codex/auth.json" ]; then
+      copy_codex_file_if_present "${service_name}" "${HOME}/.codex/auth.json" "auth.json"
+      copied=1
+    fi
+    if [ -f "${HOME}/.codex/config.toml" ]; then
+      copy_codex_file_if_present "${service_name}" "${HOME}/.codex/config.toml" "config.toml"
+      copied=1
+    fi
+  done
+
+  if (( copied == 1 )); then
+    compose restart "${CLIENT_SERVICES[@]}" >/dev/null
+  fi
 }
 
 wait_for_http() {
@@ -105,6 +166,7 @@ cmd="${1:-up}"
 case "${cmd}" in
   up)
     compose up --build -d
+    seed_codex_files
     wait_for_http "gateway health" "${GATEWAY_URL}/health"
     wait_for_http "console" "${CONSOLE_URL}"
     wait_for_machines
@@ -122,6 +184,7 @@ case "${cmd}" in
   restart)
     compose down --remove-orphans
     compose up --build -d
+    seed_codex_files
     wait_for_http "gateway health" "${GATEWAY_URL}/health"
     wait_for_http "console" "${CONSOLE_URL}"
     wait_for_machines

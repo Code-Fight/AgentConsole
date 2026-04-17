@@ -9,6 +9,7 @@ import (
 type ThreadStatus string
 type TurnStatus string
 type ApprovalStatus string
+type ThreadMessageKind string
 
 const (
 	ThreadStatusNotLoaded ThreadStatus = "notLoaded"
@@ -24,14 +25,26 @@ const (
 	ApprovalStatusPending  ApprovalStatus = "pending"
 	ApprovalStatusApproved ApprovalStatus = "approved"
 	ApprovalStatusRejected ApprovalStatus = "rejected"
+
+	ThreadMessageKindUser   ThreadMessageKind = "user"
+	ThreadMessageKindAgent  ThreadMessageKind = "agent"
+	ThreadMessageKindSystem ThreadMessageKind = "system"
 )
 
 type Thread struct {
-	ThreadID  string       `json:"threadId"`
-	MachineID string       `json:"machineId"`
-	AgentID   string       `json:"agentId,omitempty"`
-	Status    ThreadStatus `json:"status"`
-	Title     string       `json:"title"`
+	ThreadID  string          `json:"threadId"`
+	MachineID string          `json:"machineId"`
+	AgentID   string          `json:"agentId,omitempty"`
+	Status    ThreadStatus    `json:"status"`
+	Title     string          `json:"title"`
+	Messages  []ThreadMessage `json:"messages,omitempty"`
+}
+
+type ThreadMessage struct {
+	ID     string            `json:"id"`
+	TurnID string            `json:"turnId,omitempty"`
+	Kind   ThreadMessageKind `json:"kind"`
+	Text   string            `json:"text"`
 }
 
 type ThreadRoute struct {

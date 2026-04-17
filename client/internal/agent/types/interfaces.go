@@ -67,13 +67,14 @@ const (
 )
 
 type RuntimeTurnEvent struct {
-	Type      RuntimeTurnEventType
-	RequestID string
-	ThreadID  string
-	TurnID    string
-	Sequence  int
-	Delta     string
-	Turn      domain.Turn
+	Type         RuntimeTurnEventType
+	RequestID    string
+	ThreadID     string
+	TurnID       string
+	Sequence     int
+	Delta        string
+	ErrorMessage string
+	Turn         domain.Turn
 }
 
 type RuntimeTurnEventSource interface {

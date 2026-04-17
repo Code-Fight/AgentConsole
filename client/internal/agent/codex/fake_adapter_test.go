@@ -86,7 +86,7 @@ func TestFakeAdapterReadArchiveAndResumeThread(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if readThread != thread {
+	if readThread.ThreadID != thread.ThreadID || readThread.Title != thread.Title || readThread.Status != thread.Status {
 		t.Fatalf("unexpected read thread: %+v", readThread)
 	}
 

@@ -3,12 +3,13 @@ x-client-common: &client-common
     context: ../..
     dockerfile: testenv/dev-integration/Dockerfile.client
     args:
-      CODEX_NPM_VERSION: "${CAG_CODEX_NPM_VERSION:-0.118.0}"
+      CODEX_NPM_VERSION: "${CAG_CODEX_NPM_VERSION:-0.120.0}"
   environment: &client-environment
     GATEWAY_URL: "ws://gateway:8080/ws/client"
     CODEX_RUNTIME_MODE: "${CAG_CLIENT_RUNTIME_MODE:-appserver}"
     CODEX_BIN: "${CAG_CODEX_BIN:-codex}"
     HOME: /home/appuser
+    OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
   depends_on:
     gateway:
       condition: service_healthy

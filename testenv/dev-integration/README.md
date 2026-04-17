@@ -8,7 +8,10 @@
 - `client-not-agent`
 - `console`
 
-默认使用真实 `Codex App Server`，3 个 `client` 容器内都会安装 Linux 版 `codex` CLI，并直接使用容器内的默认 Codex 配置目录，不再挂载宿主机 `~/.codex`。
+默认使用真实 `Codex App Server`，3 个 `client` 容器内都会安装 Linux 版 `codex` CLI（默认 `0.120.0`）。
+为了让真实 App Server 可以在容器里访问 OpenAI，`run.sh` 会在容器启动后把宿主机的 `~/.codex/auth.json` 和 `~/.codex/config.toml` 复制到每个 `client-*` 容器的 `/home/appuser/.codex/`，再由 client 在启动隔离 agent 时复制到各自的隔离目录。
+如果宿主机已经导出了 `OPENAI_API_KEY`，3 个 `client` 容器都会自动继承它，managed agents 也会继续透传这个环境变量给 Codex。
+如果宿主机没有登录过 Codex，且也没有导出 `OPENAI_API_KEY`，真实模式会得到 `401 Unauthorized`；这种情况下先在宿主机完成登录/导出 key，或临时切到 fake runtime。
 
 ## 用法
 

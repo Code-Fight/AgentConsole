@@ -317,6 +317,127 @@ test("sending a prompt starts a real turn request", async () => {
   });
 });
 
+test("historical workspace messages are restored from thread detail on refresh", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const url = String(input);
+
+    if (url === "/capabilities") {
+      return new Response(JSON.stringify(capabilities), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url === "/settings/console") {
+      return new Response(JSON.stringify({ preferences: null }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+
+    if (url === "/threads") {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              threadId: "thread-1",
+              machineId: "machine-1",
+              status: "idle",
+              title: "Investigate flaky test",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    if (url === "/machines") {
+      return new Response(
+        JSON.stringify({
+          items: [
+            {
+              id: "machine-1",
+              name: "Primary Node",
+              status: "online",
+              runtimeStatus: "running",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    if (url === "/threads/thread-1") {
+      return new Response(
+        JSON.stringify({
+          thread: {
+            threadId: "thread-1",
+            machineId: "machine-1",
+            status: "idle",
+            title: "Investigate flaky test",
+          },
+          pendingApprovals: [],
+          messages: [
+            {
+              id: "user-1",
+              kind: "user",
+              turnId: "turn-1",
+              text: "hello",
+            },
+            {
+              id: "agent-1",
+              kind: "agent",
+              turnId: "turn-1",
+              text: "hi there",
+            },
+          ],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    if (url === "/machines/machine-1") {
+      return new Response(
+        JSON.stringify({
+          machine: {
+            id: "machine-1",
+            name: "Primary Node",
+            status: "online",
+            runtimeStatus: "running",
+          },
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+
+    throw new Error(`Unhandled request: ${url}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter initialEntries={["/threads/thread-1"]}>
+      <ConsoleHostRouter />
+    </MemoryRouter>,
+  );
+
+  expect(await screen.findAllByText("hello")).toHaveLength(2);
+  expect(await screen.findAllByText("hi there")).toHaveLength(2);
+});
+
 test("websocket workspace events update the active console timeline", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
@@ -518,11 +639,12 @@ test("websocket workspace events update the active console timeline", async () =
             threadId: "thread-1",
             status: "failed",
           },
+          errorMessage: "Downstream unavailable",
         },
       }),
     );
   });
 
   expect(await screen.findAllByText("Turn turn-1 completed")).toHaveLength(2);
-  expect(await screen.findAllByText("Turn turn-2 failed")).toHaveLength(2);
+  expect(await screen.findAllByText("Turn turn-2 failed: Downstream unavailable")).toHaveLength(2);
 });

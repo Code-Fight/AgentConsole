@@ -71,6 +71,7 @@ export function useThreadWorkspace(threadId: string) {
 
       setThreadTitle(detail.thread.title ?? "");
       setActiveTurnId((current) => current ?? detail.activeTurnId ?? null);
+      setMessages((current) => (current.length === 0 ? (detail.messages ?? []) : current));
       setPendingApprovals((current) => {
         const next = current.filter(
           (item) => !approvals.some((approval) => approval.requestId === item.requestId),

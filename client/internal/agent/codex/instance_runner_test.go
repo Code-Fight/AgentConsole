@@ -69,3 +69,92 @@ func TestManagedInstanceLayoutRejectsUnsafeAgentID(t *testing.T) {
 		t.Fatal("expected unsafe agentID to be rejected")
 	}
 }
+
+func TestManagedInstanceLayoutSeedsSharedCodexAuthIntoIsolatedCodexHome(t *testing.T) {
+	rootDir := t.TempDir()
+	layout, err := NewInstanceLayout(rootDir, "agent-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sharedHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sharedHome, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	authPath := filepath.Join(sharedHome, ".codex", "auth.json")
+	if err := os.WriteFile(authPath, []byte(`{"token":"secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", sharedHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if originalHome == "" {
+			_ = os.Unsetenv("HOME")
+			return
+		}
+		_ = os.Setenv("HOME", originalHome)
+	})
+
+	if err := os.MkdirAll(layout.CodexHomeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedSharedCodexFiles(layout); err != nil {
+		t.Fatalf("seedSharedCodexFiles returned error: %v", err)
+	}
+
+	seededAuthPath := filepath.Join(layout.CodexHomeDir, "auth.json")
+	data, err := os.ReadFile(seededAuthPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(data) != `{"token":"secret"}` {
+		t.Fatalf("unexpected auth contents: %q", string(data))
+	}
+}
+
+func TestManagedInstanceLayoutSeedsSharedCodexConfigIntoIsolatedAgentHome(t *testing.T) {
+	rootDir := t.TempDir()
+	layout, err := NewInstanceLayout(rootDir, "agent-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sharedHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sharedHome, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(sharedHome, ".codex", "config.toml")
+	if err := os.WriteFile(configPath, []byte("model = \"gpt-5.4\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", sharedHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if originalHome == "" {
+			_ = os.Unsetenv("HOME")
+			return
+		}
+		_ = os.Setenv("HOME", originalHome)
+	})
+
+	if err := os.MkdirAll(filepath.Dir(layout.ConfigPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedSharedCodexFiles(layout); err != nil {
+		t.Fatalf("seedSharedCodexFiles returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(layout.ConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(data) != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("unexpected config contents: %q", string(data))
+	}
+}
