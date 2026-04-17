@@ -2,19 +2,22 @@
 set -euo pipefail
 
 STACK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${STACK_DIR}/../.." && pwd)"
+REPO_ROOT="$(cd "${STACK_DIR}/../../.." && pwd)"
 COMPOSE_FILE="${STACK_DIR}/docker-compose.yml"
 PROJECT_NAME="${CAG_SETTINGS_E2E_PROJECT:-cag-settings-e2e}"
 GATEWAY_PORT="${CAG_SETTINGS_E2E_GATEWAY_PORT:-18081}"
 CONSOLE_PORT="${CAG_SETTINGS_E2E_CONSOLE_PORT:-14174}"
+GATEWAY_API_KEY="${CAG_GATEWAY_API_KEY:-settings-e2e-key}"
 MACHINE_NAME="${CAG_MACHINE_NAME:-Settings E2E Client}"
 TMP_ROOT="${STACK_DIR}/.tmp/${PROJECT_NAME}"
 REPORT_PATH="${TMP_ROOT}/playwright-settings-report.json"
 
+rm -rf "${TMP_ROOT}"
 mkdir -p "${TMP_ROOT}/client-home" "${TMP_ROOT}/gateway-data"
 
 export CAG_SETTINGS_E2E_CLIENT_HOME="${TMP_ROOT}/client-home"
 export CAG_SETTINGS_E2E_GATEWAY_DATA="${TMP_ROOT}/gateway-data"
+export GATEWAY_API_KEY
 
 compose() {
   docker compose -p "${PROJECT_NAME}" -f "${COMPOSE_FILE}" "$@"
@@ -36,16 +39,21 @@ wait_for_http() {
 
 wait_for_machine() {
   local url="http://localhost:${GATEWAY_PORT}/machines"
+  local authorization_header="Bearer ${GATEWAY_API_KEY}"
   local machine_name="${1}"
   local timeout="${2:-120}"
   local started_at
   started_at="$(date +%s)"
-  until python3 - "${url}" "${machine_name}" <<'PY'
+  until python3 - "${url}" "${machine_name}" "${authorization_header}" <<'PY'
 import json
 import sys
 import urllib.request
 
-with urllib.request.urlopen(sys.argv[1], timeout=3) as response:
+request = urllib.request.Request(
+    sys.argv[1],
+    headers={"Authorization": sys.argv[3]},
+)
+with urllib.request.urlopen(request, timeout=3) as response:
     payload = json.load(response)
 
 for item in payload.get("items", []):
@@ -76,6 +84,8 @@ wait_for_machine "${MACHINE_NAME}"
 
 PLAYWRIGHT_BASE_URL="http://127.0.0.1:${CONSOLE_PORT}" \
 SETTINGS_E2E_CLIENT_HOME="${CAG_SETTINGS_E2E_CLIENT_HOME}" \
+SETTINGS_E2E_GATEWAY_URL="http://127.0.0.1:${CONSOLE_PORT}/api" \
+SETTINGS_E2E_GATEWAY_API_KEY="${GATEWAY_API_KEY}" \
 corepack pnpm --dir "${REPO_ROOT}/console" exec playwright test --config playwright.settings.config.ts --reporter=json > "${REPORT_PATH}"
 
 node - "${REPORT_PATH}" <<'NODE'

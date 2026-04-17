@@ -1,7 +1,28 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from "../../console/playwright-test";
+import type { Page, Route } from "@playwright/test";
+
+async function seedGatewayCookies(page: Page) {
+  await page.context().addCookies([
+    {
+      name: "cag_gateway_url",
+      value: "http://127.0.0.1:4173",
+      url: "http://127.0.0.1:4173",
+    },
+    {
+      name: "cag_gateway_api_key",
+      value: "test-key",
+      url: "http://127.0.0.1:4173",
+    },
+  ]);
+}
+
+function expectAuth(route: Route) {
+  expect(route.request().headers()["authorization"]).toBe("Bearer test-key");
+}
 
 test("navigates to thread workspace", async ({ page }) => {
   await page.route("**/overview/metrics", async (route) => {
+    expectAuth(route);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -16,6 +37,7 @@ test("navigates to thread workspace", async ({ page }) => {
   });
 
   await page.route("**/threads", async (route) => {
+    expectAuth(route);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -33,6 +55,7 @@ test("navigates to thread workspace", async ({ page }) => {
   });
 
   await page.route("**/machines", async (route) => {
+    expectAuth(route);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -50,6 +73,7 @@ test("navigates to thread workspace", async ({ page }) => {
   });
 
   await page.route("**/threads/thread-1", async (route) => {
+    expectAuth(route);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -67,6 +91,7 @@ test("navigates to thread workspace", async ({ page }) => {
   });
 
   await page.route("**/machines/machine-1", async (route) => {
+    expectAuth(route);
     await route.fulfill({
       status: 200,
       contentType: "application/json",
@@ -81,6 +106,7 @@ test("navigates to thread workspace", async ({ page }) => {
     });
   });
 
+  await seedGatewayCookies(page);
   await page.goto("/");
   await expect(page).toHaveURL(/\/$/);
   await page.getByRole("button", { name: "概览" }).click();
@@ -89,6 +115,7 @@ test("navigates to thread workspace", async ({ page }) => {
   await expect(page.getByText("Running Agents").first()).toBeVisible();
   await expect(page.getByText("Active Threads").first()).toBeVisible();
 
+  await seedGatewayCookies(page);
   await page.goto("/");
   await expect(page.getByRole("button", { name: "机器管理" })).toBeVisible();
   await expect(page.getByRole("button", { name: "环境资源" })).toBeVisible();

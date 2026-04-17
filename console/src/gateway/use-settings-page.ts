@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { http } from "../common/api/http";
 import type {
   AgentConfigDocument,
@@ -10,6 +10,10 @@ import type {
   MachineSummary,
 } from "../common/api/types";
 import { supportsCapability } from "./capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 
 function emptyDocument(agentType: AgentType): AgentConfigDocument {
   return {
@@ -30,7 +34,17 @@ function validateTOML(content: string): boolean {
   return true;
 }
 
-export function useSettingsPage() {
+interface UseSettingsPageOptions {
+  enabled?: boolean;
+}
+
+export function useSettingsPage(options?: UseSettingsPageOptions) {
+  const enabled = options?.enabled ?? true;
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const [agents, setAgents] = useState<AgentDescriptor[]>([]);
   const [machines, setMachines] = useState<MachineSummary[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<AgentType | null>(null);
@@ -40,7 +54,7 @@ export function useSettingsPage() {
   const [usesGlobalDefault, setUsesGlobalDefault] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(enabled);
 
   const machineLabelById = useMemo(() => {
     const entries = new Map<string, string>();
@@ -51,7 +65,22 @@ export function useSettingsPage() {
   }, [machines]);
 
   useEffect(() => {
+    if (!enabled) {
+      setAgents([]);
+      setMachines([]);
+      setSelectedAgent(null);
+      setSelectedMachineId(null);
+      setGlobalDocument(null);
+      setMachineOverride(null);
+      setUsesGlobalDefault(true);
+      setError(null);
+      setStatusMessage(null);
+      setIsLoading(false);
+      return;
+    }
+
     let cancelled = false;
+    setIsLoading(true);
 
     void (async () => {
       try {
@@ -82,10 +111,10 @@ export function useSettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enabled, connectionIdentity]);
 
   useEffect(() => {
-    if (!selectedAgent) {
+    if (!enabled || !selectedAgent) {
       return;
     }
 
@@ -109,10 +138,10 @@ export function useSettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedAgent]);
+  }, [enabled, selectedAgent, connectionIdentity]);
 
   useEffect(() => {
-    if (!selectedAgent || !selectedMachineId) {
+    if (!enabled || !selectedAgent || !selectedMachineId) {
       return;
     }
 
@@ -139,10 +168,15 @@ export function useSettingsPage() {
     return () => {
       cancelled = true;
     };
-  }, [selectedAgent, selectedMachineId]);
+  }, [enabled, selectedAgent, selectedMachineId, connectionIdentity]);
 
   async function saveGlobalDefault() {
-    if (!selectedAgent || !globalDocument || !supportsCapability("settingsGlobalDefault")) {
+    if (
+      !enabled ||
+      !selectedAgent ||
+      !globalDocument ||
+      !supportsCapability("settingsGlobalDefault")
+    ) {
       return;
     }
 
@@ -170,6 +204,7 @@ export function useSettingsPage() {
 
   async function saveMachineOverride() {
     if (
+      !enabled ||
       !selectedAgent ||
       !selectedMachineId ||
       !machineOverride ||
@@ -203,6 +238,7 @@ export function useSettingsPage() {
 
   async function deleteMachineOverride() {
     if (
+      !enabled ||
       !selectedAgent ||
       !selectedMachineId ||
       !supportsCapability("settingsMachineOverride")
@@ -223,7 +259,12 @@ export function useSettingsPage() {
   }
 
   async function applyToMachine() {
-    if (!selectedAgent || !selectedMachineId || !supportsCapability("settingsApplyMachine")) {
+    if (
+      !enabled ||
+      !selectedAgent ||
+      !selectedMachineId ||
+      !supportsCapability("settingsApplyMachine")
+    ) {
       return;
     }
 
@@ -259,12 +300,12 @@ export function useSettingsPage() {
     deleteMachineOverride,
     applyToMachine,
     capabilities: {
-      editGatewayEndpoint: supportsCapability("settingsEditGatewayEndpoint"),
-      editConsoleProfile: supportsCapability("settingsEditConsoleProfile"),
-      editSafetyPolicy: supportsCapability("settingsEditSafetyPolicy"),
-      globalDefault: supportsCapability("settingsGlobalDefault"),
-      machineOverride: supportsCapability("settingsMachineOverride"),
-      applyMachine: supportsCapability("settingsApplyMachine"),
+      editGatewayEndpoint: enabled && supportsCapability("settingsEditGatewayEndpoint"),
+      editConsoleProfile: enabled && supportsCapability("settingsEditConsoleProfile"),
+      editSafetyPolicy: enabled && supportsCapability("settingsEditSafetyPolicy"),
+      globalDefault: enabled && supportsCapability("settingsGlobalDefault"),
+      machineOverride: enabled && supportsCapability("settingsMachineOverride"),
+      applyMachine: enabled && supportsCapability("settingsApplyMachine"),
     },
   };
 }

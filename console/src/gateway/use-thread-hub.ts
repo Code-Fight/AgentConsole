@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { http } from "../common/api/http";
 import type {
   CreateThreadResponse,
@@ -10,6 +10,10 @@ import type {
 } from "../common/api/types";
 import { connectConsoleSocket } from "../common/api/ws";
 import { supportsCapability } from "./capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 import { parseEnvelope, toThreadHubItem } from "./thread-view-model";
 
 interface UseThreadHubOptions {
@@ -20,6 +24,11 @@ export type ThreadHubViewModel = ReturnType<typeof useThreadHub>;
 
 export function useThreadHub(options?: UseThreadHubOptions) {
   const enabled = options?.enabled ?? true;
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [machines, setMachines] = useState<Record<string, MachineSummary>>({});
   const [error, setError] = useState<string | null>(null);
@@ -53,10 +62,16 @@ export function useThreadHub(options?: UseThreadHubOptions) {
 
   useEffect(() => {
     if (!enabled) {
+      setThreads([]);
+      setMachines({});
+      setError(null);
       return;
     }
+    setThreads([]);
+    setMachines({});
+    setError(null);
     void loadHubData();
-  }, [enabled, loadHubData]);
+  }, [enabled, connectionIdentity, loadHubData]);
 
   useEffect(
     () => {
@@ -77,14 +92,14 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         void loadHubData();
       });
     },
-    [enabled, loadHubData],
+    [enabled, connectionIdentity, loadHubData],
   );
 
   const handleCreateThread = useCallback(
     async (machineOverride?: string, titleOverride?: string) => {
       const nextMachineId = (machineOverride ?? machineId).trim();
       const nextTitle = (titleOverride ?? title).trim();
-      if (!supportsCapability("threadHub") || nextMachineId === "" || nextTitle === "") {
+      if (!enabled || !supportsCapability("threadHub") || nextMachineId === "" || nextTitle === "") {
         return null;
       }
 
@@ -112,13 +127,13 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         setIsSubmitting(false);
       }
     },
-    [loadHubData, machineId, title],
+    [enabled, loadHubData, machineId, title],
   );
 
   const handleRename = useCallback(
     async (threadId: string, newTitle: string) => {
       const nextTitle = newTitle.trim();
-      if (!threadId || nextTitle === "") {
+      if (!enabled || !threadId || nextTitle === "") {
         return;
       }
 
@@ -137,11 +152,14 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         setError("Unable to rename thread.");
       }
     },
-    [loadHubData],
+    [enabled, loadHubData],
   );
 
   const handleArchive = useCallback(
     async (threadId: string) => {
+      if (!enabled) {
+        return;
+      }
       setError(null);
 
       try {
@@ -153,11 +171,14 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         setError("Unable to archive thread.");
       }
     },
-    [loadHubData],
+    [enabled, loadHubData],
   );
 
   const handleResume = useCallback(
     async (threadId: string) => {
+      if (!enabled) {
+        return;
+      }
       setError(null);
 
       try {
@@ -169,11 +190,14 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         setError("Unable to resume thread.");
       }
     },
-    [loadHubData],
+    [enabled, loadHubData],
   );
 
   const handleDelete = useCallback(
     async (threadId: string) => {
+      if (!enabled) {
+        return;
+      }
       setError(null);
 
       try {
@@ -185,7 +209,7 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         setError("Unable to delete thread.");
       }
     },
-    [loadHubData],
+    [enabled, loadHubData],
   );
 
   return {
@@ -208,6 +232,6 @@ export function useThreadHub(options?: UseThreadHubOptions) {
     handleArchive,
     handleResume,
     handleDelete,
-    reload: loadHubData,
+    reload: enabled ? loadHubData : async () => {},
   };
 }

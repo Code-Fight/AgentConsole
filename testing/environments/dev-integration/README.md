@@ -16,10 +16,10 @@
 ## 用法
 
 ```bash
-./testenv/dev-integration/run.sh up
-./testenv/dev-integration/run.sh ps
-./testenv/dev-integration/run.sh logs
-./testenv/dev-integration/run.sh down
+./testing/environments/dev-integration/run.sh up
+./testing/environments/dev-integration/run.sh ps
+./testing/environments/dev-integration/run.sh logs
+./testing/environments/dev-integration/run.sh down
 ```
 
 启动后默认访问地址：
@@ -40,6 +40,7 @@
 - `CAG_MACHINE_NAME_DEFAULT`
 - `CAG_HOSTNAME_FALLBACK_NAME`
 - `CAG_MACHINE_NAME_NOT_AGENT`
+- `CAG_GATEWAY_API_KEY`（默认 `dev-integration-key`，会注入 gateway 并用于联调脚本的鉴权请求）
 - `CAG_CLIENT_RUNTIME_MODE`
 - `CAG_CODEX_BIN`
 - `CAG_CODEX_NPM_VERSION`
@@ -52,8 +53,14 @@
 - `CAG_MACHINE_NAME_DEFAULT` 和 `CAG_MACHINE_NAME_NOT_AGENT` 用于覆盖两个显式命名 client 的展示名
 - `CAG_HOSTNAME_FALLBACK_NAME` 用于覆盖 hostname 回退 client 的 docker hostname
 - `CAG_CLIENT_RUNTIME_MODE` 会作用到 3 个 client，默认是 `appserver`
+- 访问受保护的 Gateway API 时需带 `Authorization: Bearer <CAG_GATEWAY_API_KEY>`，例如：
+
+```bash
+curl -H "Authorization: Bearer ${CAG_GATEWAY_API_KEY:-dev-integration-key}" http://localhost:18080/machines
+```
+
 - 如需回退 fake runtime，可以显式设置：
 
 ```bash
-CAG_CLIENT_RUNTIME_MODE=fake ./testenv/dev-integration/run.sh up
+CAG_CLIENT_RUNTIME_MODE=fake ./testing/environments/dev-integration/run.sh up
 ```

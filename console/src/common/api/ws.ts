@@ -1,24 +1,31 @@
-function getDefaultWsUrl(): string {
-  if (typeof window === "undefined") {
-    return "ws://localhost/ws";
-  }
+import {
+  getGatewayConnectionConfig,
+  markGatewayAuthFailed,
+} from "../../gateway/gateway-connection-store";
 
-  const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  return `${protocol}://${window.location.host}/ws`;
+function toWebSocketOrigin(gatewayUrl: string): string {
+  const parsedUrl = new URL(gatewayUrl);
+  const wsProtocol = parsedUrl.protocol === "https:" ? "wss:" : "ws:";
+  return `${wsProtocol}//${parsedUrl.host}`;
 }
 
-const WS_URL = import.meta.env.VITE_WS_URL ?? getDefaultWsUrl();
-
-export function buildConsoleSocketUrl(threadId?: string): string {
-  if (!threadId) {
-    return WS_URL;
+export function buildConsoleSocketUrl(threadId?: string): string | null {
+  const config = getGatewayConnectionConfig();
+  if (!config) {
+    return null;
   }
 
-  const separator = WS_URL.includes("?") ? "&" : "?";
-  return `${WS_URL}${separator}threadId=${encodeURIComponent(threadId)}`;
+  const wsBaseUrl = `${toWebSocketOrigin(config.gatewayUrl)}/ws`;
+  const params = new URLSearchParams();
+  if (threadId) {
+    params.set("threadId", threadId);
+  }
+  params.set("apiKey", config.apiKey);
+  const query = params.toString();
+  return query.length > 0 ? `${wsBaseUrl}?${query}` : wsBaseUrl;
 }
 
-export function buildThreadSocketUrl(threadId: string): string {
+export function buildThreadSocketUrl(threadId: string): string | null {
   return buildConsoleSocketUrl(threadId);
 }
 
@@ -55,12 +62,27 @@ export function connectConsoleSocket(
     reconnectDelay = 1_000;
   };
 
-  const handleClose = () => {
+  const handleClose = (event: CloseEvent) => {
+    if (event.code === 1008 || event.code === 4001) {
+      markGatewayAuthFailed();
+      closed = true;
+      clearReconnectTimer();
+      socket = null;
+      return;
+    }
+
     socket = null;
     scheduleReconnect();
   };
 
   const handleError = () => {
+    if (socket !== null) {
+      // Some runtimes can emit error without close; force closure and reconnect.
+      const activeSocket = socket;
+      socket = null;
+      activeSocket.close();
+    }
+
     scheduleReconnect();
   };
 
@@ -69,7 +91,14 @@ export function connectConsoleSocket(
       return;
     }
 
-    const nextSocket = new WebSocket(buildConsoleSocketUrl(threadId));
+    const socketUrl = buildConsoleSocketUrl(threadId);
+    if (socketUrl === null) {
+      closed = true;
+      clearReconnectTimer();
+      return;
+    }
+
+    const nextSocket = new WebSocket(socketUrl);
     nextSocket.addEventListener("open", handleOpen);
     nextSocket.addEventListener("message", onMessage);
     nextSocket.addEventListener("close", handleClose);

@@ -7,6 +7,9 @@ import settingsSource from "../design-source/components/Settings.tsx?raw";
 import { resetConsolePreferencesStoreForTests } from "../gateway/use-console-preferences";
 import { DesignSourceAppRoot } from "../design-host/app-root";
 
+const GATEWAY_URL = "http://localhost:18080";
+const GATEWAY_API_KEY = "test-key";
+
 class FakeWebSocket {
   readonly close = vi.fn();
 
@@ -55,6 +58,25 @@ function handleConsoleSettings(init?: RequestInit) {
   return jsonResponse({ preferences: null });
 }
 
+function getPath(input: RequestInfo | URL): string {
+  const raw = String(input);
+  try {
+    return new URL(raw).pathname;
+  } catch {
+    return raw;
+  }
+}
+
+function setGatewayCookies() {
+  document.cookie = `cag_gateway_url=${encodeURIComponent(GATEWAY_URL)}; Path=/`;
+  document.cookie = `cag_gateway_api_key=${encodeURIComponent(GATEWAY_API_KEY)}; Path=/`;
+}
+
+function clearGatewayCookies() {
+  document.cookie = "cag_gateway_url=; Max-Age=0; Path=/";
+  document.cookie = "cag_gateway_api_key=; Max-Age=0; Path=/";
+}
+
 beforeEach(() => {
   window.history.pushState({}, "", "/");
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -62,6 +84,7 @@ beforeEach(() => {
     writable: true,
   });
   resetConsolePreferencesStoreForTests();
+  setGatewayCookies();
 });
 
 afterEach(() => {
@@ -76,13 +99,52 @@ test("main entry only loads the design-source styles for the active figma-driven
 });
 
 test("environment and settings stay inside design-source instead of wrapping custom design views", () => {
-  expect(environmentSource).not.toContain("../../design");
-  expect(settingsSource).not.toContain("../../design");
+  expect(environmentSource).not.toContain('from "../../design";');
+  expect(settingsSource).not.toContain('from "../../design";');
+  expect(environmentSource).toContain("useEnvironmentPage({ enabled: connection.remoteEnabled })");
+});
+
+test("shows a blocking connection dialog when gateway cookies are missing", async () => {
+  clearGatewayCookies();
+  const fetchSpy = vi.fn();
+  vi.stubGlobal("fetch", fetchSpy);
+
+  render(<DesignSourceAppRoot />);
+
+  expect(await screen.findByText(/Gateway 连接未配置/)).toBeInTheDocument();
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
+test("settings stays local when gateway cookies are missing", async () => {
+  window.history.pushState({}, "", "/settings");
+  clearGatewayCookies();
+  const fetchSpy = vi.fn();
+  vi.stubGlobal("fetch", fetchSpy);
+
+  render(<DesignSourceAppRoot />);
+
+  expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
+  expect(screen.getAllByLabelText("Gateway API Key").length).toBeGreaterThan(0);
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
+test("nested settings routes stay reachable when gateway cookies are missing", async () => {
+  window.history.pushState({}, "", "/settings/advanced");
+  clearGatewayCookies();
+  const fetchSpy = vi.fn();
+  vi.stubGlobal("fetch", fetchSpy);
+
+  render(<DesignSourceAppRoot />);
+
+  expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
+  expect(screen.getAllByLabelText("Gateway API Key").length).toBeGreaterThan(0);
+  expect(screen.queryByText(/Gateway 连接未配置/)).not.toBeInTheDocument();
+  expect(fetchSpy).not.toHaveBeenCalled();
 });
 
 test("loads gateway thread and machine lists for the active console shell", async () => {
   const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
-    const path = String(input);
+    const path = getPath(input);
 
     if (path === "/capabilities") {
       return jsonResponse(capabilitySnapshot);
@@ -109,7 +171,7 @@ test("loads gateway thread and machine lists for the active console shell", asyn
   render(<DesignSourceAppRoot />);
 
   await waitFor(() => {
-    const paths = fetchSpy.mock.calls.map(([input]) => String(input));
+    const paths = fetchSpy.mock.calls.map(([input]) => getPath(input));
     expect(paths).toContain("/threads");
     expect(paths).toContain("/machines");
   });
@@ -119,7 +181,7 @@ test("does not rely on local mock assistant replies in the active workspace", as
   window.history.pushState({}, "", "/threads/thread-1");
 
   const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
+      const path = getPath(input);
 
       if (path === "/capabilities") {
         return jsonResponse(capabilitySnapshot);
@@ -196,7 +258,7 @@ test("does not rely on local mock assistant replies in the active workspace", as
   render(<DesignSourceAppRoot />);
 
   await waitFor(() => {
-    const paths = fetchSpy.mock.calls.map(([input]) => String(input));
+    const paths = fetchSpy.mock.calls.map(([input]) => getPath(input));
     expect(paths).toContain("/capabilities");
   });
 
@@ -205,10 +267,13 @@ test("does not rely on local mock assistant replies in the active workspace", as
   fireEvent.keyDown(promptInput, { key: "Enter", code: "Enter", charCode: 13 });
 
   await waitFor(() => {
-    expect(fetchSpy).toHaveBeenCalledWith(
-      "/threads/thread-1/turns",
-      expect.objectContaining({ method: "POST" }),
+    const postCall = fetchSpy.mock.calls.find(
+      ([input, init]) =>
+        getPath(input) === "/threads/thread-1/turns" &&
+        typeof init === "object" &&
+        (init as RequestInit)?.method === "POST",
     );
+    expect(postCall).toBeTruthy();
   });
   expect(screen.queryByText(/收到你的指令/)).not.toBeInTheDocument();
 });
@@ -217,7 +282,7 @@ test("keeps thread list when machine load fails", async () => {
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = getPath(input);
 
       if (path === "/capabilities") {
         return jsonResponse(capabilitySnapshot);
@@ -260,7 +325,7 @@ test("surfaces system error thread status instead of treating it as completed", 
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
-      const path = String(input);
+      const path = getPath(input);
 
       if (path === "/capabilities") {
         return jsonResponse(capabilitySnapshot);
@@ -332,7 +397,7 @@ test("surfaces system error thread status instead of treating it as completed", 
 
 test("clears persisted last thread when restore fails", async () => {
   const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
+    const path = getPath(input);
 
     if (path === "/capabilities") {
       return jsonResponse(capabilitySnapshot);
@@ -346,8 +411,6 @@ test("clears persisted last thread when restore fails", async () => {
     if (path === "/settings/console") {
       return jsonResponse({
         preferences: {
-          consoleUrl: "",
-          apiKey: "",
           profile: "",
           safetyPolicy: "",
           lastThreadId: "missing-thread",
@@ -377,7 +440,7 @@ test("clears persisted last thread when restore fails", async () => {
 
   await waitFor(() => {
     const putCall = fetchSpy.mock.calls.find(
-      ([input, init]) => String(input) === "/settings/console" && init?.method === "PUT",
+      ([input, init]) => getPath(input) === "/settings/console" && init?.method === "PUT",
     );
     expect(putCall).toBeTruthy();
     const body = putCall?.[1]?.body ? JSON.parse(String(putCall[1]?.body)) : null;

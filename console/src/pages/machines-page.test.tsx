@@ -1,8 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ConsoleHostRouter } from "../design-host/console-host-router";
+import {
+  clearGatewayConnectionCookies,
+  saveGatewayConnectionToCookies,
+} from "../gateway/gateway-connection-store";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -57,14 +61,30 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function getPath(input: RequestInfo | URL): string {
+  const raw = String(input);
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    return new URL(raw).pathname;
+  }
+  return raw;
+}
+
+beforeEach(() => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "machines-test-key",
+  });
+});
+
 afterEach(() => {
   FakeWebSocket.instances = [];
+  clearGatewayConnectionCookies();
   vi.unstubAllGlobals();
 });
 
 test("reads and saves per-agent config from the active Machines page", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
+    const path = getPath(input);
     const method = init?.method ?? "GET";
 
     if (path === "/capabilities") {
@@ -136,7 +156,7 @@ test("reads and saves per-agent config from the active Machines page", async () 
     expect(
       fetchMock.mock.calls.some(
         ([input, init]) =>
-          String(input) === "/machines/machine-01/agents/agent-01/config" &&
+          getPath(input as RequestInfo | URL) === "/machines/machine-01/agents/agent-01/config" &&
           (!init || !("method" in init) || !init.method || init.method === "GET"),
       ),
     ).toBe(true);
@@ -148,19 +168,22 @@ test("reads and saves per-agent config from the active Machines page", async () 
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/machines/machine-01/agents/agent-01/config",
-      expect.objectContaining({
-        method: "PUT",
-        body: JSON.stringify({ content: "model = \"gpt-5.5\"\n" }),
-      }),
-    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          getPath(input as RequestInfo | URL) ===
+            "/machines/machine-01/agents/agent-01/config" &&
+          (init as RequestInit | undefined)?.method === "PUT" &&
+          (init as RequestInit | undefined)?.body ===
+            JSON.stringify({ content: "model = \"gpt-5.5\"\n" }),
+      ),
+    ).toBe(true);
   });
 });
 
 test("install and delete actions call the managed agent lifecycle APIs", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
+    const path = getPath(input);
     const method = init?.method ?? "GET";
 
     if (path === "/capabilities") {
@@ -233,32 +256,37 @@ test("install and delete actions call the managed agent lifecycle APIs", async (
   fireEvent.click(screen.getByRole("button", { name: "安装" }));
 
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/machines/machine-01/agents",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          agentType: "codex",
-          displayName: "Secondary Codex",
-        }),
-      }),
-    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          getPath(input as RequestInfo | URL) === "/machines/machine-01/agents" &&
+          (init as RequestInit | undefined)?.method === "POST" &&
+          (init as RequestInit | undefined)?.body ===
+            JSON.stringify({
+              agentType: "codex",
+              displayName: "Secondary Codex",
+            }),
+      ),
+    ).toBe(true);
   });
 
   fireEvent.click(screen.getAllByTitle("删除 Agent")[0]);
   fireEvent.click(screen.getByRole("button", { name: "删除" }));
 
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/machines/machine-01/agents/agent-01",
-      expect.objectContaining({ method: "DELETE" }),
-    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          getPath(input as RequestInfo | URL) === "/machines/machine-01/agents/agent-01" &&
+          (init as RequestInit | undefined)?.method === "DELETE",
+      ),
+    ).toBe(true);
   });
 });
 
 test("runtime control buttons call the machine runtime endpoints", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const path = String(input);
+    const path = getPath(input);
     const method = init?.method ?? "GET";
 
     if (path === "/capabilities") {
@@ -315,13 +343,19 @@ test("runtime control buttons call the machine runtime endpoints", async () => {
   fireEvent.click(screen.getAllByRole("button", { name: "Start runtime" })[0]);
 
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/machines/machine-01/runtime/stop",
-      expect.objectContaining({ method: "POST" }),
-    );
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/machines/machine-02/runtime/start",
-      expect.objectContaining({ method: "POST" }),
-    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          getPath(input as RequestInfo | URL) === "/machines/machine-01/runtime/stop" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          getPath(input as RequestInfo | URL) === "/machines/machine-02/runtime/start" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
   });
 });

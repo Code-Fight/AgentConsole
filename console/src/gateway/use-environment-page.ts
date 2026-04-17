@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useState, useSyncExternalStore } from "react";
 import { http } from "../common/api/http";
 import type {
   EventEnvelope,
@@ -7,6 +7,10 @@ import type {
 } from "../common/api/types";
 import { connectConsoleSocket } from "../common/api/ws";
 import { supportsCapability } from "./capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 
 interface EnvironmentSections {
   skills: EnvironmentResource[];
@@ -31,6 +35,10 @@ export interface PluginFormState {
   pluginId: string;
   pluginName: string;
   marketplacePath: string;
+}
+
+interface UseEnvironmentPageOptions {
+  enabled?: boolean;
 }
 
 export function defaultMachineId(sections: EnvironmentSections): string {
@@ -60,13 +68,19 @@ export function extractMCPConfig(resource: EnvironmentResource): Record<string, 
   return fallback;
 }
 
-export function useEnvironmentPage() {
+export function useEnvironmentPage(options?: UseEnvironmentPageOptions) {
+  const enabled = options?.enabled ?? true;
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
   const [sections, setSections] = useState<EnvironmentSections>({
     skills: [],
     mcps: [],
     plugins: [],
   });
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(enabled);
   const [error, setError] = useState<string | null>(null);
   const [pendingActionKey, setPendingActionKey] = useState<string | null>(null);
   const [refreshNonce, setRefreshNonce] = useState(0);
@@ -76,7 +90,24 @@ export function useEnvironmentPage() {
   const [pluginForm, setPluginForm] = useState<PluginFormState | null>(null);
 
   useEffect(() => {
+    setPendingActionKey(null);
+    setExpandedResourceKey(null);
+    setMcpForm(null);
+    setSkillForm(null);
+    setPluginForm(null);
+    setError(null);
+  }, [connectionIdentity]);
+
+  useEffect(() => {
+    if (!enabled) {
+      setSections({ skills: [], mcps: [], plugins: [] });
+      setIsLoading(false);
+      setError(null);
+      return;
+    }
+
     let cancelled = false;
+    setIsLoading(true);
 
     async function loadEnvironment() {
       try {
@@ -115,10 +146,15 @@ export function useEnvironmentPage() {
     return () => {
       cancelled = true;
     };
-  }, [refreshNonce]);
+  }, [enabled, connectionIdentity, refreshNonce]);
 
   useEffect(
-    () =>
+    () => {
+      if (!enabled) {
+        return undefined;
+      }
+
+      return (
       connectConsoleSocket(undefined, (event) => {
         let envelope: EventEnvelope | null = null;
 
@@ -131,8 +167,10 @@ export function useEnvironmentPage() {
         if (envelope.name === "resource.changed") {
           setRefreshNonce((current) => current + 1);
         }
-      }),
-    [],
+      })
+      );
+    },
+    [enabled, connectionIdentity],
   );
 
   function openCreateMCPForm() {
@@ -192,6 +230,9 @@ export function useEnvironmentPage() {
     path: string,
     payload?: Record<string, unknown>,
   ) {
+    if (!enabled) {
+      return;
+    }
     setPendingActionKey(actionKey);
     setError(null);
 
@@ -217,7 +258,7 @@ export function useEnvironmentPage() {
 
   async function handleMCPSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!mcpForm) {
+    if (!enabled || !mcpForm) {
       return;
     }
 
@@ -258,7 +299,7 @@ export function useEnvironmentPage() {
 
   async function handleSkillSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!skillForm) {
+    if (!enabled || !skillForm) {
       return;
     }
     if (!skillForm.name.trim()) {
@@ -291,7 +332,7 @@ export function useEnvironmentPage() {
 
   async function handlePluginInstallSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!pluginForm) {
+    if (!enabled || !pluginForm) {
       return;
     }
     if (!pluginForm.pluginName.trim()) {
@@ -331,6 +372,9 @@ export function useEnvironmentPage() {
   }
 
   async function handleSyncCatalog() {
+    if (!enabled) {
+      return;
+    }
     setError(null);
     setPendingActionKey("sync-catalog");
     try {
@@ -346,6 +390,9 @@ export function useEnvironmentPage() {
   }
 
   async function handleRestartBridge() {
+    if (!enabled) {
+      return;
+    }
     setError(null);
     setPendingActionKey("restart-bridge");
     try {
@@ -387,12 +434,12 @@ export function useEnvironmentPage() {
     handleSyncCatalog,
     handleRestartBridge,
     capabilities: {
-      syncCatalog: supportsCapability("environmentSyncCatalog"),
-      restartBridge: supportsCapability("environmentRestartBridge"),
-      openMarketplace: supportsCapability("environmentOpenMarketplace"),
-      mutateResources: supportsCapability("environmentMutateResources"),
-      writeMcp: supportsCapability("environmentWriteMcp"),
-      writeSkills: supportsCapability("environmentWriteSkills"),
+      syncCatalog: enabled && supportsCapability("environmentSyncCatalog"),
+      restartBridge: enabled && supportsCapability("environmentRestartBridge"),
+      openMarketplace: enabled && supportsCapability("environmentOpenMarketplace"),
+      mutateResources: enabled && supportsCapability("environmentMutateResources"),
+      writeMcp: enabled && supportsCapability("environmentWriteMcp"),
+      writeSkills: enabled && supportsCapability("environmentWriteSkills"),
     },
   };
 }

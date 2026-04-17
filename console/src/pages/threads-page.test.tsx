@@ -1,8 +1,11 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ConsoleHostRouter } from "../design-host/console-host-router";
+
+const GATEWAY_URL = "http://localhost:18080";
+const GATEWAY_API_KEY = "test-key";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -64,6 +67,20 @@ function jsonResponse(body: unknown, status = 200) {
   });
 }
 
+function getPath(input: RequestInfo | URL): string {
+  const raw = String(input);
+  try {
+    return new URL(raw).pathname;
+  } catch {
+    return raw;
+  }
+}
+
+beforeEach(() => {
+  document.cookie = `cag_gateway_url=${encodeURIComponent(GATEWAY_URL)}; Path=/`;
+  document.cookie = `cag_gateway_api_key=${encodeURIComponent(GATEWAY_API_KEY)}; Path=/`;
+});
+
 afterEach(() => {
   FakeWebSocket.instances = [];
   vi.unstubAllGlobals();
@@ -71,7 +88,7 @@ afterEach(() => {
 
 test("renders the active console thread list from /threads and machines from /machines", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = getPath(input);
 
     if (url === "/capabilities") {
       return jsonResponse(capabilities);
@@ -146,7 +163,7 @@ test("active create-thread flow submits both machineId and agentId", async () =>
   ];
 
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = getPath(input);
     const method = init?.method ?? "GET";
 
     if (url === "/capabilities") {
@@ -236,8 +253,11 @@ test("active create-thread flow submits both machineId and agentId", async () =>
   fireEvent.click(screen.getByRole("button", { name: "创建" }));
 
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/threads",
+    const postCall = fetchMock.mock.calls.find(
+      ([input, init]) => getPath(input) === "/threads" && (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(postCall).toBeTruthy();
+    expect(postCall?.[1]).toEqual(
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({

@@ -1,8 +1,12 @@
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ConsoleHostRouter } from "../design-host/console-host-router";
+import {
+  clearGatewayConnectionCookies,
+  saveGatewayConnectionToCookies,
+} from "../gateway/gateway-connection-store";
 
 class FakeWebSocket {
   static instances: FakeWebSocket[] = [];
@@ -34,6 +38,14 @@ class FakeWebSocket {
   }
 }
 
+function getPath(input: RequestInfo | URL): string {
+  const raw = String(input);
+  if (raw.startsWith("http://") || raw.startsWith("https://")) {
+    return new URL(raw).pathname;
+  }
+  return raw;
+}
+
 const capabilities = {
   threadHub: true,
   threadWorkspace: true,
@@ -59,14 +71,22 @@ const capabilities = {
   agentLifecycle: false,
 };
 
+beforeEach(() => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "workspace-test-key",
+  });
+});
+
 afterEach(() => {
   FakeWebSocket.instances = [];
+  clearGatewayConnectionCookies();
   vi.unstubAllGlobals();
 });
 
 test("selecting a thread loads /threads/{threadId} and /machines/{machineId}", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = getPath(input);
 
     if (url === "/capabilities") {
       return new Response(JSON.stringify(capabilities), {
@@ -173,8 +193,12 @@ test("selecting a thread loads /threads/{threadId} and /machines/{machineId}", a
   fireEvent.click(await screen.findByText("Investigate flaky test"));
 
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith("/threads/thread-1", expect.anything());
-    expect(fetchMock).toHaveBeenCalledWith("/machines/machine-1", expect.anything());
+    expect(
+      fetchMock.mock.calls.some(([input]) => getPath(input as RequestInfo | URL) === "/threads/thread-1"),
+    ).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([input]) => getPath(input as RequestInfo | URL) === "/machines/machine-1"),
+    ).toBe(true);
   });
 
   await waitFor(() => {
@@ -184,7 +208,7 @@ test("selecting a thread loads /threads/{threadId} and /machines/{machineId}", a
 
 test("sending a prompt starts a real turn request", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = String(input);
+    const url = getPath(input);
 
     if (url === "/capabilities") {
       return new Response(JSON.stringify(capabilities), {
@@ -310,10 +334,13 @@ test("sending a prompt starts a real turn request", async () => {
   fireEvent.click(sendButton);
 
   await waitFor(() => {
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/threads/thread-1/turns",
-      expect.objectContaining({ method: "POST" }),
-    );
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          getPath(input as RequestInfo | URL) === "/threads/thread-1/turns" &&
+          (init as RequestInit | undefined)?.method === "POST",
+      ),
+    ).toBe(true);
   });
 });
 
@@ -440,7 +467,7 @@ test("historical workspace messages are restored from thread detail on refresh",
 
 test("websocket workspace events update the active console timeline", async () => {
   const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-    const url = String(input);
+    const url = getPath(input);
 
     if (url === "/capabilities") {
       return new Response(JSON.stringify(capabilities), {

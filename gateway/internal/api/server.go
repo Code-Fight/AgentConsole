@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -363,7 +364,12 @@ func resolveActiveTurnID(sender CommandSender, threadID string) string {
 }
 
 func NewServer(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, clientWS http.Handler, consoleWS http.Handler) http.Handler {
-	return NewServerWithSettings(reg, idx, router, sender, nil, clientWS, consoleWS)
+	apiKey, hasAPIKey := os.LookupEnv("GATEWAY_API_KEY")
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, strings.TrimSpace(apiKey), clientWS, consoleWS, hasAPIKey)
+}
+
+func NewServerWithAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, nil, apiKey, clientWS, consoleWS, true)
 }
 
 func defaultAgentDescriptors() []domain.AgentDescriptor {
@@ -450,6 +456,15 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 }
 
 func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, clientWS http.Handler, consoleWS http.Handler) http.Handler {
+	apiKey, hasAPIKey := os.LookupEnv("GATEWAY_API_KEY")
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, strings.TrimSpace(apiKey), clientWS, consoleWS, hasAPIKey)
+}
+
+func NewServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, apiKey string, clientWS http.Handler, consoleWS http.Handler) http.Handler {
+	return newServerWithSettingsAndAPIKey(reg, idx, router, sender, settingsStore, apiKey, clientWS, consoleWS, true)
+}
+
+func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store, router *routing.Router, sender CommandSender, settingsStore settings.Store, apiKey string, clientWS http.Handler, consoleWS http.Handler, failClosedOnBlankKey bool) http.Handler {
 	mux := http.NewServeMux()
 	var deletedThreadsMu sync.RWMutex
 	deletedThreads := map[string]struct{}{}
@@ -2200,5 +2215,61 @@ func NewServerWithSettings(reg *registry.Store, idx *runtimeindex.Store, router 
 		writeJSON(w, http.StatusOK, map[string]any{"pluginId": pluginID, "enabled": false})
 	})
 
-	return mux
+	if strings.TrimSpace(apiKey) == "" && !failClosedOnBlankKey {
+		return mux
+	}
+	return requireConsoleAuth(apiKey, mux)
+}
+
+func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
+	expected := strings.TrimSpace(apiKey)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/health", "/ws/client":
+			// Intentionally open: this endpoint is for local client bridge connections and
+			// relies on loopback-by-default host posture.
+			next.ServeHTTP(w, r)
+			return
+		case "/ws":
+			if !validateWSAPIKey(r, expected) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		default:
+			if !validateBearerToken(r, expected) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		}
+	})
+}
+
+func requireConsoleAuthFunc(apiKey string, next http.HandlerFunc) http.HandlerFunc {
+	wrapped := requireConsoleAuth(apiKey, next)
+	return wrapped.ServeHTTP
+}
+
+func validateBearerToken(r *http.Request, expected string) bool {
+	if r == nil || strings.TrimSpace(expected) == "" {
+		return false
+	}
+	authorization := strings.TrimSpace(r.Header.Get("Authorization"))
+	parts := strings.Fields(authorization)
+	if len(parts) != 2 {
+		return false
+	}
+	if !strings.EqualFold(parts[0], "Bearer") {
+		return false
+	}
+	return strings.TrimSpace(parts[1]) == strings.TrimSpace(expected)
+}
+
+func validateWSAPIKey(r *http.Request, expected string) bool {
+	if r == nil || strings.TrimSpace(expected) == "" {
+		return false
+	}
+	return strings.TrimSpace(r.URL.Query().Get("apiKey")) == strings.TrimSpace(expected)
 }

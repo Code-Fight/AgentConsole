@@ -1,7 +1,7 @@
 x-client-common: &client-common
   build:
-    context: ../..
-    dockerfile: testenv/dev-integration/Dockerfile.client
+    context: ../../..
+    dockerfile: testing/environments/dev-integration/Dockerfile.client
     args:
       CODEX_NPM_VERSION: "${CAG_CODEX_NPM_VERSION:-0.120.0}"
   environment: &client-environment
@@ -17,11 +17,12 @@ x-client-common: &client-common
 services:
   gateway:
     build:
-      context: ../..
-      dockerfile: testenv/dev-integration/Dockerfile.gateway
+      context: ../../..
+      dockerfile: testing/environments/dev-integration/Dockerfile.gateway
     environment:
       HOST: 0.0.0.0
       PORT: 8080
+      GATEWAY_API_KEY: "${GATEWAY_API_KEY}"
     ports:
       - "${CAG_GATEWAY_PORT:-18080}:8080"
     healthcheck:
@@ -55,8 +56,8 @@ services:
 
   console:
     build:
-      context: ../..
-      dockerfile: testenv/dev-integration/Dockerfile.console
+      context: ../../..
+      dockerfile: testing/environments/dev-integration/Dockerfile.console
       args:
         VITE_API_BASE_URL: /api
         VITE_WS_URL: /ws

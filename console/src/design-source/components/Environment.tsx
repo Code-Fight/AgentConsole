@@ -14,6 +14,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { useConsoleConnectionState } from "../../design-host/use-console-host";
 import type { EnvironmentResource } from "../../common/api/types";
 import { useEnvironmentPage } from "../../gateway/use-environment-page";
 import type { Machine } from "../data/mockData";
@@ -211,7 +212,8 @@ function resourceVersion(resource: EnvironmentResource) {
 }
 
 export default function Environment({ machines }: EnvironmentProps) {
-  const vm = useEnvironmentPage();
+  const connection = useConsoleConnectionState();
+  const vm = useEnvironmentPage({ enabled: connection.remoteEnabled });
   const dialogContainer =
     typeof document === "undefined" ? undefined : document.querySelector("main") ?? undefined;
   const onlineMachines = useMemo(

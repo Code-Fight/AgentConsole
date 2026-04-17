@@ -43,5 +43,5 @@ func buildServerHandler(cfg config.Config) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	return api.NewServerWithSettings(reg, idx, router, clientHub, settingsStore, clientHub.Handler(), consoleHub.Handler()), nil
+	return api.NewServerWithSettingsAndAPIKey(reg, idx, router, clientHub, settingsStore, cfg.APIKey, clientHub.Handler(), consoleHub.Handler()), nil
 }

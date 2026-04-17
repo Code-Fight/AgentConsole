@@ -9,9 +9,11 @@ CONSOLE_PORT="${CAG_CONSOLE_PORT:-14173}"
 DEFAULT_MACHINE_NAME="${CAG_MACHINE_NAME_DEFAULT:-Dev Integration Client}"
 HOSTNAME_FALLBACK_NAME="${CAG_HOSTNAME_FALLBACK_NAME:-hostname-fallback-client}"
 NOT_AGENT_MACHINE_NAME="${CAG_MACHINE_NAME_NOT_AGENT:-Not Agent}"
+GATEWAY_API_KEY="${CAG_GATEWAY_API_KEY:-dev-integration-key}"
 GATEWAY_URL="http://localhost:${GATEWAY_PORT}"
 CONSOLE_URL="http://localhost:${CONSOLE_PORT}"
 export CAG_CLIENT_RUNTIME_MODE="${CAG_CLIENT_RUNTIME_MODE:-appserver}"
+export GATEWAY_API_KEY
 EXPECTED_MACHINE_NAMES=(
   "${DEFAULT_MACHINE_NAME}"
   "${HOSTNAME_FALLBACK_NAME}"
@@ -104,14 +106,19 @@ wait_for_machines() {
   local started_at
   started_at="$(date +%s)"
 
-  until python3 - "${GATEWAY_URL}/machines" "${EXPECTED_MACHINE_NAMES[@]}" <<'PY'
+  until python3 - "${GATEWAY_URL}/machines" "${GATEWAY_API_KEY}" "${EXPECTED_MACHINE_NAMES[@]}" <<'PY'
 import json
 import sys
 import urllib.request
 
 url = sys.argv[1]
-expected_names = sys.argv[2:]
-with urllib.request.urlopen(url, timeout=3) as response:
+gateway_api_key = sys.argv[2]
+expected_names = sys.argv[3:]
+request = urllib.request.Request(
+    url,
+    headers={"Authorization": f"Bearer {gateway_api_key}"},
+)
+with urllib.request.urlopen(request, timeout=3) as response:
     payload = json.load(response)
 
 online_names = {
@@ -135,14 +142,19 @@ PY
 }
 
 fetch_machine_rows() {
-  python3 - "${GATEWAY_URL}/machines" "${EXPECTED_MACHINE_NAMES[@]}" <<'PY'
+  python3 - "${GATEWAY_URL}/machines" "${GATEWAY_API_KEY}" "${EXPECTED_MACHINE_NAMES[@]}" <<'PY'
 import json
 import sys
 import urllib.request
 
 url = sys.argv[1]
-expected_names = sys.argv[2:]
-with urllib.request.urlopen(url, timeout=3) as response:
+gateway_api_key = sys.argv[2]
+expected_names = sys.argv[3:]
+request = urllib.request.Request(
+    url,
+    headers={"Authorization": f"Bearer {gateway_api_key}"},
+)
+with urllib.request.urlopen(request, timeout=3) as response:
     payload = json.load(response)
 
 items = {
@@ -175,8 +187,8 @@ case "${cmd}" in
     print_machine_summary
     echo
     echo "Quick checks:"
-    echo "  curl ${GATEWAY_URL}/machines"
-    echo "  curl ${GATEWAY_URL}/threads"
+    echo "  curl -H \"Authorization: Bearer ${GATEWAY_API_KEY}\" ${GATEWAY_URL}/machines"
+    echo "  curl -H \"Authorization: Bearer ${GATEWAY_API_KEY}\" ${GATEWAY_URL}/threads"
     ;;
   down)
     compose down --remove-orphans

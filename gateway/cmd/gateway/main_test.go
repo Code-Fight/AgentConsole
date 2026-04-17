@@ -16,11 +16,14 @@ import (
 	cws "github.com/coder/websocket"
 )
 
+const testGatewayAPIKey = "test-key"
+
 func TestBuildServerHandlerWiresClientSnapshotsIntoHTTPViews(t *testing.T) {
 	serverHandler, err := buildServerHandler(config.Config{
 		Host:             "0.0.0.0",
 		Port:             8080,
 		SettingsFilePath: t.TempDir() + "/settings.json",
+		APIKey:           testGatewayAPIKey,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -114,7 +117,7 @@ func writeEnvelope(conn *cws.Conn, envelope protocol.Envelope) error {
 func mustGetMachines(t *testing.T, url string) []domain.Machine {
 	t.Helper()
 
-	resp, err := http.Get(url)
+	resp, err := getWithAuth(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -132,7 +135,7 @@ func mustGetMachines(t *testing.T, url string) []domain.Machine {
 func mustGetThreads(t *testing.T, url string) []domain.Thread {
 	t.Helper()
 
-	resp, err := http.Get(url)
+	resp, err := getWithAuth(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -150,7 +153,7 @@ func mustGetThreads(t *testing.T, url string) []domain.Thread {
 func mustGetEnvironment(t *testing.T, url string) []domain.EnvironmentResource {
 	t.Helper()
 
-	resp, err := http.Get(url)
+	resp, err := getWithAuth(url)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,4 +180,13 @@ func waitForCondition(t *testing.T, timeout time.Duration, condition func() bool
 	}
 
 	t.Fatal("condition did not become true before timeout")
+}
+
+func getWithAuth(url string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+testGatewayAPIKey)
+	return http.DefaultClient.Do(req)
 }

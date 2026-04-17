@@ -37,7 +37,7 @@ interface SettingsPageViewProps {
   onApplyToMachine: () => void;
   onConsolePreferencesChange?: (patch: Partial<ConsolePreferences>) => void;
   onSaveConsolePreferences?: () => void;
-  onFocusConsolePreferenceField?: (field: "consoleUrl" | "profile" | "safetyPolicy") => void;
+  onFocusConsolePreferenceField?: (field: "profile" | "safetyPolicy") => void;
 }
 
 function CapabilityCard(props: {
@@ -68,8 +68,6 @@ function CapabilityCard(props: {
 
 export function SettingsPageView(props: SettingsPageViewProps) {
   const consolePreferences = props.consolePreferences ?? {
-    consoleUrl: "",
-    apiKey: "",
     profile: "",
     safetyPolicy: "",
     lastThreadId: "",
@@ -91,13 +89,6 @@ export function SettingsPageView(props: SettingsPageViewProps) {
       {props.statusMessage ? <p className="status-message-banner">{props.statusMessage}</p> : null}
 
       <div className="settings-section-list">
-        <CapabilityCard
-          title="Gateway Endpoint"
-          description="Jump to the persisted Console URL setting managed through Gateway preferences."
-          action="Edit gateway endpoint"
-          connected={props.capabilities.editGatewayEndpoint}
-          onAction={() => onFocusConsolePreferenceField("consoleUrl")}
-        />
         <CapabilityCard
           title="Console Profile"
           description="Jump to the persisted Console Profile preference."
@@ -126,29 +117,6 @@ export function SettingsPageView(props: SettingsPageViewProps) {
               </div>
             </div>
             <p className="form-hint">Saved console preferences persist across reloads and apply to this host.</p>
-            <label>
-              <span>Console URL</span>
-              <input
-                id="console-url"
-                aria-label="Console URL"
-                type="text"
-                value={consolePreferences.consoleUrl}
-                onChange={(event) =>
-                  onConsolePreferencesChange({ consoleUrl: event.target.value })
-                }
-              />
-            </label>
-            <label>
-              <span>API Key</span>
-              <input
-                aria-label="API Key"
-                type="password"
-                value={consolePreferences.apiKey}
-                onChange={(event) =>
-                  onConsolePreferencesChange({ apiKey: event.target.value })
-                }
-              />
-            </label>
             <label>
               <span>Console Profile</span>
               <input

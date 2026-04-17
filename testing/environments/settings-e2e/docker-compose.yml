@@ -1,12 +1,13 @@
 services:
   gateway:
     build:
-      context: ../..
-      dockerfile: testenv/dev-integration/Dockerfile.gateway
+      context: ../../..
+      dockerfile: testing/environments/dev-integration/Dockerfile.gateway
     environment:
       HOST: 0.0.0.0
       PORT: 8080
       SETTINGS_FILE: /data/settings.json
+      GATEWAY_API_KEY: "${GATEWAY_API_KEY}"
     volumes:
       - "${CAG_SETTINGS_E2E_GATEWAY_DATA}:/data"
     ports:
@@ -20,8 +21,8 @@ services:
 
   client:
     build:
-      context: ../..
-      dockerfile: testenv/dev-integration/Dockerfile.client
+      context: ../../..
+      dockerfile: testing/environments/dev-integration/Dockerfile.client
     environment:
       MACHINE_NAME: "${CAG_MACHINE_NAME:-Settings E2E Client}"
       GATEWAY_URL: "ws://gateway:8080/ws/client"
@@ -36,8 +37,8 @@ services:
 
   console:
     build:
-      context: ../..
-      dockerfile: testenv/dev-integration/Dockerfile.console
+      context: ../../..
+      dockerfile: testing/environments/dev-integration/Dockerfile.console
       args:
         VITE_API_BASE_URL: /api
         VITE_WS_URL: /ws

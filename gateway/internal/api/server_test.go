@@ -110,6 +110,264 @@ func TestServerMountsConsoleWebsocketRoute(t *testing.T) {
 	}
 }
 
+func TestServerProtectsConsoleAPIAndLeavesHealthOpen(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "test-key")
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/machines without authorization returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/health returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/machines", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/machines with bearer token returned %d", rec.Code)
+	}
+}
+
+func TestServerRejectsConsoleWebsocketWithBadAPIKey(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "test-key")
+	called := false
+	wsHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	})
+
+	handler := NewServer(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		http.NotFoundHandler(),
+		wsHandler,
+	)
+	req := httptest.NewRequest(http.MethodGet, "/ws?apiKey=bad", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/ws with bad api key returned %d", rec.Code)
+	}
+	if called {
+		t.Fatal("/ws handler should not be invoked for bad api key")
+	}
+}
+
+func TestServerWithExplicitBlankAPIKeyFailsClosed(t *testing.T) {
+	consoleCalled := false
+	handler := NewServerWithSettingsAndAPIKey(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		nil,
+		"",
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			consoleCalled = true
+			w.WriteHeader(http.StatusSwitchingProtocols)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/machines returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/health returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws/client", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("/ws/client returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/ws returned %d", rec.Code)
+	}
+	if consoleCalled {
+		t.Fatal("/ws console handler should not be invoked")
+	}
+}
+
+func TestServerWithBlankEnvAPIKeyFailsClosed(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "   ")
+	consoleCalled := false
+	handler := NewServer(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			consoleCalled = true
+			w.WriteHeader(http.StatusSwitchingProtocols)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/machines returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/health returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws/client", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("/ws/client returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/ws returned %d", rec.Code)
+	}
+	if consoleCalled {
+		t.Fatal("/ws console handler should not be invoked")
+	}
+}
+
+func TestServerWithSettingsAndBlankEnvAPIKeyFailsClosed(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "   ")
+	consoleCalled := false
+	handler := NewServerWithSettings(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		settings.NewMemoryStore(defaultAgentDescriptors()),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusTeapot)
+		}),
+		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			consoleCalled = true
+			w.WriteHeader(http.StatusSwitchingProtocols)
+		}),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/machines returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/health", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/health returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws/client", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("/ws/client returned %d", rec.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/ws", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/ws returned %d", rec.Code)
+	}
+	if consoleCalled {
+		t.Fatal("/ws console handler should not be invoked")
+	}
+}
+
+func TestConsoleSettingsEndpointExposesOnlyScopedFields(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "test-key")
+	settingsStore := settings.NewMemoryStore([]domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	if err := settingsStore.PutConsolePreferences(domain.ConsolePreferences{
+		Profile:      "dev",
+		SafetyPolicy: "strict",
+		LastThreadID: "thread-123",
+		ThreadTitles: map[string]string{"thread-123": "One"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	handler := NewServerWithSettings(
+		registry.NewStore(),
+		runtimeindex.NewStore(),
+		routing.NewRouter(),
+		nil,
+		settingsStore,
+		http.NotFoundHandler(),
+		http.NotFoundHandler(),
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/settings/console", nil)
+	req.Header.Set("Authorization", "Bearer test-key")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("/settings/console returned %d", rec.Code)
+	}
+
+	var body struct {
+		Preferences map[string]any `json:"preferences"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Preferences["profile"] != "dev" ||
+		body.Preferences["safetyPolicy"] != "strict" ||
+		body.Preferences["lastThreadId"] != "thread-123" {
+		t.Fatalf("unexpected preferences payload: %v", body.Preferences)
+	}
+	if _, ok := body.Preferences["threadTitles"]; !ok {
+		t.Fatalf("expected threadTitles in payload: %v", body.Preferences)
+	}
+	if _, ok := body.Preferences["consoleUrl"]; ok {
+		t.Fatalf("unexpected consoleUrl in payload: %v", body.Preferences)
+	}
+	if _, ok := body.Preferences["apiKey"]; ok {
+		t.Fatalf("unexpected apiKey in payload: %v", body.Preferences)
+	}
+}
+
 func TestServerCreatesThreadThroughCommandSender(t *testing.T) {
 	sender := &fakeCommandSender{
 		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
@@ -2043,8 +2301,6 @@ func TestConsoleSettingsPutEchoesRequestWhenReadbackFails(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPut, "/settings/console", bytes.NewBufferString(`{
   "preferences": {
-    "consoleUrl": "http://localhost:3100",
-    "apiKey": "test-key",
     "profile": "dev",
     "safetyPolicy": "strict",
     "lastThreadId": "thread-123"
@@ -2060,8 +2316,6 @@ func TestConsoleSettingsPutEchoesRequestWhenReadbackFails(t *testing.T) {
 
 	var putBody struct {
 		Preferences *struct {
-			ConsoleURL   string `json:"consoleUrl"`
-			APIKey       string `json:"apiKey"`
 			Profile      string `json:"profile"`
 			SafetyPolicy string `json:"safetyPolicy"`
 			LastThreadID string `json:"lastThreadId"`
@@ -2309,8 +2563,6 @@ func TestConsoleSettingsEndpointsPersistPreferences(t *testing.T) {
 
 	var getBody struct {
 		Preferences *struct {
-			ConsoleURL   string `json:"consoleUrl"`
-			APIKey       string `json:"apiKey"`
 			Profile      string `json:"profile"`
 			SafetyPolicy string `json:"safetyPolicy"`
 			LastThreadID string `json:"lastThreadId"`
@@ -2325,8 +2577,6 @@ func TestConsoleSettingsEndpointsPersistPreferences(t *testing.T) {
 
 	req = httptest.NewRequest(http.MethodPut, "/settings/console", bytes.NewBufferString(`{
   "preferences": {
-    "consoleUrl": "http://localhost:3100",
-    "apiKey": "test-key",
     "profile": "dev",
     "safetyPolicy": "strict",
     "lastThreadId": "thread-123"
@@ -2341,8 +2591,6 @@ func TestConsoleSettingsEndpointsPersistPreferences(t *testing.T) {
 
 	var putBody struct {
 		Preferences *struct {
-			ConsoleURL   string `json:"consoleUrl"`
-			APIKey       string `json:"apiKey"`
 			Profile      string `json:"profile"`
 			SafetyPolicy string `json:"safetyPolicy"`
 			LastThreadID string `json:"lastThreadId"`
@@ -2364,7 +2612,7 @@ func TestConsoleSettingsEndpointsPersistPreferences(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &getBody); err != nil {
 		t.Fatalf("invalid console settings json: %v", err)
 	}
-	if getBody.Preferences == nil || getBody.Preferences.ConsoleURL != "http://localhost:3100" {
+	if getBody.Preferences == nil || getBody.Preferences.LastThreadID != "thread-123" {
 		t.Fatalf("expected persisted console preferences, got %+v", getBody.Preferences)
 	}
 }

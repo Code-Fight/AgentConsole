@@ -21,7 +21,7 @@ cover.out
 data/
 
 # Test environment temp outputs
-testenv/*/.tmp/
+testing/environments/*/.tmp/
 
 # Local tool state
 .superpowers/

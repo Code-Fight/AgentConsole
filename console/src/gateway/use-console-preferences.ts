@@ -5,10 +5,12 @@ import type {
   ConsolePreferencesRequest,
   ConsolePreferencesResponse,
 } from "../common/api/types";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "./gateway-connection-store";
 
 const emptyPreferences: ConsolePreferences = {
-  consoleUrl: "",
-  apiKey: "",
   profile: "",
   safetyPolicy: "",
   lastThreadId: "",
@@ -22,6 +24,7 @@ interface ConsolePreferencesState {
   isSaving: boolean;
   loadError: string | null;
   saveError: string | null;
+  loadedIdentity: string | null;
 }
 
 const initialState: ConsolePreferencesState = {
@@ -32,6 +35,7 @@ const initialState: ConsolePreferencesState = {
   isSaving: false,
   loadError: null,
   saveError: null,
+  loadedIdentity: null,
 };
 
 const store = {
@@ -67,8 +71,20 @@ export function resetConsolePreferencesStoreForTests() {
   emitChange();
 }
 
-export function useConsolePreferences() {
+interface UseConsolePreferencesOptions {
+  enabled?: boolean;
+}
+
+const asyncNull = async () => null;
+
+export function useConsolePreferences(options?: UseConsolePreferencesOptions) {
+  const enabled = options?.enabled ?? true;
   const snapshot = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
+  const connectionIdentity = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionIdentity,
+    getGatewayConnectionIdentity,
+  );
 
   const loadPreferences = useCallback(async () => {
     if (loadPromise) {
@@ -84,6 +100,7 @@ export function useConsolePreferences() {
           saveError: null,
           hasAttempted: true,
           hasLoadedSuccessfully: true,
+          loadedIdentity: connectionIdentity,
         });
       } catch (loadError) {
         setStoreState({
@@ -93,6 +110,7 @@ export function useConsolePreferences() {
               : "Unable to load console preferences.",
           hasAttempted: true,
           hasLoadedSuccessfully: false,
+          loadedIdentity: connectionIdentity,
         });
       } finally {
         loadPromise = null;
@@ -100,13 +118,24 @@ export function useConsolePreferences() {
       }
     })();
     return loadPromise;
-  }, []);
+  }, [connectionIdentity]);
 
   useEffect(() => {
-    if (!store.state.hasAttempted && !store.state.isLoading) {
+    if (!enabled) {
+      return;
+    }
+    if (store.state.isLoading) {
+      return;
+    }
+
+    const shouldReload =
+      !store.state.hasLoadedSuccessfully ||
+      store.state.loadedIdentity !== connectionIdentity;
+
+    if (shouldReload) {
       void loadPreferences();
     }
-  }, [loadPreferences]);
+  }, [enabled, connectionIdentity, loadPreferences]);
 
   const savePreferences = useCallback(
     async (next: ConsolePreferences) => {
@@ -157,6 +186,22 @@ export function useConsolePreferences() {
     }
     return snapshot.hasAttempted ? emptyPreferences : null;
   }, [snapshot.preferences, snapshot.loadError, snapshot.hasAttempted]);
+
+  if (!enabled) {
+    return {
+      preferences: null,
+      isLoading: false,
+      isSaving: false,
+      error: null,
+      loadError: null,
+      saveError: null,
+      hasAttempted: false,
+      hasLoadedSuccessfully: false,
+      reload: asyncNull,
+      savePreferences: asyncNull,
+      updatePreferences: asyncNull,
+    };
+  }
 
   return {
     preferences: normalized,

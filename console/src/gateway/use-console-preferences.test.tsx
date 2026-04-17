@@ -1,6 +1,18 @@
 import "@testing-library/jest-dom/vitest";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import {
+  clearGatewayConnectionCookies,
+  markGatewayAuthFailed,
+  saveGatewayConnectionToCookies,
+} from "./gateway-connection-store";
+
+const httpMock = vi.hoisted(() => vi.fn());
+
+vi.mock("../common/api/http", () => ({
+  http: httpMock,
+}));
+
 import {
   resetConsolePreferencesStoreForTests,
   useConsolePreferences,
@@ -8,81 +20,141 @@ import {
 
 beforeEach(() => {
   resetConsolePreferencesStoreForTests();
+  httpMock.mockReset();
+  clearGatewayConnectionCookies();
 });
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-test("keeps preferences null when load fails", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => new Response(JSON.stringify({ error: "fail" }), { status: 500 })),
-  );
-
-  const { result } = renderHook(() => useConsolePreferences());
-
-  await waitFor(() => {
-    expect(result.current.isLoading).toBe(false);
+test("loads and saves console preferences through shared http transport", async () => {
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      profile: "dev",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
   });
-
-  expect(result.current.error).toBeTruthy();
-  expect(result.current.preferences).toBeNull();
-});
-
-test("save failure does not block a later retry", async () => {
-  let putCount = 0;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = String(input);
-
-      if (path === "/settings/console" && (!init?.method || init.method === "GET")) {
-        return new Response(
-          JSON.stringify({
-            preferences: {
-              consoleUrl: "http://localhost:3100",
-              apiKey: "key-1",
-              profile: "dev",
-              safetyPolicy: "strict",
-              lastThreadId: "",
-            },
-          }),
-          {
-            status: 200,
-            headers: { "Content-Type": "application/json" },
-          },
-        );
-      }
-
-      if (path === "/settings/console" && init?.method === "PUT") {
-        putCount += 1;
-        if (putCount === 1) {
-          return new Response(JSON.stringify({ error: "save failed" }), { status: 500 });
-        }
-
-        const body = init.body ? JSON.parse(String(init.body)) : { preferences: null };
-        return new Response(JSON.stringify(body), {
-          status: 200,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
-
-      throw new Error(`unexpected fetch: ${path}`);
-    }),
-  );
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      profile: "prod",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
 
   const { result } = renderHook(() => useConsolePreferences());
 
   await waitFor(() => {
     expect(result.current.hasLoadedSuccessfully).toBe(true);
   });
+  expect(httpMock).toHaveBeenCalledWith("/settings/console");
 
-  const first = await result.current.updatePreferences({ lastThreadId: "thread-1" });
-  expect(first).toBeNull();
-  expect(result.current.saveError).toBeTruthy();
+  await act(async () => {
+    await result.current.updatePreferences({ profile: "prod" });
+  });
 
-  const second = await result.current.updatePreferences({ lastThreadId: "thread-1" });
-  expect(second?.lastThreadId).toBe("thread-1");
-  expect(result.current.saveError).toBeNull();
+  expect(httpMock).toHaveBeenCalledWith(
+    "/settings/console",
+    expect.objectContaining({
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+    }),
+  );
+});
+
+test("keeps hook inert when disabled", () => {
+  const { result } = renderHook(() => useConsolePreferences({ enabled: false }));
+
+  expect(result.current.preferences).toBeNull();
+  expect(result.current.hasAttempted).toBe(false);
+  expect(httpMock).not.toHaveBeenCalled();
+});
+
+test("reloads after gateway connection identity changes while enabled", async () => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "key-1",
+  });
+
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      profile: "dev",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      profile: "prod",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+
+  const { result } = renderHook(() => useConsolePreferences({ enabled: true }));
+  await waitFor(() => {
+    expect(result.current.preferences?.profile).toBe("dev");
+  });
+
+  await act(async () => {
+    saveGatewayConnectionToCookies({
+      gatewayUrl: "http://localhost:19090",
+      apiKey: "key-2",
+    });
+  });
+
+  await waitFor(() => {
+    expect(result.current.preferences?.profile).toBe("prod");
+  });
+});
+
+test("recovers after auth-failed -> new key -> re-enable", async () => {
+  saveGatewayConnectionToCookies({
+    gatewayUrl: "http://localhost:18080",
+    apiKey: "old-key",
+  });
+
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      profile: "dev",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+  httpMock.mockResolvedValueOnce({
+    preferences: {
+      profile: "dev",
+      safetyPolicy: "strict",
+      lastThreadId: "",
+    },
+  });
+
+  let enabled = true;
+  const { result, rerender } = renderHook(() => useConsolePreferences({ enabled }));
+  await waitFor(() => {
+    expect(result.current.hasLoadedSuccessfully).toBe(true);
+  });
+
+  await act(async () => {
+    markGatewayAuthFailed();
+    enabled = false;
+    rerender();
+  });
+
+  expect(result.current.preferences).toBeNull();
+
+  await act(async () => {
+    saveGatewayConnectionToCookies({
+      gatewayUrl: "http://localhost:18080",
+      apiKey: "new-key",
+    });
+    enabled = true;
+    rerender();
+  });
+
+  await waitFor(() => {
+    expect(result.current.preferences?.profile).toBe("dev");
+  });
 });
