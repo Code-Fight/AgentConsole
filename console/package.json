@@ -6,7 +6,8 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.json && vite build",
     "test": "vitest run",
-    "e2e": "playwright test --pass-with-no-tests"
+    "e2e": "playwright test --pass-with-no-tests",
+    "e2e:visual": "playwright test --config playwright.visual.config.ts"
   },
   "dependencies": {
     "@radix-ui/react-context-menu": "^2.2.6",
