@@ -7,6 +7,8 @@ import {
 } from "react-router-dom";
 import App from "../../design-source/App";
 import { type AppPage, useConsoleHost } from "../../design-host/use-console-host";
+import { ThreadWorkspacePage } from "../../features/threads/pages/thread-workspace-page";
+import { ThreadsPage } from "../../features/threads/pages/threads-page";
 import { AppShell } from "../layout/app-shell";
 
 type AppRouterOptions = {
@@ -50,15 +52,15 @@ const routes = [
     children: [
       {
         index: true,
-        element: <LegacyConsolePage />,
+        element: <ThreadsPage />,
       },
       {
         path: "threads",
-        element: <LegacyConsolePage />,
+        element: <ThreadsPage />,
       },
       {
         path: "threads/:threadId",
-        element: <LegacyConsolePage />,
+        element: <ThreadWorkspacePage />,
       },
       {
         path: "machines",
