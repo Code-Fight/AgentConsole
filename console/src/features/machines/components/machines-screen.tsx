@@ -6,6 +6,7 @@ import { http } from "../../../common/api/http";
 import type { MachineSummary } from "../../../common/api/types";
 import type {
   MachinesPageAgentViewModel,
+  MachinesPageConfigSaveResult,
   MachinesPageMachineViewModel,
   MachinesPageSessionViewModel,
 } from "../hooks/use-machines-page";
@@ -15,7 +16,7 @@ interface MachinesScreenProps {
   error?: string | null;
   onInstallAgent: (machineId: string, agentType: string, agentName: string) => void;
   onDeleteAgent: (machineId: string, agentId: string) => void;
-  onUpdateAgentConfig: (machineId: string, agentId: string, config: string) => void;
+  onUpdateAgentConfig: (machineId: string, agentId: string, config: string) => Promise<MachinesPageConfigSaveResult>;
   onStartRuntime: (machineId: string) => void;
   onStopRuntime: (machineId: string) => void;
 }
@@ -63,31 +64,6 @@ const statusConfig = {
 const agentTypeOptions = [
   { value: "codex", label: "Codex" },
 ];
-
-const defaultConfigs: Record<string, string> = {
-  "claude-code": `# Claude Code Agent Configuration
-model = "claude-sonnet-4-5"
-temperature = 0.7
-max_tokens = 4096
-
-[timeout]
-default = 60000
-
-[retry]
-max_retries = 3
-backoff = "exponential"`,
-  codex: `# Codex Agent Configuration
-model = "claude-sonnet-4-5"
-api_version = "v1"
-enable_caching = true
-
-[timeout]
-default = 30000`,
-  custom: `# Custom Agent Configuration
-model = "gpt-4-turbo"
-temperature = 0.8
-max_tokens = 2048`,
-};
 
 function formatMachineName(machine: MachinesPageMachineViewModel) {
   if (machine.status === "reconnecting") {
@@ -313,13 +289,14 @@ function EditAgentConfigDialog({
   machine: MachinesScreenMachine;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (machineId: string, agentId: string, config: string) => void;
+  onSave: (machineId: string, agentId: string, config: string) => Promise<MachinesPageConfigSaveResult>;
 }) {
-  const fallbackConfig = useMemo(
-    () => defaultConfigs[agent.type] ?? defaultConfigs.custom,
-    [agent.type],
-  );
-  const [config, setConfig] = useState(fallbackConfig);
+  const [config, setConfig] = useState("");
+  const [isLoadingConfig, setIsLoadingConfig] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [restartError, setRestartError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -329,6 +306,12 @@ function EditAgentConfigDialog({
     let active = true;
 
     const loadConfig = async () => {
+      setIsLoadingConfig(true);
+      setLoadError(null);
+      setSaveError(null);
+      setRestartError(null);
+      setConfig("");
+
       try {
         const response = await http<{ document?: { content?: string } }>(
           `/machines/${encodeURIComponent(machine.id)}/agents/${encodeURIComponent(agent.id)}/config`,
@@ -336,12 +319,16 @@ function EditAgentConfigDialog({
         if (!active) {
           return;
         }
-        setConfig(response.document?.content ?? fallbackConfig);
+        setConfig(response.document?.content ?? "");
       } catch {
         if (!active) {
           return;
         }
-        setConfig(fallbackConfig);
+        setLoadError("无法加载该 Agent 的最新配置，请重试。");
+      } finally {
+        if (active) {
+          setIsLoadingConfig(false);
+        }
       }
     };
 
@@ -350,7 +337,7 @@ function EditAgentConfigDialog({
     return () => {
       active = false;
     };
-  }, [agent.id, fallbackConfig, machine.id, open]);
+  }, [agent.id, machine.id, open]);
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -367,26 +354,51 @@ function EditAgentConfigDialog({
               <label className="block text-sm text-zinc-400">配置文件 (TOML)</label>
               <span className="text-xs text-zinc-600">类型: {agent.type}</span>
             </div>
+            {isLoadingConfig ? (
+              <p className="text-xs text-zinc-500 mb-2">正在加载最新配置...</p>
+            ) : null}
+            {loadError ? <p className="text-xs text-red-400 mb-2">{loadError}</p> : null}
+            {saveError ? <p className="text-xs text-red-400 mb-2">{saveError}</p> : null}
+            {restartError ? <p className="text-xs text-amber-400 mb-2">{restartError}</p> : null}
             <textarea
               value={config}
               onChange={(event) => setConfig(event.target.value)}
               rows={18}
               className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-4 py-3 text-sm text-zinc-300 font-mono focus:outline-none focus:border-blue-500 transition-colors resize-none"
               placeholder="输入 TOML 配置..."
+              disabled={isLoadingConfig || isSaving || Boolean(loadError)}
             />
           </div>
 
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => {
-                onSave(machine.id, agent.id, config);
-                onOpenChange(false);
+              onClick={async () => {
+                setSaveError(null);
+                setRestartError(null);
+                setIsSaving(true);
+                try {
+                  const result = await onSave(machine.id, agent.id, config);
+                  if (!result.saved) {
+                    setSaveError(result.error ?? "保存失败，请重试。");
+                    return;
+                  }
+                  if (!result.restarted) {
+                    setRestartError(`配置已保存，但重启失败。${result.error ? ` ${result.error}` : ""}`.trim());
+                    return;
+                  }
+                  onOpenChange(false);
+                } catch (error) {
+                  setSaveError(error instanceof Error ? error.message : "保存失败，请重试。");
+                } finally {
+                  setIsSaving(false);
+                }
               }}
+              disabled={isLoadingConfig || isSaving || Boolean(loadError) || config.trim() === ""}
               className="flex-1 flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm transition-colors"
             >
               <Check className="size-4" />
-              保存
+              {isSaving ? "保存中..." : "保存"}
             </button>
             <Dialog.Close asChild>
               <button

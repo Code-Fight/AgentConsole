@@ -43,6 +43,12 @@ export interface MachinesPageMachineViewModel {
   sessions: MachinesPageSessionViewModel[];
 }
 
+export interface MachinesPageConfigSaveResult {
+  saved: boolean;
+  restarted: boolean;
+  error?: string;
+}
+
 function formatThreadStatus(status: ThreadSummary["status"]): string {
   switch (status) {
     case "active":
@@ -240,7 +246,11 @@ export function useMachinesPage() {
   const handleUpdateAgentConfig = useCallback(
     async (machineId: string, agentId: string, config: string) => {
       if (!remoteEnabled || !machineId || !agentId) {
-        return;
+        return {
+          saved: false,
+          restarted: false,
+          error: "Machine or agent is unavailable.",
+        } satisfies MachinesPageConfigSaveResult;
       }
 
       await http(`/machines/${encodeURIComponent(machineId)}/agents/${encodeURIComponent(agentId)}/config`, {
@@ -250,7 +260,24 @@ export function useMachinesPage() {
         },
         body: JSON.stringify({ content: config }),
       });
-      await loadMachinesPageData();
+
+      try {
+        await http(`/machines/${encodeURIComponent(machineId)}/agents/${encodeURIComponent(agentId)}/restart`, {
+          method: "POST",
+        });
+        await loadMachinesPageData();
+        return {
+          saved: true,
+          restarted: true,
+        } satisfies MachinesPageConfigSaveResult;
+      } catch (error) {
+        await loadMachinesPageData();
+        return {
+          saved: true,
+          restarted: false,
+          error: error instanceof Error ? error.message : "Agent restart failed.",
+        } satisfies MachinesPageConfigSaveResult;
+      }
     },
     [loadMachinesPageData, remoteEnabled],
   );

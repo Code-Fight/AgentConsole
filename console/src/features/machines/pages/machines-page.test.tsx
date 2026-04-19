@@ -134,6 +134,13 @@ test("renders machines and saves per-agent config from the feature-local Machine
         },
       });
     }
+    if (path === "/machines/machine-01/agents/agent-01/restart" && method === "POST") {
+      return jsonResponse({
+        machineId: "machine-01",
+        agentId: "agent-01",
+        status: "restarted",
+      });
+    }
 
     throw new Error(`Unexpected request: ${method} ${path}`);
   });
@@ -167,17 +174,75 @@ test("renders machines and saves per-agent config from the feature-local Machine
   fireEvent.click(screen.getByRole("button", { name: "保存" }));
 
   await waitFor(() => {
-    expect(
-      fetchMock.mock.calls.some(
-        ([input, init]) =>
-          getPath(input as RequestInfo | URL) ===
-            "/machines/machine-01/agents/agent-01/config" &&
-          (init as RequestInit | undefined)?.method === "PUT" &&
-          (init as RequestInit | undefined)?.body ===
-            JSON.stringify({ content: "model = \"gpt-5.5\"\n" }),
-      ),
-    ).toBe(true);
+    const putIndex = fetchMock.mock.calls.findIndex(
+      ([input, init]) =>
+        getPath(input as RequestInfo | URL) === "/machines/machine-01/agents/agent-01/config" &&
+        (init as RequestInit | undefined)?.method === "PUT" &&
+        (init as RequestInit | undefined)?.body ===
+          JSON.stringify({ content: "model = \"gpt-5.5\"\n" }),
+    );
+    const restartIndex = fetchMock.mock.calls.findIndex(
+      ([input, init]) =>
+        getPath(input as RequestInfo | URL) === "/machines/machine-01/agents/agent-01/restart" &&
+        (init as RequestInit | undefined)?.method === "POST",
+    );
+    expect(putIndex).toBeGreaterThan(-1);
+    expect(restartIndex).toBeGreaterThan(putIndex);
   });
+});
+
+test("keeps save disabled when config loading fails", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = getPath(input);
+    const method = init?.method ?? "GET";
+
+    if (path === "/capabilities") {
+      return jsonResponse(capabilities);
+    }
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [
+          {
+            id: "machine-01",
+            name: "Machine 01",
+            status: "online",
+            runtimeStatus: "running",
+            agents: [
+              {
+                agentId: "agent-01",
+                agentType: "codex",
+                displayName: "Primary Codex",
+                status: "running",
+              },
+            ],
+          },
+        ],
+      });
+    }
+    if (path === "/threads") {
+      return jsonResponse({ items: [] });
+    }
+    if (path === "/machines/machine-01/agents/agent-01/config" && method === "GET") {
+      return new Response("boom", { status: 502 });
+    }
+
+    throw new Error(`Unexpected request: ${method} ${path}`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  render(
+    <MemoryRouter>
+      <MachinesPage />
+    </MemoryRouter>,
+  );
+
+  expect((await screen.findAllByText("Machine 01")).length).toBeGreaterThan(0);
+  fireEvent.click(screen.getAllByTitle("编辑配置")[0]);
+
+  expect(await screen.findByText("无法加载该 Agent 的最新配置，请重试。")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "保存" })).toBeDisabled();
 });
 
 test("install and delete actions call the managed agent lifecycle APIs", async () => {
