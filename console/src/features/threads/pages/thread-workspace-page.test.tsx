@@ -219,3 +219,110 @@ test("renders /threads/thread-1, streams gateway output, and posts turns", async
     ).toBe(true);
   });
 });
+
+test("uses selected session title when thread detail title is empty", async () => {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = getPath(input);
+
+    if (path === "/capabilities") {
+      return jsonResponse({
+        threadHub: true,
+        threadWorkspace: true,
+        approvals: true,
+        startTurn: true,
+        steerTurn: true,
+        interruptTurn: true,
+        machineInstallAgent: false,
+        machineRemoveAgent: false,
+        environmentSyncCatalog: false,
+        environmentRestartBridge: false,
+        environmentOpenMarketplace: false,
+        environmentMutateResources: false,
+        environmentWriteMcp: false,
+        environmentWriteSkills: false,
+        settingsEditGatewayEndpoint: false,
+        settingsEditConsoleProfile: false,
+        settingsEditSafetyPolicy: false,
+        settingsGlobalDefault: true,
+        settingsMachineOverride: true,
+        settingsApplyMachine: true,
+        dashboardMetrics: false,
+        agentLifecycle: false,
+      });
+    }
+
+    if (path === "/settings/console") {
+      return jsonResponse({ preferences: null });
+    }
+
+    if (path === "/threads") {
+      return jsonResponse({
+        items: [
+          {
+            threadId: "thread-1",
+            machineId: "machine-1",
+            agentId: "agent-1",
+            status: "idle",
+            title: "服务测试",
+          },
+        ],
+      });
+    }
+
+    if (path === "/machines") {
+      return jsonResponse({
+        items: [
+          {
+            id: "machine-1",
+            name: "Machine One",
+            status: "online",
+            runtimeStatus: "running",
+            agents: [
+              {
+                agentId: "agent-1",
+                agentType: "codex",
+                displayName: "Primary Codex",
+                status: "running",
+              },
+            ],
+          },
+        ],
+      });
+    }
+
+    if (path === "/threads/thread-1") {
+      return jsonResponse({
+        thread: {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          agentId: "agent-1",
+          status: "idle",
+          title: "",
+        },
+        pendingApprovals: [],
+      });
+    }
+
+    if (path === "/machines/machine-1") {
+      return jsonResponse({
+        machine: {
+          id: "machine-1",
+          name: "Machine One",
+          status: "online",
+          runtimeStatus: "running",
+        },
+      });
+    }
+
+    throw new Error(`unexpected fetch path: ${path} (${init?.method ?? "GET"})`);
+  });
+
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
+
+  const router = createAppRouter({ initialEntries: ["/threads/thread-1"] });
+  render(<AppProviders router={router} />);
+
+  expect((await screen.findAllByText("服务测试", { exact: true })).length).toBeGreaterThan(0);
+  expect(screen.queryAllByText("线程工作区", { exact: true })).toHaveLength(0);
+});

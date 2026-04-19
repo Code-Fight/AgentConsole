@@ -333,7 +333,7 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
   );
 
   return {
-    title: threadTitle || "线程工作区",
+    title: threadTitle,
     subtitle: threadId || "未选择线程",
     error,
     machine: machine

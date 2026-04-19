@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -35,7 +36,7 @@ func NewConsoleHub() *ConsoleHub {
 func (h *ConsoleHub) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, r *http.Request) {
-		conn, err := cws.Accept(w, r, nil)
+		conn, err := cws.Accept(w, r, consoleAcceptOptions(r))
 		if err != nil {
 			return
 		}
@@ -65,6 +66,41 @@ func (h *ConsoleHub) Handler() http.Handler {
 	})
 
 	return mux
+}
+
+func consoleAcceptOptions(r *http.Request) *cws.AcceptOptions {
+	if r == nil {
+		return nil
+	}
+
+	pattern := sameHostCrossPortOriginPattern(r.Host)
+	if pattern == "" {
+		return nil
+	}
+
+	return &cws.AcceptOptions{
+		OriginPatterns: []string{pattern},
+	}
+}
+
+func sameHostCrossPortOriginPattern(hostport string) string {
+	host := strings.TrimSpace(hostport)
+	if host == "" {
+		return ""
+	}
+
+	if parsedHost, _, err := net.SplitHostPort(host); err == nil {
+		host = parsedHost
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return ""
+	}
+
+	if strings.Contains(host, ":") {
+		return "[" + host + "]:*"
+	}
+	return host + ":*"
 }
 
 func (h *ConsoleHub) Broadcast(envelope protocol.Envelope) error {
