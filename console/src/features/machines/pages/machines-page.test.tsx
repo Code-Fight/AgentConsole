@@ -2,27 +2,11 @@ import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-
-vi.mock("../../../design-host/use-console-host", () => {
-  throw new Error("machines feature must not depend on design-host runtime state");
-});
-
-vi.mock("../../../gateway/capabilities", () => {
-  throw new Error("machines feature must not depend on legacy gateway capabilities");
-});
-
-vi.mock("../../threads/hooks/use-thread-hub", () => {
-  throw new Error("machines feature must not depend on threads runtime hub");
-});
-
-vi.mock("../../threads/model/thread-view-model", () => {
-  throw new Error("machines feature must not depend on threads view-model builders");
-});
-
+import { resetCapabilitiesForTests } from "../../../common/config/capabilities";
 import {
   clearGatewayConnectionCookies,
   saveGatewayConnectionToCookies,
-} from "../../settings/model/gateway-connection-store";
+} from "../../../common/config/gateway-connection-store";
 import { MachinesPage } from "./machines-page";
 
 class FakeWebSocket {
@@ -87,6 +71,7 @@ function getPath(input: RequestInfo | URL): string {
 }
 
 beforeEach(() => {
+  resetCapabilitiesForTests();
   saveGatewayConnectionToCookies({
     gatewayUrl: "http://localhost:18080",
     apiKey: "machines-feature-test-key",
@@ -96,6 +81,7 @@ beforeEach(() => {
 afterEach(() => {
   FakeWebSocket.instances = [];
   clearGatewayConnectionCookies();
+  resetCapabilitiesForTests();
   vi.unstubAllGlobals();
 });
 

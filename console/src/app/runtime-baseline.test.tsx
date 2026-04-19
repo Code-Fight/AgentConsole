@@ -1,9 +1,14 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { afterEach, beforeEach, vi } from "vitest";
-import { clearGatewayConnectionCookies } from "../gateway/gateway-connection-store";
-import { resetConsolePreferencesStoreForTests } from "../gateway/use-console-preferences";
-import { DesignSourceAppRoot } from "../design-host/app-root";
+import { afterEach, beforeEach, test, vi } from "vitest";
+import { resetCapabilitiesForTests } from "../common/config/capabilities";
+import {
+  clearGatewayConnectionCookies,
+  resetGatewayConnectionStoreForTests,
+} from "../common/config/gateway-connection-store";
+import { resetConsolePreferencesStoreForTests } from "../features/settings/hooks/use-console-preferences";
+import { AppProviders } from "./providers/index";
+import { createAppRouter } from "./router/index";
 
 const GATEWAY_URL = "http://localhost:18080";
 const GATEWAY_API_KEY = "test-key";
@@ -70,8 +75,15 @@ function setGatewayCookies() {
   document.cookie = `cag_gateway_api_key=${encodeURIComponent(GATEWAY_API_KEY)}; Path=/`;
 }
 
+function renderAppAt(pathname: string) {
+  const router = createAppRouter({ initialEntries: [pathname] });
+  render(<AppProviders router={router} />);
+  return router;
+}
+
 beforeEach(() => {
-  window.history.pushState({}, "", "/");
+  resetGatewayConnectionStoreForTests();
+  resetCapabilitiesForTests();
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
     value: vi.fn(),
     writable: true,
@@ -81,6 +93,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearGatewayConnectionCookies();
+  resetCapabilitiesForTests();
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
@@ -90,19 +104,18 @@ test("shows a blocking connection dialog when gateway cookies are missing", asyn
   const fetchSpy = vi.fn();
   vi.stubGlobal("fetch", fetchSpy);
 
-  render(<DesignSourceAppRoot />);
+  renderAppAt("/");
 
   expect(await screen.findByText(/Gateway 连接未配置/)).toBeInTheDocument();
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
 test("settings stays local when gateway cookies are missing and avoids remote fetches", async () => {
-  window.history.pushState({}, "", "/settings");
   clearGatewayConnectionCookies();
   const fetchSpy = vi.fn();
   vi.stubGlobal("fetch", fetchSpy);
 
-  render(<DesignSourceAppRoot />);
+  renderAppAt("/settings");
 
   expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
   expect(screen.getAllByLabelText("Gateway API Key").length).toBeGreaterThan(0);
@@ -111,12 +124,11 @@ test("settings stays local when gateway cookies are missing and avoids remote fe
 });
 
 test("nested settings route stays reachable when gateway cookies are missing", async () => {
-  window.history.pushState({}, "", "/settings/advanced");
   clearGatewayConnectionCookies();
   const fetchSpy = vi.fn();
   vi.stubGlobal("fetch", fetchSpy);
 
-  render(<DesignSourceAppRoot />);
+  renderAppAt("/settings/advanced");
 
   expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
   expect(screen.getAllByLabelText("Gateway API Key").length).toBeGreaterThan(0);
@@ -150,7 +162,7 @@ test("loads gateway thread and machine lists for the active console shell", asyn
   vi.stubGlobal("fetch", fetchSpy);
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
-  render(<DesignSourceAppRoot />);
+  renderAppAt("/");
 
   await waitFor(() => {
     const paths = fetchSpy.mock.calls.map(([input]) => getPath(input));
@@ -160,8 +172,6 @@ test("loads gateway thread and machine lists for the active console shell", asyn
 });
 
 test("workspace prompt submit path posts turn start without local mock reply", async () => {
-  window.history.pushState({}, "", "/threads/thread-1");
-
   const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = getPath(input);
 
@@ -237,7 +247,7 @@ test("workspace prompt submit path posts turn start without local mock reply", a
   vi.stubGlobal("fetch", fetchSpy);
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
-  render(<DesignSourceAppRoot />);
+  renderAppAt("/threads/thread-1");
 
   await waitFor(() => {
     const paths = fetchSpy.mock.calls.map(([input]) => getPath(input));
@@ -296,14 +306,12 @@ test("keeps thread list when machine load fails", async () => {
   );
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
-  render(<DesignSourceAppRoot />);
+  renderAppAt("/");
 
   expect(await screen.findByText("Partial load thread")).toBeInTheDocument();
 });
 
 test("surfaces system error thread status instead of treating it as completed", async () => {
-  window.history.pushState({}, "", "/threads/thread-3");
-
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: RequestInfo | URL) => {
@@ -372,7 +380,7 @@ test("surfaces system error thread status instead of treating it as completed", 
   );
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
-  render(<DesignSourceAppRoot />);
+  renderAppAt("/threads/thread-3");
 
   expect((await screen.findAllByText("异常")).length).toBeGreaterThan(0);
 });
@@ -418,7 +426,7 @@ test("clears persisted lastThreadId when restore fails", async () => {
   vi.stubGlobal("fetch", fetchSpy);
   vi.stubGlobal("WebSocket", FakeWebSocket as unknown as typeof WebSocket);
 
-  render(<DesignSourceAppRoot />);
+  const router = renderAppAt("/");
 
   await waitFor(() => {
     const putCall = fetchSpy.mock.calls.find(
@@ -430,6 +438,6 @@ test("clears persisted lastThreadId when restore fails", async () => {
   });
 
   await waitFor(() => {
-    expect(window.location.pathname).toBe("/");
+    expect(router.state.location.pathname).toBe("/");
   });
 });

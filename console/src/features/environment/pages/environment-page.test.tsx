@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import {
   clearGatewayConnectionCookies,
   saveGatewayConnectionToCookies,
-} from "../../../gateway/gateway-connection-store";
+} from "../../../common/config/gateway-connection-store";
 import { EnvironmentPage } from "./environment-page";
 
 function getPath(input: RequestInfo | URL | string): string {
@@ -49,7 +49,7 @@ const useCapabilitiesMock = vi.hoisted(
   () => vi.fn((_enabled?: boolean) => capabilitySnapshot),
 );
 
-vi.mock("../../../gateway/capabilities", () => ({
+vi.mock("../../../common/config/capabilities", () => ({
   useCapabilities: useCapabilitiesMock,
   supportsCapability: (capability: string) =>
     Boolean(capabilitySnapshot[capability as keyof typeof capabilitySnapshot]),

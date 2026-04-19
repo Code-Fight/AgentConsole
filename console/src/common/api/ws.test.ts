@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import {
   clearGatewayConnectionCookies,
   getGatewayConnectionState,
-} from "../../gateway/gateway-connection-store";
+} from "../config/gateway-connection-store";
 import { buildThreadSocketUrl, connectConsoleSocket } from "./ws";
 
 class FakeWebSocket {

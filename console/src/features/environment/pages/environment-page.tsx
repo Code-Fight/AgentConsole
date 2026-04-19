@@ -1,11 +1,11 @@
 import { ArrowLeft, Bot } from "lucide-react";
 import { useNavigate } from "react-router-dom";
-import { useConsoleConnectionState } from "../../../design-host/use-console-host";
+import { useGatewayConnectionState } from "../../../common/config/gateway-connection-store";
 import { EnvironmentScreen } from "../components/environment-screen";
 
 export function EnvironmentPage() {
   const navigate = useNavigate();
-  const connection = useConsoleConnectionState();
+  const connection = useGatewayConnectionState();
 
   return (
     <div className="size-full bg-zinc-950 text-zinc-100 flex flex-col overflow-hidden">

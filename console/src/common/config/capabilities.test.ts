@@ -3,6 +3,7 @@ import {
   clearGatewayConnectionCookies,
   saveGatewayConnectionToCookies,
 } from "./gateway-connection-store";
+import { resetCapabilitiesForTests } from "./capabilities";
 
 function seedGatewayConnection() {
   saveGatewayConnectionToCookies({
@@ -13,6 +14,7 @@ function seedGatewayConnection() {
 
 afterEach(() => {
   clearGatewayConnectionCookies();
+  resetCapabilitiesForTests();
   vi.unstubAllGlobals();
   vi.resetModules();
 });

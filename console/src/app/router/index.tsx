@@ -1,14 +1,11 @@
 import {
   createBrowserRouter,
   createMemoryRouter,
-  useLocation,
-  useNavigate,
-  useParams,
+  Navigate,
 } from "react-router-dom";
-import App from "../../design-source/App";
-import { type AppPage, useConsoleHost } from "../../design-host/use-console-host";
 import { EnvironmentPage } from "../../features/environment/pages/environment-page";
 import { MachinesPage } from "../../features/machines/pages/machines-page";
+import { OverviewPage } from "../../features/overview/pages/overview-page";
 import { SettingsPage } from "../../features/settings/pages/settings-page";
 import { ThreadWorkspacePage } from "../../features/threads/pages/thread-workspace-page";
 import { ThreadsPage } from "../../features/threads/pages/threads-page";
@@ -17,36 +14,6 @@ import { AppShell } from "../layout/app-shell";
 type AppRouterOptions = {
   initialEntries?: string[];
 };
-
-function resolveActivePage(pathname: string): AppPage {
-  if (pathname.startsWith("/overview")) {
-    return "overview";
-  }
-  if (pathname.startsWith("/machines")) {
-    return "machines";
-  }
-  if (pathname.startsWith("/environment")) {
-    return "environment";
-  }
-  if (pathname.startsWith("/settings")) {
-    return "settings";
-  }
-  return "threads";
-}
-
-function LegacyConsolePage() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const { threadId } = useParams<{ threadId?: string }>();
-  const activePage = resolveActivePage(location.pathname);
-  const host = useConsoleHost({
-    activePage,
-    threadId: threadId ?? null,
-    navigate,
-  });
-
-  return <App {...host} />;
-}
 
 const routes = [
   {
@@ -79,11 +46,11 @@ const routes = [
       },
       {
         path: "overview",
-        element: <LegacyConsolePage />,
+        element: <OverviewPage />,
       },
       {
         path: "*",
-        element: <LegacyConsolePage />,
+        element: <Navigate replace to="/" />,
       },
     ],
   },

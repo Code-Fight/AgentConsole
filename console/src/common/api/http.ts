@@ -1,7 +1,7 @@
 import {
   markGatewayAuthFailed,
   requireGatewayConnectionConfig,
-} from "../../gateway/gateway-connection-store";
+} from "../config/gateway-connection-store";
 
 export function buildThreadApiPath(threadId: string, resource?: string): string {
   const encodedThreadId = encodeURIComponent(threadId);
@@ -27,7 +27,7 @@ export async function http<T>(
 
   const response = await fetch(`${config.gatewayUrl}${path}`, {
     ...init,
-    headers
+    headers,
   });
 
   if (response.status === 401) {

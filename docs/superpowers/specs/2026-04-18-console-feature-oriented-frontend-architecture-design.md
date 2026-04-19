@@ -1,8 +1,10 @@
 # Console Feature-Oriented Frontend Architecture 设计文档
 
+> 实施状态（2026-04-19）：迁移已完成。当前 Console 运行时只保留 `app/`、`features/`、`common/`，`design-source/`、`design-host/`、`design-bridge/`、`gateway/`、`design/`、`pages/` 已全部删除。
+
 ## 1. 背景
 
-`console/` 当前的运行时和文档存在明显偏差。
+`console/` 在迁移开始前，运行时和文档存在明显偏差。
 
 文档和 README 仍将当前 Console 描述为由 `design-source`、`design-bridge`、`design-host`、`gateway` 组成的多层结构，并默认：
 
@@ -10,7 +12,7 @@
 - 上游 UI 后续仍可能整包替换
 - 本地运行时逻辑需要围绕这些层做保护和接缝管理
 
-但代码现状已经不是一个稳定的分层架构：
+迁移前的代码现状已经不是一个稳定的分层架构：
 
 - 当前主入口仍走 `console/src/main.tsx -> design-host -> design-source/App`
 - `design-bridge/` 基本尚未成为真实运行时接缝层
@@ -26,7 +28,7 @@
 
 这种混合结构会让后续演进越来越难。
 
-本次设计明确放弃“`design-source` 可整包替换 / 保留上游同步保护区”的目标，将 Console 收敛为一个普通、稳定、以产品能力为中心组织的前端工程。
+本次设计明确放弃“`design-source` 可整包替换 / 保留上游同步保护区”的目标，并已将 Console 收敛为一个普通、稳定、以产品能力为中心组织的前端工程。
 
 ## 2. 目标
 
@@ -58,18 +60,18 @@
 
 ### 4.1 放弃来源层架构
 
-未来 Console 不再围绕以下目录作为主结构组织：
+Console 不再围绕以下目录作为主结构组织：
 
 - `design-source/`
 - `design-bridge/`
 - `design-host/`
 - `gateway/`
 
-这些目录在迁移阶段允许继续存在，但它们是遗留兼容层，不是未来主结构。
+这些目录已经被删除。它们不再是兼容层，也不允许作为未来新增能力的落点。
 
 ### 4.2 采用 Feature-Oriented Frontend Architecture
 
-未来 Console 采用“应用装配层 + 业务 feature 层 + 公共能力层”的结构：
+当前 Console 采用“应用装配层 + 业务 feature 层 + 公共能力层”的结构：
 
 ```text
 console/src/
@@ -477,6 +479,11 @@ console/src/
 产出：
 
 - 单一结构落地完成
+- `common/config/gateway-connection-store.ts` 已成为跨 feature 的 Gateway 连接状态真相源
+- `common/api/http.ts` / `common/api/ws.ts` 已直接依赖该 common store
+- 非 `features/settings/**` 的 active runtime 与跨 feature 测试均已直接依赖该 common store，而不是经过 settings shim
+- `common/config/capabilities.ts` 已成为共享 capability 真相源
+- `/overview` 已迁入 feature runtime，catch-all 已回收为 `/` 重定向
 
 ## 9. 质量保障设计
 
@@ -628,14 +635,15 @@ testing/environments/console-visual-regression/
 
 ## 12. 结论
 
-未来 Console 的主结构不再围绕“上游来源层”组织，而是围绕产品域组织。
+当前 Console 的主结构已经不再围绕“上游来源层”组织，而是围绕产品域组织。
 
 本次设计的最终结果是：
 
 - `app/` 负责应用装配
 - `features/` 负责产品能力
 - `common/` 负责公共能力
+- 旧 `design-source/design-host/design-bridge/gateway/design/pages` 层已全部退出运行时
 - 当前 Console 的视觉输出被冻结为迁移基线
 - 功能回归和视觉回归都成为正式门禁
 
-只有在上述结构、迁移阶段和质量体系全部成立后，Console 才算真正从“混合态四层遗留架构”收敛为一个成熟、稳定、可持续演进的前端项目。
+至此，Console 已经从“混合态四层遗留架构”收敛为一个成熟、稳定、可持续演进的 feature-oriented 前端项目。

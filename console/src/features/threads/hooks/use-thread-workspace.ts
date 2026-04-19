@@ -8,12 +8,12 @@ import type {
   TurnDeltaPayload,
   TurnStartedPayload,
 } from "../../../common/api/types";
-import { connectConsoleSocket } from "../../../common/api/ws";
-import { supportsCapability } from "../../../gateway/capabilities";
+import { supportsCapability } from "../../../common/config/capabilities";
 import {
   getGatewayConnectionIdentity,
   subscribeGatewayConnection,
-} from "../../../gateway/gateway-connection-store";
+} from "../../../common/config/gateway-connection-store";
+import { connectConsoleSocket } from "../../../common/api/ws";
 import {
   getMachineDetail,
   getThreadDetail,

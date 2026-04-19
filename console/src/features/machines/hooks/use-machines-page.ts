@@ -13,7 +13,7 @@ import {
   getGatewayConnectionIdentity,
   subscribeGatewayConnection,
   useGatewayConnectionState,
-} from "../../settings/model/gateway-connection-store";
+} from "../../../common/config/gateway-connection-store";
 
 export interface MachinesPageAgentViewModel {
   id: string;

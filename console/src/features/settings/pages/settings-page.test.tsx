@@ -1,8 +1,9 @@
 import "@testing-library/jest-dom/vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { AppProviders } from "../../../app/providers";
+import { AppProviders } from "../../../app/providers/index";
 import { createAppRouter } from "../../../app/router/index";
+import { resetCapabilitiesForTests } from "../../../common/config/capabilities";
 import {
   clearGatewayConnectionCookies,
   resetGatewayConnectionStoreForTests,
@@ -42,6 +43,7 @@ async function getMainScope() {
 
 beforeEach(() => {
   resetGatewayConnectionStoreForTests();
+  resetCapabilitiesForTests();
   resetConsolePreferencesStoreForTests();
   setGatewayCookies();
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
@@ -51,6 +53,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearGatewayConnectionCookies();
+  resetCapabilitiesForTests();
   vi.unstubAllGlobals();
 });
 

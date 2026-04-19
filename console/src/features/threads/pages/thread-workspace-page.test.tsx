@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { AppProviders } from "../../../app/providers/index";
 import { createAppRouter } from "../../../app/router/index";
+import { resetCapabilitiesForTests } from "../../../common/config/capabilities";
+import { clearGatewayConnectionCookies } from "../../../common/config/gateway-connection-store";
 
 const GATEWAY_URL = "http://localhost:18080";
 const GATEWAY_API_KEY = "feature-test-key";
@@ -48,12 +50,15 @@ function getPath(input: RequestInfo | URL): string {
 }
 
 beforeEach(() => {
+  resetCapabilitiesForTests();
   document.cookie = `cag_gateway_url=${encodeURIComponent(GATEWAY_URL)}; Path=/`;
   document.cookie = `cag_gateway_api_key=${encodeURIComponent(GATEWAY_API_KEY)}; Path=/`;
 });
 
 afterEach(() => {
   FakeWebSocket.instances = [];
+  clearGatewayConnectionCookies();
+  resetCapabilitiesForTests();
   vi.unstubAllGlobals();
 });
 

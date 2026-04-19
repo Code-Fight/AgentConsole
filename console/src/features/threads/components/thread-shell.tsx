@@ -1,13 +1,13 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { Bot, ChevronLeft, ChevronRight, Menu, MessageSquare, X } from "lucide-react";
-import { useNavigate } from "react-router-dom";
-import { useCapabilities } from "../../../gateway/capabilities";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useCapabilities } from "../../../common/config/capabilities";
 import {
   getGatewayConnectionIdentity,
   getGatewayConnectionState,
   subscribeGatewayConnection,
-} from "../../../gateway/gateway-connection-store";
-import { useConsolePreferences } from "../../../gateway/use-console-preferences";
+} from "../../../common/config/gateway-connection-store";
+import { useConsolePreferences } from "../../settings/hooks/use-console-preferences";
 import { getThreadDetail } from "../api/thread-api";
 import { useThreadHub } from "../hooks/use-thread-hub";
 import { useThreadWorkspace } from "../hooks/use-thread-workspace";
@@ -40,6 +40,7 @@ function resolveRoute(page: ThreadShellDestination) {
 }
 
 export function ThreadShell({ threadId = null }: ThreadShellProps) {
+  const location = useLocation();
   const navigate = useNavigate();
   const connectionState = useSyncExternalStore(
     subscribeGatewayConnection,
@@ -57,6 +58,7 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
   const [restoreAttempted, setRestoreAttempted] = useState(false);
   const [restoredThreadId, setRestoredThreadId] = useState<string | null>(null);
   const [lastVerifiedThreadId, setLastVerifiedThreadId] = useState<string | null>(null);
+  const restoredThreadIdRef = useRef<string | null>(null);
 
   useCapabilities(remoteEnabled);
   const hub = useThreadHub({ enabled: remoteEnabled });
@@ -69,11 +71,21 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
     updatePreferences,
   } = useConsolePreferences({ enabled: remoteEnabled });
   const lastPreferenceThreadId = preferences?.lastThreadId ?? "";
+  const restoredThreadIdFromNavigation = useMemo(() => {
+    const state = location.state;
+    if (!state || typeof state !== "object" || !("restoredThreadId" in state)) {
+      return null;
+    }
+
+    const value = (state as Record<string, unknown>).restoredThreadId;
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }, [location.state]);
 
   useEffect(() => {
     setRestoreAttempted(false);
     setRestoredThreadId(null);
     setLastVerifiedThreadId(null);
+    restoredThreadIdRef.current = null;
   }, [connectionIdentity]);
 
   useEffect(() => {
@@ -104,7 +116,10 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
 
     setRestoreAttempted(true);
     setRestoredThreadId(lastThreadId);
-    navigate(`/threads/${lastThreadId}`);
+    restoredThreadIdRef.current = lastThreadId;
+    navigate(`/threads/${lastThreadId}`, {
+      state: { restoredThreadId: lastThreadId },
+    });
   }, [
     navigate,
     preferencesAttempted,
@@ -137,6 +152,7 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
           return;
         }
         if (lastPreferenceThreadId === threadId) {
+          restoredThreadIdRef.current = null;
           setLastVerifiedThreadId(threadId);
           return;
         }
@@ -145,14 +161,19 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
           return;
         }
         if (updated) {
+          restoredThreadIdRef.current = null;
           setLastVerifiedThreadId(threadId);
         }
       } catch {
         if (!active) {
           return;
         }
-        if (restoredThreadId === threadId) {
+        if (
+          restoredThreadIdFromNavigation === threadId ||
+          (restoredThreadIdRef.current ?? restoredThreadId) === threadId
+        ) {
           setLastVerifiedThreadId(threadId);
+          restoredThreadIdRef.current = null;
           setRestoredThreadId(null);
           await updatePreferences({ lastThreadId: "" });
           navigate("/");
@@ -175,6 +196,7 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
     updatePreferences,
     remoteEnabled,
     restoredThreadId,
+    restoredThreadIdFromNavigation,
     threadId,
   ]);
 

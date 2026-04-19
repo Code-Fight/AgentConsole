@@ -1,5 +1,10 @@
 import { type FormEvent, useEffect, useState, useSyncExternalStore } from "react";
 import { http } from "../../../common/api/http";
+import { supportsCapability, useCapabilities } from "../../../common/config/capabilities";
+import {
+  getGatewayConnectionIdentity,
+  subscribeGatewayConnection,
+} from "../../../common/config/gateway-connection-store";
 import type {
   EnvironmentListResponse,
   EnvironmentResource,
@@ -8,11 +13,6 @@ import type {
   MachineSummary,
 } from "../../../common/api/types";
 import { connectConsoleSocket } from "../../../common/api/ws";
-import { supportsCapability, useCapabilities } from "../../../gateway/capabilities";
-import {
-  getGatewayConnectionIdentity,
-  subscribeGatewayConnection,
-} from "../../../gateway/gateway-connection-store";
 
 interface EnvironmentSections {
   skills: EnvironmentResource[];

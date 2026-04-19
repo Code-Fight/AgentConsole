@@ -1,6 +1,6 @@
 import { useLocation, useNavigate } from "react-router-dom";
-import { ConnectionRequiredDialog } from "../../design-host/connection-required-dialog";
-import { useGatewayConnectionState } from "../../features/settings/model/gateway-connection-store";
+import { useGatewayConnectionState } from "../../common/config/gateway-connection-store";
+import { ConnectionRequiredDialog } from "./connection-required-dialog";
 
 export function ConnectionGate() {
   const connection = useGatewayConnectionState();

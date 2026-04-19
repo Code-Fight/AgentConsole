@@ -2,7 +2,7 @@ import { afterEach, expect, test, vi } from "vitest";
 import {
   clearGatewayConnectionCookies,
   markGatewayAuthFailed,
-} from "../../gateway/gateway-connection-store";
+} from "../config/gateway-connection-store";
 import { buildThreadApiPath, http } from "./http";
 
 afterEach(() => {

@@ -1,9 +1,45 @@
+import { useMemo, useSyncExternalStore } from "react";
+
 export interface GatewayConnectionConfig {
   gatewayUrl: string;
   apiKey: string;
 }
 
 export type GatewayConnectionState = "missing" | "ready" | "authFailed";
+
+export type SettingsGatewayConnectionStatus = "unconfigured" | "ready" | "authFailed";
+
+export interface SettingsGatewayConnectionState {
+  status: SettingsGatewayConnectionStatus;
+  message: string;
+  remoteEnabled: boolean;
+}
+
+function mapGatewayConnectionState(
+  state: GatewayConnectionState,
+): SettingsGatewayConnectionState {
+  if (state === "ready") {
+    return {
+      status: "ready",
+      message: "",
+      remoteEnabled: true,
+    };
+  }
+
+  if (state === "authFailed") {
+    return {
+      status: "authFailed",
+      message: "Gateway 鉴权失败，请检查 API Key 后重试。",
+      remoteEnabled: false,
+    };
+  }
+
+  return {
+    status: "unconfigured",
+    message: "请先在设置页填写 Gateway URL 与 API Key。",
+    remoteEnabled: false,
+  };
+}
 
 const GATEWAY_URL_COOKIE = "cag_gateway_url";
 const GATEWAY_API_KEY_COOKIE = "cag_gateway_api_key";
@@ -75,7 +111,6 @@ function normalizeApiKey(value: string | null): string | null {
 }
 
 function hashIdentity(value: string): string {
-  // FNV-1a 32-bit hash for non-sensitive identity fingerprinting.
   let hash = 0x811c9dc5;
   for (let index = 0; index < value.length; index += 1) {
     hash ^= value.charCodeAt(index);
@@ -90,7 +125,8 @@ function writeCookie(name: string, value: string, maxAgeSeconds?: number): void 
   }
 
   const maxAgePart = typeof maxAgeSeconds === "number" ? `; Max-Age=${maxAgeSeconds}` : "";
-  const securePart = typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
+  const securePart =
+    typeof location !== "undefined" && location.protocol === "https:" ? "; Secure" : "";
   document.cookie = `${name}=${encodeURIComponent(value)}; Path=/; SameSite=Lax${securePart}${maxAgePart}`;
 }
 
@@ -134,14 +170,11 @@ export function clearGatewayConnectionCookies(): void {
   syncGatewayConnectionFromCookies();
 }
 
-export function getGatewayConnectionConfig(): GatewayConnectionConfig | null {
-  refreshGatewayConnectionFromCookies();
-  return gatewayConnectionState === "ready" ? gatewayConnectionConfig : null;
-}
-
-export function getGatewayConnectionState(): GatewayConnectionState {
-  refreshGatewayConnectionFromCookies();
-  return gatewayConnectionState;
+export function subscribeGatewayConnection(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 export function getGatewayConnectionIdentity(): string {
@@ -156,6 +189,16 @@ export function getGatewayConnectionIdentity(): string {
   }
 
   return `ready:${hashIdentity(`${config.gatewayUrl}|${config.apiKey}`)}`;
+}
+
+export function getGatewayConnectionConfig(): GatewayConnectionConfig | null {
+  refreshGatewayConnectionFromCookies();
+  return gatewayConnectionState === "ready" ? gatewayConnectionConfig : null;
+}
+
+export function getGatewayConnectionState(): GatewayConnectionState {
+  refreshGatewayConnectionFromCookies();
+  return gatewayConnectionState;
 }
 
 export function requireGatewayConnectionConfig(): GatewayConnectionConfig {
@@ -181,9 +224,18 @@ export function markGatewayAuthFailed(): void {
   notifyGatewayConnectionSubscribers();
 }
 
-export function subscribeGatewayConnection(listener: () => void): () => void {
-  listeners.add(listener);
-  return () => {
-    listeners.delete(listener);
-  };
+export function useGatewayConnectionState(): SettingsGatewayConnectionState {
+  const gatewayState = useSyncExternalStore(
+    subscribeGatewayConnection,
+    getGatewayConnectionState,
+    getGatewayConnectionState,
+  );
+
+  return useMemo(() => mapGatewayConnectionState(gatewayState), [gatewayState]);
+}
+
+export function resetGatewayConnectionStoreForTests(): void {
+  gatewayConnectionConfig = readGatewayConnectionFromCookies();
+  gatewayConnectionState = gatewayConnectionConfig === null ? "missing" : "ready";
+  notifyGatewayConnectionSubscribers();
 }

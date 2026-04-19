@@ -1,7 +1,7 @@
 import {
   getGatewayConnectionConfig,
   markGatewayAuthFailed,
-} from "../../gateway/gateway-connection-store";
+} from "../config/gateway-connection-store";
 
 function toWebSocketOrigin(gatewayUrl: string): string {
   const parsedUrl = new URL(gatewayUrl);

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { http } from "../../../common/api/http";
+import { supportsCapability, useCapabilities } from "../../../common/config/capabilities";
 import type {
   AgentConfigDocument,
   AgentDescriptor,
@@ -9,7 +10,6 @@ import type {
   MachineListResponse,
   MachineSummary,
 } from "../../../common/api/types";
-import { supportsCapability, useCapabilities } from "../../../gateway/capabilities";
 import {
   getGatewayConnectionIdentity,
   subscribeGatewayConnection,

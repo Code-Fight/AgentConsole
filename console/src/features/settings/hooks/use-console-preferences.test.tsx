@@ -5,11 +5,11 @@ import {
   clearGatewayConnectionCookies,
   markGatewayAuthFailed,
   saveGatewayConnectionToCookies,
-} from "./gateway-connection-store";
+} from "../model/gateway-connection-store";
 
 const httpMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../common/api/http", () => ({
+vi.mock("../../../common/api/http", () => ({
   http: httpMock,
 }));
 
