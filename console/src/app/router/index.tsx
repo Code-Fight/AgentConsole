@@ -8,6 +8,7 @@ import {
 import App from "../../design-source/App";
 import { type AppPage, useConsoleHost } from "../../design-host/use-console-host";
 import { EnvironmentPage } from "../../features/environment/pages/environment-page";
+import { MachinesPage } from "../../features/machines/pages/machines-page";
 import { SettingsPage } from "../../features/settings/pages/settings-page";
 import { ThreadWorkspacePage } from "../../features/threads/pages/thread-workspace-page";
 import { ThreadsPage } from "../../features/threads/pages/threads-page";
@@ -66,7 +67,7 @@ const routes = [
       },
       {
         path: "machines",
-        element: <LegacyConsolePage />,
+        element: <MachinesPage />,
       },
       {
         path: "environment",

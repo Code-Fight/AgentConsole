@@ -45,10 +45,12 @@ const capabilitySnapshot = vi.hoisted(() => ({
   settingsMachineOverride: true,
   settingsApplyMachine: true,
 }));
-const useCapabilitiesMock = vi.hoisted(() => vi.fn(() => capabilitySnapshot));
+const useCapabilitiesMock = vi.hoisted(
+  () => vi.fn((_enabled?: boolean) => capabilitySnapshot),
+);
 
 vi.mock("../../../gateway/capabilities", () => ({
-  useCapabilities: (enabled?: boolean) => useCapabilitiesMock(enabled),
+  useCapabilities: useCapabilitiesMock,
   supportsCapability: (capability: string) =>
     Boolean(capabilitySnapshot[capability as keyof typeof capabilitySnapshot]),
 }));
