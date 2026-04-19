@@ -171,6 +171,10 @@ type MachineAgentDeleteCommandPayload struct {
 	AgentID string `json:"agentId"`
 }
 
+type MachineAgentRestartCommandPayload struct {
+	AgentID string `json:"agentId"`
+}
+
 type MachineAgentConfigReadCommandPayload struct {
 	AgentID string `json:"agentId"`
 }
@@ -290,6 +294,10 @@ type MachineAgentInstallCommandResult struct {
 }
 
 type MachineAgentDeleteCommandResult struct {
+	AgentID string `json:"agentId"`
+}
+
+type MachineAgentRestartCommandResult struct {
 	AgentID string `json:"agentId"`
 }
 

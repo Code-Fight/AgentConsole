@@ -1013,6 +1013,43 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 		writeJSON(w, http.StatusOK, map[string]any{"document": result.Document})
 	})
 
+	mux.HandleFunc("POST /machines/{machineId}/agents/{agentId}/restart", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		machineID := strings.TrimSpace(r.PathValue("machineId"))
+		if machineID == "" {
+			http.Error(w, "machineId is required", http.StatusBadRequest)
+			return
+		}
+		agentID := strings.TrimSpace(r.PathValue("agentId"))
+		if agentID == "" {
+			http.Error(w, "agentId is required", http.StatusBadRequest)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), machineID, "machine.agent.restart", protocol.MachineAgentRestartCommandPayload{
+			AgentID: agentID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.MachineAgentRestartCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			http.Error(w, "invalid machine.agent.restart result", http.StatusBadGateway)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"machineId": machineID,
+			"agentId":   result.AgentID,
+			"status":    "restarted",
+		})
+	})
+
 	mux.HandleFunc("GET /machines", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"items": reg.List()})
 	})

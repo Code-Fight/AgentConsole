@@ -1179,6 +1179,72 @@ func TestServerMachineAgentConfigEndpointsUseExpectedCommands(t *testing.T) {
 	}
 }
 
+func TestServerMachineAgentRestartEndpointUsesExpectedCommand(t *testing.T) {
+	type recordedCall struct {
+		machineID string
+		name      string
+		payload   any
+	}
+
+	var calls []recordedCall
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			calls = append(calls, recordedCall{
+				machineID: machineID,
+				name:      name,
+				payload:   payload,
+			})
+			switch name {
+			case "machine.agent.restart":
+				return protocol.CommandCompletedPayload{
+					CommandName: name,
+					Result: mustMarshalJSON(t, protocol.MachineAgentRestartCommandResult{
+						AgentID: "agent-01",
+					}),
+				}, nil
+			default:
+				t.Fatalf("unexpected command %q", name)
+				return protocol.CommandCompletedPayload{}, nil
+			}
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), sender, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodPost, "/machines/machine-01/agents/agent-01/restart", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("restart returned %d", rec.Code)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(calls))
+	}
+	if calls[0].machineID != "machine-01" || calls[0].name != "machine.agent.restart" {
+		t.Fatalf("unexpected restart call: %+v", calls[0])
+	}
+	restartPayload, ok := calls[0].payload.(protocol.MachineAgentRestartCommandPayload)
+	if !ok {
+		t.Fatalf("unexpected restart payload type: %T", calls[0].payload)
+	}
+	if restartPayload.AgentID != "agent-01" {
+		t.Fatalf("unexpected restart payload: %+v", restartPayload)
+	}
+
+	var body struct {
+		MachineID string `json:"machineId"`
+		AgentID   string `json:"agentId"`
+		Status    string `json:"status"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode restart body: %v", err)
+	}
+	if body.MachineID != "machine-01" || body.AgentID != "agent-01" || body.Status != "restarted" {
+		t.Fatalf("unexpected restart body: %+v", body)
+	}
+}
+
 func TestServerEnvironmentMutationEndpointsUseExpectedCommands(t *testing.T) {
 	idx := runtimeindex.NewStore()
 	idx.ReplaceSnapshot("machine-01", nil, []domain.EnvironmentResource{
