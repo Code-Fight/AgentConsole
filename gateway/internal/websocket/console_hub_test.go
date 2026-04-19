@@ -3,6 +3,8 @@ package websocket
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
 	"net/url"
 	"testing"
 	"time"
@@ -14,6 +16,51 @@ import (
 
 	cws "github.com/coder/websocket"
 )
+
+func TestConsoleHubAllowsCrossPortOriginForSameHost(t *testing.T) {
+	hub := NewConsoleHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	serverURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("parse server url: %v", err)
+	}
+	origin := fmt.Sprintf("http://%s:14173", serverURL.Hostname())
+
+	conn, _, err := cws.Dial(context.Background(), "ws"+server.URL[4:]+"/ws", &cws.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{origin},
+		},
+	})
+	if err != nil {
+		t.Fatalf("dial with cross-port origin failed: %v", err)
+	}
+	defer conn.Close(cws.StatusNormalClosure, "done")
+
+	waitForConsoleClientCount(t, hub, 1)
+}
+
+func TestConsoleHubRejectsCrossHostOrigin(t *testing.T) {
+	hub := NewConsoleHub()
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	_, resp, err := cws.Dial(context.Background(), "ws"+server.URL[4:]+"/ws", &cws.DialOptions{
+		HTTPHeader: http.Header{
+			"Origin": []string{"http://example.com:14173"},
+		},
+	})
+	if err == nil {
+		t.Fatal("expected dial to fail for cross-host origin")
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response for failed websocket handshake")
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unexpected status code: %d", resp.StatusCode)
+	}
+}
 
 func TestConsoleHubBroadcastsEventsToConnectedClients(t *testing.T) {
 	hub := NewConsoleHub()
