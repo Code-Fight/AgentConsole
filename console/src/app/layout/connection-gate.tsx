@@ -1,9 +1,9 @@
 import { useLocation, useNavigate } from "react-router-dom";
 import { ConnectionRequiredDialog } from "../../design-host/connection-required-dialog";
-import { useConsoleConnectionState } from "../../design-host/use-console-host";
+import { useGatewayConnectionState } from "../../features/settings/model/gateway-connection-store";
 
 export function ConnectionGate() {
-  const connection = useConsoleConnectionState();
+  const connection = useGatewayConnectionState();
   const navigate = useNavigate();
   const location = useLocation();
 

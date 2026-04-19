@@ -7,6 +7,7 @@ import {
 } from "react-router-dom";
 import App from "../../design-source/App";
 import { type AppPage, useConsoleHost } from "../../design-host/use-console-host";
+import { SettingsPage } from "../../features/settings/pages/settings-page";
 import { ThreadWorkspacePage } from "../../features/threads/pages/thread-workspace-page";
 import { ThreadsPage } from "../../features/threads/pages/threads-page";
 import { AppShell } from "../layout/app-shell";
@@ -72,7 +73,7 @@ const routes = [
       },
       {
         path: "settings/*",
-        element: <LegacyConsolePage />,
+        element: <SettingsPage />,
       },
       {
         path: "overview",

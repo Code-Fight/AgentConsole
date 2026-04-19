@@ -1,15 +1,25 @@
 import "@testing-library/jest-dom/vitest";
 import { render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, vi } from "vitest";
-import { clearGatewayConnectionCookies } from "../gateway/gateway-connection-store";
 import { resetConsolePreferencesStoreForTests } from "../gateway/use-console-preferences";
 import { DesignSourceAppRoot } from "../design-host/app-root";
+import {
+  clearGatewayConnectionCookies,
+  resetGatewayConnectionStoreForTests,
+} from "../features/settings/model/gateway-connection-store";
+import { resetConsolePreferencesStoreForTests as resetFeatureConsolePreferencesStoreForTests } from "../features/settings/hooks/use-console-preferences";
 import { AppProviders } from "./providers/index";
 import { createAppRouter } from "./router/index";
 
 beforeEach(() => {
   window.history.pushState({}, "", "/");
+  resetGatewayConnectionStoreForTests();
   resetConsolePreferencesStoreForTests();
+  resetFeatureConsolePreferencesStoreForTests();
+  Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+    value: vi.fn(),
+    writable: true,
+  });
 });
 
 afterEach(() => {
@@ -104,6 +114,16 @@ test("new app router keeps settings reachable when gateway cookies are missing",
   clearGatewayConnectionCookies();
 
   const router = createAppRouter({ initialEntries: ["/settings"] });
+  render(<AppProviders router={router} />);
+
+  expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
+  expect(screen.queryByText(/Gateway 连接未配置/)).not.toBeInTheDocument();
+});
+
+test("new app router keeps nested settings routes reachable when gateway cookies are missing", async () => {
+  clearGatewayConnectionCookies();
+
+  const router = createAppRouter({ initialEntries: ["/settings/advanced"] });
   render(<AppProviders router={router} />);
 
   expect((await screen.findAllByLabelText("Gateway URL")).length).toBeGreaterThan(0);
