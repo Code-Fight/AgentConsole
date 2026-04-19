@@ -72,13 +72,13 @@ test("/settings remains reachable while unconfigured", async () => {
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
-test("saving gateway connection persists cookies before remote settings fetches", async () => {
+test("save gateway connection stays disabled until the current draft passes connection test", async () => {
   clearGatewayConnectionCookies();
 
-  const cookieSnapshots: string[] = [];
+  const requestSnapshots: Array<{ path: string; cookie: string }> = [];
   const fetchSpy = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    cookieSnapshots.push(document.cookie);
     const path = getPath(input);
+    requestSnapshots.push({ path, cookie: document.cookie });
 
     if (path === "/capabilities") {
       return jsonResponse({
@@ -150,6 +150,8 @@ test("saving gateway connection persists cookies before remote settings fetches"
 
   const scope = await getMainScope();
   expect(fetchSpy).not.toHaveBeenCalled();
+  const saveButton = scope.getByRole("button", { name: "Save Gateway Connection" });
+  expect(saveButton).toBeDisabled();
 
   fireEvent.change(await scope.findByLabelText("Gateway URL"), {
     target: { value: "http://localhost:3100" },
@@ -157,14 +159,49 @@ test("saving gateway connection persists cookies before remote settings fetches"
   fireEvent.change(scope.getByLabelText("Gateway API Key"), {
     target: { value: "test-key" },
   });
-  fireEvent.click(scope.getByRole("button", { name: "Save Gateway Connection" }));
+  expect(saveButton).toBeDisabled();
+  expect(fetchSpy).not.toHaveBeenCalled();
+
+  fireEvent.click(scope.getByRole("button", { name: "Test Gateway Connection" }));
 
   await waitFor(() => {
-    expect(cookieSnapshots.length).toBeGreaterThan(0);
+    expect(
+      fetchSpy.mock.calls.some(([input]) => getPath(input as RequestInfo | URL) === "/capabilities"),
+    ).toBe(true);
   });
 
-  expect(cookieSnapshots.every((snapshot) => snapshot.includes("cag_gateway_url=http%3A%2F%2Flocalhost%3A3100"))).toBe(true);
-  expect(cookieSnapshots.every((snapshot) => snapshot.includes("cag_gateway_api_key=test-key"))).toBe(true);
+  expect(await scope.findByText("Gateway 连接测试成功。")).toBeInTheDocument();
+  expect(saveButton).toBeEnabled();
+
+  fireEvent.change(scope.getByLabelText("Gateway URL"), {
+    target: { value: "http://localhost:3200" },
+  });
+  expect(saveButton).toBeDisabled();
+
+  fireEvent.click(scope.getByRole("button", { name: "Test Gateway Connection" }));
+
+  await waitFor(() => {
+    expect(fetchSpy.mock.calls.filter(([input]) => getPath(input as RequestInfo | URL) === "/capabilities")).toHaveLength(2);
+  });
+
+  expect(saveButton).toBeEnabled();
+  fireEvent.click(saveButton);
+
+  await waitFor(() => {
+    expect(requestSnapshots.some(({ path }) => path === "/settings/agents")).toBe(true);
+  });
+
+  const savedFetchSnapshots = requestSnapshots.filter(({ path }) =>
+    path !== "/capabilities" ? true : false,
+  );
+  expect(
+    savedFetchSnapshots.every(({ cookie }) =>
+      cookie.includes("cag_gateway_url=http%3A%2F%2Flocalhost%3A3200"),
+    ),
+  ).toBe(true);
+  expect(
+    savedFetchSnapshots.every(({ cookie }) => cookie.includes("cag_gateway_api_key=test-key")),
+  ).toBe(true);
 });
 
 test("remote settings config load path still works for global default and machine override", async () => {

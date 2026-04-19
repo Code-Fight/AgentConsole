@@ -2216,9 +2216,9 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 	})
 
 	if strings.TrimSpace(apiKey) == "" && !failClosedOnBlankKey {
-		return mux
+		return withConsoleCORS(mux)
 	}
-	return requireConsoleAuth(apiKey, mux)
+	return withConsoleCORS(requireConsoleAuth(apiKey, mux))
 }
 
 func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
@@ -2245,6 +2245,55 @@ func requireConsoleAuth(apiKey string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		}
 	})
+}
+
+func withConsoleCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+			headers := w.Header()
+			headers.Set("Access-Control-Allow-Origin", origin)
+			headers.Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+			headers.Set("Access-Control-Max-Age", "600")
+			addVaryHeader(headers, "Origin")
+
+			requestHeaders := strings.TrimSpace(r.Header.Get("Access-Control-Request-Headers"))
+			if requestHeaders == "" {
+				requestHeaders = "Authorization, Content-Type, Accept"
+			} else {
+				addVaryHeader(headers, "Access-Control-Request-Headers")
+			}
+			headers.Set("Access-Control-Allow-Headers", requestHeaders)
+
+			if strings.TrimSpace(r.Header.Get("Access-Control-Request-Method")) != "" {
+				addVaryHeader(headers, "Access-Control-Request-Method")
+			}
+		}
+
+		if r.Method == http.MethodOptions &&
+			strings.TrimSpace(r.Header.Get("Origin")) != "" &&
+			strings.TrimSpace(r.Header.Get("Access-Control-Request-Method")) != "" {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func addVaryHeader(headers http.Header, value string) {
+	for _, existing := range headers.Values("Vary") {
+		for _, part := range strings.Split(existing, ",") {
+			if strings.EqualFold(strings.TrimSpace(part), value) {
+				return
+			}
+		}
+	}
+	headers.Add("Vary", value)
 }
 
 func requireConsoleAuthFunc(apiKey string, next http.HandlerFunc) http.HandlerFunc {

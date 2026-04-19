@@ -137,6 +137,48 @@ func TestServerProtectsConsoleAPIAndLeavesHealthOpen(t *testing.T) {
 	}
 }
 
+func TestServerAllowsCORSPreflightWithoutAuthentication(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "test-key")
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodOptions, "/capabilities", nil)
+	req.Header.Set("Origin", "http://localhost:14173")
+	req.Header.Set("Access-Control-Request-Method", http.MethodGet)
+	req.Header.Set("Access-Control-Request-Headers", "authorization")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("preflight returned %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:14173" {
+		t.Fatalf("allow origin = %q", got)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Methods"); got == "" {
+		t.Fatal("allow methods header missing")
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Headers"); got == "" {
+		t.Fatal("allow headers header missing")
+	}
+}
+
+func TestServerAddsCORSHeadersToUnauthorizedConsoleResponses(t *testing.T) {
+	t.Setenv("GATEWAY_API_KEY", "test-key")
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/capabilities", nil)
+	req.Header.Set("Origin", "http://localhost:14173")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/capabilities without authorization returned %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:14173" {
+		t.Fatalf("allow origin = %q", got)
+	}
+}
+
 func TestServerRejectsConsoleWebsocketWithBadAPIKey(t *testing.T) {
 	t.Setenv("GATEWAY_API_KEY", "test-key")
 	called := false
