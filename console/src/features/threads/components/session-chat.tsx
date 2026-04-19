@@ -295,7 +295,7 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
     unknown: "bg-zinc-500",
   }[machine.status];
 
-  const displayTitle = workspace.title || session.title;
+  const displayTitle = workspace.title || session.title || "线程工作区";
   const displayMachineName = workspace.machine?.name ?? machine.name;
   const canSend = workspace.canStartTurn && !workspace.isSubmitting;
 
