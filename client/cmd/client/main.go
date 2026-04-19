@@ -1211,6 +1211,23 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 			return err
 		}
 		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, session.machineName, supervisor), mgr, registry)
+	case "machine.agent.restart":
+		var payload protocol.MachineAgentRestartCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if supervisor == nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, "runtime supervisor unavailable", "")
+		}
+		if err := supervisor.RestartAgent(payload.AgentID); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+		if err := session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.MachineAgentRestartCommandResult{
+			AgentID: payload.AgentID,
+		}); err != nil {
+			return err
+		}
+		return sendLiveSnapshot(session, buildMachineSnapshot(session.machineID, session.machineName, supervisor), mgr, registry)
 	case "machine.agent.config.read":
 		var payload protocol.MachineAgentConfigReadCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {

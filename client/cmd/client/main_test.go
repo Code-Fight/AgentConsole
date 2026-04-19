@@ -804,6 +804,70 @@ func TestHandleCommandEnvelopeAppliesAgentConfig(t *testing.T) {
 	}
 }
 
+func TestHandleCommandEnvelopeRestartsMachineAgent(t *testing.T) {
+	registry := agentregistry.New()
+	startCount := 0
+	cleanupCount := 0
+	supervisor, err := manager.NewSupervisor(
+		context.Background(),
+		t.TempDir(),
+		registry,
+		map[domain.AgentType]agenttypes.RuntimeFactory{
+			domain.AgentTypeCodex: runtimeFactoryFunc(func(context.Context, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+				startCount++
+				runtime := &notifyingRuntime{}
+				return runtime, func() error {
+					cleanupCount++
+					return runtime.cleanup()
+				}, nil
+			}),
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	err = handleCommandEnvelope(session, mgr, registry, supervisor, protocol.Envelope{
+		Name:      "machine.agent.restart",
+		RequestID: "req-restart-1",
+		Payload:   []byte(`{"agentId":"agent-01"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if startCount < 2 {
+		t.Fatalf("expected restart to start runtime again, got %d", startCount)
+	}
+	if cleanupCount < 1 {
+		t.Fatalf("expected restart to cleanup prior runtime, got %d", cleanupCount)
+	}
+	if len(*sent) == 0 {
+		t.Fatal("expected command response envelope")
+	}
+	first := decodeEnvelope(t, (*sent)[0])
+	if first.Name != "command.completed" {
+		t.Fatalf("expected first envelope command.completed, got %+v", first)
+	}
+
+	var completed protocol.CommandCompletedPayload
+	if err := json.Unmarshal(first.Payload, &completed); err != nil {
+		t.Fatalf("decode command completed payload failed: %v", err)
+	}
+	if completed.CommandName != "machine.agent.restart" {
+		t.Fatalf("unexpected command name: %+v", completed)
+	}
+	var result protocol.MachineAgentRestartCommandResult
+	if err := json.Unmarshal(completed.Result, &result); err != nil {
+		t.Fatalf("decode restart result failed: %v", err)
+	}
+	if result.AgentID != "agent-01" {
+		t.Fatalf("unexpected restart result: %+v", result)
+	}
+}
+
 func TestBuildRuntimeUsesFakeOnlyWhenConfigured(t *testing.T) {
 	cfg := config.Config{MachineID: "machine-01", RuntimeMode: config.RuntimeModeFake}
 	calledFake := false
