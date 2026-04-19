@@ -141,3 +141,58 @@ func TestNewSupervisorRollsBackStartedAgentsWhenBootstrapFails(t *testing.T) {
 		t.Fatalf("expected registry rollback after bootstrap failure, got %v", names)
 	}
 }
+
+func TestSupervisorRestartAgentRestartsRunningAgent(t *testing.T) {
+	managedAgentsDir := t.TempDir()
+	startCount := 0
+	cleanupCount := 0
+	supervisor, err := NewSupervisor(context.Background(), managedAgentsDir, agentregistry.New(), map[domain.AgentType]agenttypes.RuntimeFactory{
+		domain.AgentTypeCodex: supervisorRuntimeFactory(func(context.Context, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+			startCount++
+			return noopRuntime{}, func() error {
+				cleanupCount++
+				return nil
+			}, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := supervisor.RestartAgent("agent-01"); err != nil {
+		t.Fatal(err)
+	}
+	if startCount < 2 {
+		t.Fatalf("expected restart to start runtime again, got %d", startCount)
+	}
+	if cleanupCount < 1 {
+		t.Fatalf("expected restart to cleanup prior runtime, got %d", cleanupCount)
+	}
+}
+
+func TestSupervisorRestartAgentStartsStoppedAgent(t *testing.T) {
+	managedAgentsDir := t.TempDir()
+	supervisor, err := NewSupervisor(context.Background(), managedAgentsDir, agentregistry.New(), map[domain.AgentType]agenttypes.RuntimeFactory{
+		domain.AgentTypeCodex: supervisorRuntimeFactory(func(context.Context, agenttypes.ManagedAgentSpec) (agenttypes.Runtime, func() error, error) {
+			return noopRuntime{}, func() error { return nil }, nil
+		}),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := supervisor.StopAll(); err != nil {
+		t.Fatal(err)
+	}
+	if err := supervisor.RestartAgent("agent-01"); err != nil {
+		t.Fatal(err)
+	}
+
+	agents := supervisor.AgentInstances()
+	if len(agents) != 1 {
+		t.Fatalf("expected one managed agent, got %d", len(agents))
+	}
+	if agents[0].Status != domain.AgentInstanceStatusRunning {
+		t.Fatalf("expected running status after restart, got %+v", agents[0])
+	}
+}

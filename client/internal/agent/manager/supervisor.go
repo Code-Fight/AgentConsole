@@ -230,6 +230,32 @@ func (s *Supervisor) DeleteAgent(agentID string) error {
 	return os.RemoveAll(layout.RootDir)
 }
 
+func (s *Supervisor) RestartAgent(agentID string) error {
+	agentID = strings.TrimSpace(agentID)
+	if err := codex.ValidateAgentID(agentID); err != nil {
+		return err
+	}
+
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+
+	record, ok := s.record(agentID)
+	if !ok {
+		return fmt.Errorf("agent %q is not installed", agentID)
+	}
+
+	s.mu.RLock()
+	_, running := s.cleanups[agentID]
+	s.mu.RUnlock()
+	if running {
+		if err := s.stopAgent(agentID); err != nil {
+			return err
+		}
+	}
+
+	return s.startAgent(record)
+}
+
 func (s *Supervisor) ReadConfig(agentID string) (domain.AgentConfigDocument, error) {
 	record, ok := s.record(agentID)
 	if !ok {
