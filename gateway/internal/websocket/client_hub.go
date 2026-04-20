@@ -33,6 +33,7 @@ type ClientHub struct {
 	approvalRequests  map[string]string
 	pendingCommands   map[string]pendingCommandWaiter
 	commandTimeout    time.Duration
+	clientReadLimit   int64
 	nextRequestID     atomic.Uint64
 }
 
@@ -83,6 +84,7 @@ func (e *MachineDisconnectedError) Error() string {
 }
 
 const defaultCommandTimeout = 30 * time.Second
+const defaultClientReadLimitBytes int64 = 2 * 1024 * 1024
 
 func NewClientHub() *ClientHub {
 	return NewClientHubWithStores(nil, nil)
@@ -104,6 +106,7 @@ func NewClientHubWithStores(reg *registry.Store, idx *runtimeindex.Store, router
 		approvalRequests:  map[string]string{},
 		pendingCommands:   map[string]pendingCommandWaiter{},
 		commandTimeout:    defaultCommandTimeout,
+		clientReadLimit:   defaultClientReadLimitBytes,
 	}
 }
 
@@ -161,6 +164,9 @@ func (h *ClientHub) Handler() http.Handler {
 		conn, err := cws.Accept(w, r, nil)
 		if err != nil {
 			return
+		}
+		if h.clientReadLimit > 0 {
+			conn.SetReadLimit(h.clientReadLimit)
 		}
 		defer conn.Close(cws.StatusNormalClosure, "done")
 

@@ -23,7 +23,23 @@ func TestSnapshotReturnsErrorWhenRuntimeMissing(t *testing.T) {
 
 func TestManagerRoutesThreadAndTurnOperationsToRuntime(t *testing.T) {
 	reg := agentregistry.New()
-	runtime := &stubRuntime{}
+	runtime := &stubRuntime{
+		threadRuntimeSettings: domain.ThreadRuntimeSettings{
+			ThreadID: "thread-01",
+			Preferences: domain.ThreadRuntimePreferences{
+				Model:          "gpt-5.4",
+				ApprovalPolicy: "on-request",
+				SandboxMode:    "workspace-write",
+			},
+			Options: domain.ThreadRuntimeOptions{
+				Models: []domain.ThreadRuntimeModelOption{
+					{ID: "gpt-5.4", DisplayName: "GPT-5.4", IsDefault: true},
+				},
+				ApprovalPolicies: []string{"on-request", "never"},
+				SandboxModes:     []string{"workspace-write", "danger-full-access"},
+			},
+		},
+	}
 	reg.Register("fake", runtime)
 	mgr := New(reg)
 
@@ -141,20 +157,48 @@ func TestManagerRoutesThreadAndTurnOperationsToRuntime(t *testing.T) {
 	if runtime.lastPluginID != "plugin-a" {
 		t.Fatalf("unexpected plugin uninstall target: %q", runtime.lastPluginID)
 	}
+
+	settings, err := mgr.ReadThreadRuntimeSettings("fake", "thread-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.ThreadID != "thread-01" || settings.Preferences.Model != "gpt-5.4" {
+		t.Fatalf("unexpected runtime settings read result: %+v", settings)
+	}
+
+	updated, err := mgr.UpdateThreadRuntimeSettings("fake", agenttypes.UpdateThreadRuntimeSettingsParams{
+		ThreadID: "thread-01",
+		Patch: domain.ThreadRuntimePreferencePatch{
+			Model:       ptrToString("gpt-5.2"),
+			SandboxMode: ptrToString("read-only"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Preferences.Model != "gpt-5.2" || updated.Preferences.SandboxMode != "read-only" {
+		t.Fatalf("unexpected runtime settings update result: %+v", updated)
+	}
+	if runtime.lastThreadRuntimeReadID != "thread-01" || runtime.lastThreadRuntimeUpdate.ThreadID != "thread-01" {
+		t.Fatalf("runtime settings routing did not hit runtime: read=%q update=%+v", runtime.lastThreadRuntimeReadID, runtime.lastThreadRuntimeUpdate)
+	}
 }
 
 type stubRuntime struct {
-	lastSkillNameOrPath string
-	lastSkillEnabled    bool
-	lastPluginID        string
-	lastMCPID           string
-	lastMCPConfig       map[string]any
-	lastMCPEnabledID    string
-	lastMCPEnabled      bool
-	lastRemovedMCPID    string
-	lastInstalledPlugin agenttypes.InstallPluginParams
-	lastPluginEnabledID string
-	lastPluginEnabled   bool
+	lastSkillNameOrPath     string
+	lastSkillEnabled        bool
+	lastPluginID            string
+	lastMCPID               string
+	lastMCPConfig           map[string]any
+	lastMCPEnabledID        string
+	lastMCPEnabled          bool
+	lastRemovedMCPID        string
+	lastInstalledPlugin     agenttypes.InstallPluginParams
+	lastPluginEnabledID     string
+	lastPluginEnabled       bool
+	threadRuntimeSettings   domain.ThreadRuntimeSettings
+	lastThreadRuntimeReadID string
+	lastThreadRuntimeUpdate agenttypes.UpdateThreadRuntimeSettingsParams
 }
 
 func (s *stubRuntime) ListThreads() ([]domain.Thread, error) {
@@ -266,4 +310,36 @@ func (s *stubRuntime) SetPluginEnabled(pluginID string, enabled bool) error {
 func (s *stubRuntime) UninstallPlugin(pluginID string) error {
 	s.lastPluginID = pluginID
 	return nil
+}
+
+func (s *stubRuntime) ReadThreadRuntimeSettings(threadID string) (domain.ThreadRuntimeSettings, error) {
+	s.lastThreadRuntimeReadID = threadID
+	settings := s.threadRuntimeSettings
+	if settings.ThreadID == "" {
+		settings.ThreadID = threadID
+	}
+	return settings, nil
+}
+
+func (s *stubRuntime) UpdateThreadRuntimeSettings(params agenttypes.UpdateThreadRuntimeSettingsParams) (domain.ThreadRuntimeSettings, error) {
+	s.lastThreadRuntimeUpdate = params
+	next := s.threadRuntimeSettings
+	if next.ThreadID == "" {
+		next.ThreadID = params.ThreadID
+	}
+	if params.Patch.Model != nil {
+		next.Preferences.Model = *params.Patch.Model
+	}
+	if params.Patch.ApprovalPolicy != nil {
+		next.Preferences.ApprovalPolicy = *params.Patch.ApprovalPolicy
+	}
+	if params.Patch.SandboxMode != nil {
+		next.Preferences.SandboxMode = *params.Patch.SandboxMode
+	}
+	s.threadRuntimeSettings = next
+	return next, nil
+}
+
+func ptrToString(value string) *string {
+	return &value
 }

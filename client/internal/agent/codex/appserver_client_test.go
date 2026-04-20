@@ -3,8 +3,10 @@ package codex
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	agenttypes "code-agent-gateway/client/internal/agent/types"
@@ -350,12 +352,11 @@ func TestClientListEnvironment(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(calls) != 5 ||
+			if len(calls) != 4 ||
 				calls[0] != "skills/list" ||
 				calls[1] != "mcpServerStatus/list" ||
 				calls[2] != "plugin/list" ||
-				calls[3] != "config/read" ||
-				calls[4] != "plugin/read" {
+				calls[3] != "config/read" {
 				t.Fatalf("unexpected calls: %#v", calls)
 			}
 			if len(environment) != 3 {
@@ -370,7 +371,12 @@ func TestClientListEnvironment(t *testing.T) {
 			if environment[1].ResourceID != "github" || environment[1].Kind != domain.EnvironmentKindMCP {
 				t.Fatalf("unexpected mcp environment: %+v", environment[1])
 			}
-			if environment[1].Details["command"] != "npx" {
+			configValue, ok := environment[1].Details["config"]
+			if !ok {
+				t.Fatalf("expected mcp config details, got %+v", environment[1])
+			}
+			configMap, ok := configValue.(map[string]any)
+			if !ok || configMap["command"] != "npx" {
 				t.Fatalf("expected mcp config details, got %+v", environment[1])
 			}
 			if environment[2].ResourceID != "plugin-a" || environment[2].Kind != domain.EnvironmentKindPlugin {
@@ -379,10 +385,102 @@ func TestClientListEnvironment(t *testing.T) {
 			if environment[2].Details["marketplacePath"] != "/tmp/codex/marketplace" {
 				t.Fatalf("expected plugin marketplace details, got %+v", environment[2])
 			}
-			if environment[2].Details["description"] != "Plugin A description" {
-				t.Fatalf("expected plugin description details, got %+v", environment[2])
+			if _, ok := environment[2].Details["description"]; ok {
+				t.Fatalf("expected compact plugin details, got %+v", environment[2])
 			}
 		})
+	}
+}
+
+func TestClientListEnvironmentUsesCompactDetailsWithoutPluginRead(t *testing.T) {
+	var calls []string
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			calls = append(calls, method)
+			switch method {
+			case "skills/list":
+				response := out.(*skillsListResponse)
+				response.Data = nil
+			case "mcpServerStatus/list":
+				response := out.(*mcpServerStatusListResponse)
+				response.Data = []mcpServerStatusRecord{
+					{Name: "github", Enabled: true},
+				}
+			case "plugin/list":
+				response := out.(*pluginListResponse)
+				response.Marketplaces = []pluginMarketplaceEntry{
+					{
+						Name: "local",
+						Path: "/tmp/codex/marketplace",
+						Plugins: []pluginSummary{
+							{
+								ID:        "plugin-a",
+								Name:      "plugin-a",
+								Enabled:   true,
+								Installed: true,
+							},
+						},
+					},
+				}
+			case "config/read":
+				response := out.(*configReadResponse)
+				response.Config = map[string]any{
+					"mcp_servers": map[string]any{
+						"github": map[string]any{
+							"command": "npx",
+							"args":    []any{"-y", "@modelcontextprotocol/server-github"},
+						},
+					},
+				}
+			default:
+				t.Fatalf("unexpected method: %s", method)
+			}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	environment, err := client.ListEnvironment()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(calls) != 4 ||
+		calls[0] != "skills/list" ||
+		calls[1] != "mcpServerStatus/list" ||
+		calls[2] != "plugin/list" ||
+		calls[3] != "config/read" {
+		t.Fatalf("unexpected calls: %#v", calls)
+	}
+	if len(environment) != 2 {
+		t.Fatalf("unexpected environment count: %d", len(environment))
+	}
+
+	mcp := environment[0]
+	if mcp.Kind != domain.EnvironmentKindMCP || mcp.ResourceID != "github" {
+		t.Fatalf("unexpected mcp resource: %+v", mcp)
+	}
+	if _, ok := mcp.Details["command"]; ok {
+		t.Fatalf("mcp details should not duplicate top-level config keys: %+v", mcp.Details)
+	}
+	configValue, ok := mcp.Details["config"]
+	if !ok {
+		t.Fatalf("expected compact mcp config details: %+v", mcp.Details)
+	}
+	configMap, ok := configValue.(map[string]any)
+	if !ok || configMap["command"] != "npx" {
+		t.Fatalf("unexpected mcp config details: %+v", mcp.Details)
+	}
+
+	plugin := environment[1]
+	if plugin.Kind != domain.EnvironmentKindPlugin || plugin.ResourceID != "plugin-a" {
+		t.Fatalf("unexpected plugin resource: %+v", plugin)
+	}
+	if plugin.Details["marketplacePath"] != "/tmp/codex/marketplace" {
+		t.Fatalf("expected plugin marketplace details, got %+v", plugin.Details)
+	}
+	if _, ok := plugin.Details["description"]; ok {
+		t.Fatalf("plugin details should stay compact and omit plugin/read description: %+v", plugin.Details)
 	}
 }
 
@@ -1287,6 +1385,156 @@ func TestClientStartTurnUsesExpectedMethodAndPayload(t *testing.T) {
 	}
 }
 
+func TestClientStartTurnAppliesRuntimeOverridesOnlyWhenChanged(t *testing.T) {
+	var turnPayloads []map[string]any
+
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			switch method {
+			case "thread/start":
+				response := out.(*threadStartResponse)
+				response.Thread = threadRecord{
+					ID:     "thread-1",
+					Name:   "Investigate flaky test",
+					Status: threadStatusRecord{Type: domain.ThreadStatusIdle},
+				}
+				response.Model = "gpt-5.4"
+				response.ApprovalPolicy = "on-request"
+				response.Sandbox = map[string]any{"type": "workspaceWrite"}
+				return nil
+			case "model/list":
+				response := out.(*modelListResponse)
+				response.Data = []modelRecord{
+					{ID: "gpt-5.4", Model: "gpt-5.4", DisplayName: "GPT-5.4", IsDefault: true},
+					{ID: "gpt-5.2", Model: "gpt-5.2", DisplayName: "GPT-5.2"},
+				}
+				return nil
+			case "configRequirements/read":
+				response := out.(*configRequirementsReadResponse)
+				response.Requirements = &configRequirementsRecord{
+					AllowedApprovalPolicies: []any{"on-request", "never"},
+					AllowedSandboxModes:     []string{"workspace-write", "read-only", "danger-full-access"},
+				}
+				return nil
+			case "turn/start":
+				response := out.(*turnStartResponse)
+				response.Turn = turnRecord{ID: fmt.Sprintf("turn-%d", len(turnPayloads)+1)}
+
+				payloadMap, ok := payload.(map[string]any)
+				if !ok {
+					t.Fatalf("unexpected turn/start payload type: %T", payload)
+				}
+				turnPayloads = append(turnPayloads, payloadMap)
+				return nil
+			default:
+				t.Fatalf("unexpected method: %s", method)
+				return nil
+			}
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	if _, err := client.CreateThread(agenttypes.CreateThreadParams{Title: "Investigate flaky test"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.UpdateThreadRuntimeSettings(agenttypes.UpdateThreadRuntimeSettingsParams{
+		ThreadID: "thread-1",
+		Patch: domain.ThreadRuntimePreferencePatch{
+			Model:       ptrToTestString("gpt-5.2"),
+			SandboxMode: ptrToTestString("read-only"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := client.StartTurn(agenttypes.StartTurnParams{
+		ThreadID: "thread-1",
+		Input:    "run tests",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.StartTurn(agenttypes.StartTurnParams{
+		ThreadID: "thread-1",
+		Input:    "run tests again",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(turnPayloads) != 2 {
+		t.Fatalf("expected 2 turn/start calls, got %d", len(turnPayloads))
+	}
+
+	if got := strings.TrimSpace(stringFromAny(turnPayloads[0]["model"])); got != "gpt-5.2" {
+		t.Fatalf("expected first turn to include model override, payload=%#v", turnPayloads[0])
+	}
+	if got := strings.TrimSpace(stringFromAny(turnPayloads[0]["approvalPolicy"])); got != "on-request" {
+		t.Fatalf("expected first turn to include approval policy override, payload=%#v", turnPayloads[0])
+	}
+	firstSandbox, ok := turnPayloads[0]["sandboxPolicy"].(map[string]any)
+	if !ok || strings.TrimSpace(stringFromAny(firstSandbox["type"])) != "readOnly" {
+		t.Fatalf("expected first turn to include readOnly sandbox policy, payload=%#v", turnPayloads[0])
+	}
+
+	if _, ok := turnPayloads[1]["model"]; ok {
+		t.Fatalf("expected second turn to omit model override, payload=%#v", turnPayloads[1])
+	}
+	if _, ok := turnPayloads[1]["approvalPolicy"]; ok {
+		t.Fatalf("expected second turn to omit approval policy override, payload=%#v", turnPayloads[1])
+	}
+	if _, ok := turnPayloads[1]["sandboxPolicy"]; ok {
+		t.Fatalf("expected second turn to omit sandbox policy override, payload=%#v", turnPayloads[1])
+	}
+}
+
+func TestClientThreadRuntimeSettingsUsesModelListAndRequirements(t *testing.T) {
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			switch method {
+			case "model/list":
+				response := out.(*modelListResponse)
+				response.Data = []modelRecord{
+					{ID: "gpt-5.4", Model: "gpt-5.4", DisplayName: "GPT-5.4", IsDefault: true},
+					{ID: "gpt-5.2", Model: "gpt-5.2", DisplayName: "GPT-5.2"},
+				}
+				return nil
+			case "configRequirements/read":
+				response := out.(*configRequirementsReadResponse)
+				response.Requirements = &configRequirementsRecord{
+					AllowedApprovalPolicies: []any{"on-request", "never"},
+					AllowedSandboxModes:     []string{"workspace-write", "danger-full-access"},
+				}
+				return nil
+			case "config/read":
+				response := out.(*configReadResponse)
+				response.Config = map[string]any{
+					"model":           "gpt-5.4",
+					"approval_policy": "on-request",
+					"sandbox_mode":    "workspace-write",
+				}
+				return nil
+			default:
+				t.Fatalf("unexpected method: %s", method)
+				return nil
+			}
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	settings, err := client.ReadThreadRuntimeSettings("thread-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.Preferences.Model != "gpt-5.4" || settings.Preferences.SandboxMode != "workspace-write" {
+		t.Fatalf("unexpected runtime settings defaults: %+v", settings.Preferences)
+	}
+	if len(settings.Options.Models) != 2 {
+		t.Fatalf("expected 2 model options, got %+v", settings.Options.Models)
+	}
+	if len(settings.Options.SandboxModes) != 2 || settings.Options.SandboxModes[0] != "workspace-write" {
+		t.Fatalf("unexpected sandbox options: %+v", settings.Options.SandboxModes)
+	}
+}
+
 func TestAppServerClientTranslatesNotificationsIntoTurnEvents(t *testing.T) {
 	runner := &fakeRunner{}
 	client := NewAppServerClient(runner)
@@ -2082,4 +2330,8 @@ func TestClientInterruptTurnUsesExpectedMethodAndPayload(t *testing.T) {
 			}
 		})
 	}
+}
+
+func ptrToTestString(value string) *string {
+	return &value
 }

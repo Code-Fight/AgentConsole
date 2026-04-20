@@ -229,6 +229,34 @@ func (m *Manager) ApplyConfig(runtimeName string, document domain.AgentConfigDoc
 	return configManager.ApplyConfig(document)
 }
 
+func (m *Manager) ReadThreadRuntimeSettings(runtimeName string, threadID string) (domain.ThreadRuntimeSettings, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return domain.ThreadRuntimeSettings{}, err
+	}
+
+	manager, ok := runtime.(types.RuntimeThreadRuntimeManager)
+	if !ok {
+		return domain.ThreadRuntimeSettings{}, fmt.Errorf("runtime %q does not support thread runtime settings", runtimeName)
+	}
+
+	return manager.ReadThreadRuntimeSettings(threadID)
+}
+
+func (m *Manager) UpdateThreadRuntimeSettings(runtimeName string, params types.UpdateThreadRuntimeSettingsParams) (domain.ThreadRuntimeSettings, error) {
+	runtime, err := m.resolveRuntime(runtimeName)
+	if err != nil {
+		return domain.ThreadRuntimeSettings{}, err
+	}
+
+	manager, ok := runtime.(types.RuntimeThreadRuntimeManager)
+	if !ok {
+		return domain.ThreadRuntimeSettings{}, fmt.Errorf("runtime %q does not support thread runtime settings", runtimeName)
+	}
+
+	return manager.UpdateThreadRuntimeSettings(params)
+}
+
 func (m *Manager) UninstallPlugin(runtimeName string, pluginID string) error {
 	runtime, err := m.resolveRuntime(runtimeName)
 	if err != nil {

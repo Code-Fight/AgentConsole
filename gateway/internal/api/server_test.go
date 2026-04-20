@@ -691,6 +691,142 @@ func TestServerReadsThreadFromResolvedMachine(t *testing.T) {
 	}
 }
 
+func TestServerReadsThreadRuntimeSettingsFromResolvedMachine(t *testing.T) {
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01", "agent-01")
+
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("machineID = %q", machineID)
+			}
+			if name != "thread.runtime.read" {
+				t.Fatalf("name = %q", name)
+			}
+
+			commandPayload, ok := payload.(protocol.ThreadRuntimeReadCommandPayload)
+			if !ok {
+				t.Fatalf("payload type = %T", payload)
+			}
+			if commandPayload.ThreadID != "thread-01" || commandPayload.AgentID != "agent-01" {
+				t.Fatalf("unexpected payload: %+v", commandPayload)
+			}
+
+			return protocol.CommandCompletedPayload{
+				CommandName: "thread.runtime.read",
+				Result: mustMarshalJSON(t, protocol.ThreadRuntimeReadCommandResult{
+					Settings: domain.ThreadRuntimeSettings{
+						ThreadID: "thread-01",
+						Preferences: domain.ThreadRuntimePreferences{
+							Model:          "gpt-5.4",
+							ApprovalPolicy: "on-request",
+							SandboxMode:    "workspace-write",
+						},
+						Options: domain.ThreadRuntimeOptions{
+							Models: []domain.ThreadRuntimeModelOption{
+								{ID: "gpt-5.4", DisplayName: "GPT-5.4", IsDefault: true},
+							},
+							ApprovalPolicies: []string{"on-request", "never"},
+							SandboxModes:     []string{"workspace-write", "danger-full-access"},
+						},
+					},
+				}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01/runtime", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Settings domain.ThreadRuntimeSettings `json:"settings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Settings.ThreadID != "thread-01" || body.Settings.Preferences.Model != "gpt-5.4" {
+		t.Fatalf("unexpected runtime settings: %+v", body.Settings)
+	}
+}
+
+func TestServerUpdatesThreadRuntimeSettingsFromResolvedMachine(t *testing.T) {
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01", "agent-01")
+
+	sender := &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("machineID = %q", machineID)
+			}
+			if name != "thread.runtime.update" {
+				t.Fatalf("name = %q", name)
+			}
+
+			commandPayload, ok := payload.(protocol.ThreadRuntimeUpdateCommandPayload)
+			if !ok {
+				t.Fatalf("payload type = %T", payload)
+			}
+			if commandPayload.ThreadID != "thread-01" || commandPayload.AgentID != "agent-01" {
+				t.Fatalf("unexpected payload: %+v", commandPayload)
+			}
+			if commandPayload.Model == nil || *commandPayload.Model != "gpt-5.2" {
+				t.Fatalf("unexpected model patch: %+v", commandPayload)
+			}
+			if commandPayload.SandboxMode == nil || *commandPayload.SandboxMode != "read-only" {
+				t.Fatalf("unexpected sandbox patch: %+v", commandPayload)
+			}
+
+			return protocol.CommandCompletedPayload{
+				CommandName: "thread.runtime.update",
+				Result: mustMarshalJSON(t, protocol.ThreadRuntimeUpdateCommandResult{
+					Settings: domain.ThreadRuntimeSettings{
+						ThreadID: "thread-01",
+						Preferences: domain.ThreadRuntimePreferences{
+							Model:          "gpt-5.2",
+							ApprovalPolicy: "on-request",
+							SandboxMode:    "read-only",
+						},
+						Options: domain.ThreadRuntimeOptions{
+							Models: []domain.ThreadRuntimeModelOption{
+								{ID: "gpt-5.2", DisplayName: "GPT-5.2"},
+								{ID: "gpt-5.4", DisplayName: "GPT-5.4", IsDefault: true},
+							},
+							ApprovalPolicies: []string{"on-request", "never"},
+							SandboxModes:     []string{"read-only", "workspace-write", "danger-full-access"},
+						},
+					},
+				}),
+			}, nil
+		},
+	}
+
+	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), router, sender, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodPatch, "/threads/thread-01/runtime", bytes.NewBufferString(`{"model":"gpt-5.2","sandboxMode":"read-only"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Settings domain.ThreadRuntimeSettings `json:"settings"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Settings.Preferences.Model != "gpt-5.2" || body.Settings.Preferences.SandboxMode != "read-only" {
+		t.Fatalf("unexpected runtime settings: %+v", body.Settings)
+	}
+}
+
 func TestServerThreadAndTurnControlEndpointsUseExpectedCommands(t *testing.T) {
 	router := routing.NewRouter()
 	router.TrackThread("thread-01", "machine-01", "agent-01")
@@ -1820,7 +1956,7 @@ func TestServerThreadDetailIncludesHistoricalMessagesFromLiveRead(t *testing.T) 
 		ThreadID:  "thread-01",
 		MachineID: "machine-01",
 		AgentID:   "agent-01",
-		Status:    domain.ThreadStatusIdle,
+		Status:    domain.ThreadStatusActive,
 		Title:     "Investigate flaky test",
 	}
 	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
@@ -1835,6 +1971,76 @@ func TestServerThreadDetailIncludesHistoricalMessagesFromLiveRead(t *testing.T) 
 			}
 			return protocol.CommandCompletedPayload{
 				Result: mustMarshalJSON(t, protocol.ThreadReadCommandResult{
+					Thread: domain.Thread{
+						ThreadID:  "thread-01",
+						MachineID: "machine-01",
+						AgentID:   "agent-01",
+						Status:    domain.ThreadStatusIdle,
+						Title:     "Investigate flaky test",
+						Messages: []domain.ThreadMessage{
+							{ID: "user-1", Kind: domain.ThreadMessageKindUser, TurnID: "turn-1", Text: "hello"},
+							{ID: "agent-1", Kind: domain.ThreadMessageKindAgent, TurnID: "turn-1", Text: "hi there"},
+						},
+					},
+				}),
+			}, nil
+		},
+	}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Thread   domain.Thread          `json:"thread"`
+		Messages []domain.ThreadMessage `json:"messages"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Thread.ThreadID != "thread-01" {
+		t.Fatalf("unexpected thread: %+v", body.Thread)
+	}
+	if len(body.Messages) != 2 || body.Messages[0].Text != "hello" || body.Messages[1].Text != "hi there" {
+		t.Fatalf("unexpected historical messages: %+v", body.Messages)
+	}
+}
+
+func TestServerThreadDetailLoadsHistoricalMessagesFromResumeWhenSnapshotHasNoMessages(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:     "machine-01",
+		Name:   "machine-01",
+		Status: domain.MachineStatusOnline,
+	})
+
+	idx := runtimeindex.NewStore()
+	thread := domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		AgentID:   "agent-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Investigate flaky test",
+	}
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
+
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01", "agent-01")
+
+	handler := NewServer(reg, idx, router, &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("unexpected machine route: %s", machineID)
+			}
+			if name != "thread.resume" {
+				t.Fatalf("expected thread.resume, got %s", name)
+			}
+			return protocol.CommandCompletedPayload{
+				Result: mustMarshalJSON(t, protocol.ThreadResumeCommandResult{
 					Thread: domain.Thread{
 						ThreadID:  "thread-01",
 						MachineID: "machine-01",
@@ -2112,19 +2318,24 @@ func TestServerThreadDetailReturnsLiveReadFailureForOnlineMachine(t *testing.T) 
 			ThreadID:  "thread-01",
 			MachineID: "machine-01",
 			AgentID:   "agent-01",
-			Status:    domain.ThreadStatusIdle,
+			Status:    domain.ThreadStatusActive,
 			Title:     "stale snapshot",
 		},
 	}, nil)
 
 	router := routing.NewRouter()
 	router.TrackThread("thread-01", "machine-01", "agent-01")
+	commandCalls := map[string]int{}
 
 	handler := NewServer(reg, idx, router, &fakeCommandSender{
 		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
-			if machineID != "machine-01" || name != "thread.read" {
+			if machineID != "machine-01" {
 				t.Fatalf("unexpected live read route %q %q", machineID, name)
 			}
+			if name != "thread.read" && name != "thread.resume" {
+				t.Fatalf("unexpected live read command %q", name)
+			}
+			commandCalls[name]++
 			return protocol.CommandCompletedPayload{}, context.DeadlineExceeded
 		},
 	}, http.NotFoundHandler(), http.NotFoundHandler())
@@ -2133,8 +2344,65 @@ func TestServerThreadDetailReturnsLiveReadFailureForOnlineMachine(t *testing.T) 
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusBadGateway {
-		t.Fatalf("expected 502, got %d with %s", rec.Code, rec.Body.String())
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Thread domain.Thread `json:"thread"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if body.Thread.ThreadID != "thread-01" || body.Thread.Title != "stale snapshot" {
+		t.Fatalf("expected thread detail fallback to stale snapshot, got %+v", body.Thread)
+	}
+	if commandCalls["thread.read"] == 0 {
+		t.Fatalf("expected thread.read to be attempted, calls=%+v", commandCalls)
+	}
+	if commandCalls["thread.resume"] == 0 {
+		t.Fatalf("expected thread.resume fallback to be attempted, calls=%+v", commandCalls)
+	}
+}
+
+func TestServerThreadDetailReturnsBadGatewayWhenNoSnapshotAndLiveReadFails(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:     "machine-01",
+		Name:   "machine-01",
+		Status: domain.MachineStatusOnline,
+	})
+
+	idx := runtimeindex.NewStore()
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01", "agent-01")
+	commandCalls := map[string]int{}
+
+	handler := NewServer(reg, idx, router, &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("unexpected live read route %q %q", machineID, name)
+			}
+			if name != "thread.read" && name != "thread.resume" {
+				t.Fatalf("unexpected live read command %q", name)
+			}
+			commandCalls[name]++
+			return protocol.CommandCompletedPayload{}, context.DeadlineExceeded
+		},
+	}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodGet, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d with %s", rec.Code, rec.Body.String())
+	}
+	if commandCalls["thread.read"] == 0 {
+		t.Fatalf("expected thread.read to be attempted, calls=%+v", commandCalls)
+	}
+	if commandCalls["thread.resume"] == 0 {
+		t.Fatalf("expected thread.resume fallback to be attempted, calls=%+v", commandCalls)
 	}
 }
 

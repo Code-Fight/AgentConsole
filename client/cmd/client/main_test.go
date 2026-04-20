@@ -167,6 +167,115 @@ func TestHandleCommandEnvelopeRejectsFailedTurnStartWithoutDisconnecting(t *test
 	}
 }
 
+func TestHandleCommandEnvelopeThreadRuntimeRead(t *testing.T) {
+	runtime := &notifyingRuntime{
+		threadRuntimeSettings: domain.ThreadRuntimeSettings{
+			ThreadID: "thread-01",
+			Preferences: domain.ThreadRuntimePreferences{
+				Model:          "gpt-5.4",
+				ApprovalPolicy: "on-request",
+				SandboxMode:    "workspace-write",
+			},
+			Options: domain.ThreadRuntimeOptions{
+				Models: []domain.ThreadRuntimeModelOption{
+					{ID: "gpt-5.4", DisplayName: "GPT-5.4", IsDefault: true},
+				},
+				ApprovalPolicies: []string{"on-request", "never"},
+				SandboxModes:     []string{"workspace-write", "danger-full-access"},
+			},
+		},
+	}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
+		Name:      "thread.runtime.read",
+		RequestID: "req-runtime-read",
+		Payload:   []byte(`{"threadId":"thread-01"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*sent) != 1 {
+		t.Fatalf("expected 1 frame, got %d", len(*sent))
+	}
+
+	var completed protocol.CommandCompletedPayload
+	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[0]).Payload, &completed); err != nil {
+		t.Fatalf("decode command completed payload failed: %v", err)
+	}
+	if completed.CommandName != "thread.runtime.read" {
+		t.Fatalf("unexpected command ack: %+v", completed)
+	}
+
+	var result protocol.ThreadRuntimeReadCommandResult
+	if err := transport.Decode(completed.Result, &result); err != nil {
+		t.Fatalf("decode runtime read result failed: %v", err)
+	}
+	if result.Settings.ThreadID != "thread-01" || result.Settings.Preferences.Model != "gpt-5.4" {
+		t.Fatalf("unexpected runtime read result: %+v", result.Settings)
+	}
+	if runtime.lastThreadRuntimeReadID != "thread-01" {
+		t.Fatalf("expected runtime read call for thread-01, got %q", runtime.lastThreadRuntimeReadID)
+	}
+}
+
+func TestHandleCommandEnvelopeThreadRuntimeUpdate(t *testing.T) {
+	runtime := &notifyingRuntime{
+		threadRuntimeSettings: domain.ThreadRuntimeSettings{
+			ThreadID: "thread-01",
+			Preferences: domain.ThreadRuntimePreferences{
+				Model:          "gpt-5.4",
+				ApprovalPolicy: "on-request",
+				SandboxMode:    "workspace-write",
+			},
+		},
+	}
+	registry := agentregistry.New()
+	registry.Register("codex", runtime)
+	mgr := manager.New(registry)
+	session, sent := newRecordingSession()
+
+	err := handleCommandEnvelope(session, mgr, registry, nil, protocol.Envelope{
+		Name:      "thread.runtime.update",
+		RequestID: "req-runtime-update",
+		Payload:   []byte(`{"threadId":"thread-01","model":"gpt-5.2","sandboxMode":"read-only"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(*sent) != 1 {
+		t.Fatalf("expected 1 frame, got %d", len(*sent))
+	}
+
+	var completed protocol.CommandCompletedPayload
+	if err := json.Unmarshal(decodeEnvelope(t, (*sent)[0]).Payload, &completed); err != nil {
+		t.Fatalf("decode command completed payload failed: %v", err)
+	}
+	if completed.CommandName != "thread.runtime.update" {
+		t.Fatalf("unexpected command ack: %+v", completed)
+	}
+
+	var result protocol.ThreadRuntimeUpdateCommandResult
+	if err := transport.Decode(completed.Result, &result); err != nil {
+		t.Fatalf("decode runtime update result failed: %v", err)
+	}
+	if result.Settings.Preferences.Model != "gpt-5.2" || result.Settings.Preferences.SandboxMode != "read-only" {
+		t.Fatalf("unexpected runtime update result: %+v", result.Settings)
+	}
+	if runtime.lastThreadRuntimeUpdate.ThreadID != "thread-01" {
+		t.Fatalf("expected runtime update thread-01, got %+v", runtime.lastThreadRuntimeUpdate)
+	}
+	if runtime.lastThreadRuntimeUpdate.Patch.Model == nil || *runtime.lastThreadRuntimeUpdate.Patch.Model != "gpt-5.2" {
+		t.Fatalf("expected model patch in runtime update, got %+v", runtime.lastThreadRuntimeUpdate.Patch)
+	}
+	if runtime.lastThreadRuntimeUpdate.Patch.SandboxMode == nil || *runtime.lastThreadRuntimeUpdate.Patch.SandboxMode != "read-only" {
+		t.Fatalf("expected sandbox patch in runtime update, got %+v", runtime.lastThreadRuntimeUpdate.Patch)
+	}
+}
+
 func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) {
 	runtime := &notifyingRuntime{
 		startTurnResult: agenttypes.StartTurnResult{
@@ -1083,6 +1192,9 @@ type notifyingRuntime struct {
 		Source   string
 		FilePath string
 	}
+	threadRuntimeSettings   domain.ThreadRuntimeSettings
+	lastThreadRuntimeReadID string
+	lastThreadRuntimeUpdate agenttypes.UpdateThreadRuntimeSettingsParams
 }
 
 func (r *notifyingRuntime) ListThreads() ([]domain.Thread, error) {
@@ -1194,6 +1306,34 @@ func (r *notifyingRuntime) ApplyConfig(document domain.AgentConfigDocument) (age
 		AgentType: document.AgentType,
 		FilePath:  "/tmp/codex/config.toml",
 	}, nil
+}
+
+func (r *notifyingRuntime) ReadThreadRuntimeSettings(threadID string) (domain.ThreadRuntimeSettings, error) {
+	r.lastThreadRuntimeReadID = threadID
+	settings := r.threadRuntimeSettings
+	if settings.ThreadID == "" {
+		settings.ThreadID = threadID
+	}
+	return settings, nil
+}
+
+func (r *notifyingRuntime) UpdateThreadRuntimeSettings(params agenttypes.UpdateThreadRuntimeSettingsParams) (domain.ThreadRuntimeSettings, error) {
+	r.lastThreadRuntimeUpdate = params
+	settings := r.threadRuntimeSettings
+	if settings.ThreadID == "" {
+		settings.ThreadID = params.ThreadID
+	}
+	if params.Patch.Model != nil {
+		settings.Preferences.Model = *params.Patch.Model
+	}
+	if params.Patch.ApprovalPolicy != nil {
+		settings.Preferences.ApprovalPolicy = *params.Patch.ApprovalPolicy
+	}
+	if params.Patch.SandboxMode != nil {
+		settings.Preferences.SandboxMode = *params.Patch.SandboxMode
+	}
+	r.threadRuntimeSettings = settings
+	return settings, nil
 }
 
 func (r *notifyingRuntime) cleanup() error {

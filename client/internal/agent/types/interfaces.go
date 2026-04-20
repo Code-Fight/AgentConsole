@@ -25,6 +25,11 @@ type StartTurnParams struct {
 	Input    string
 }
 
+type UpdateThreadRuntimeSettingsParams struct {
+	ThreadID string
+	Patch    domain.ThreadRuntimePreferencePatch
+}
+
 type SteerTurnParams struct {
 	ThreadID string
 	TurnID   string
@@ -123,6 +128,11 @@ type RuntimePluginManager interface {
 
 type RuntimeConfigManager interface {
 	ApplyConfig(document domain.AgentConfigDocument) (ApplyConfigResult, error)
+}
+
+type RuntimeThreadRuntimeManager interface {
+	ReadThreadRuntimeSettings(threadID string) (domain.ThreadRuntimeSettings, error)
+	UpdateThreadRuntimeSettings(params UpdateThreadRuntimeSettingsParams) (domain.ThreadRuntimeSettings, error)
 }
 
 type StartTurnResult struct {

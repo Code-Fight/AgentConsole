@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"code-agent-gateway/common/domain"
 )
@@ -15,18 +16,62 @@ type FileStore struct {
 }
 
 func NewFileStore(path string, agents []domain.AgentDescriptor) (*FileStore, error) {
-	if path == "" {
+	trimmedPath := strings.TrimSpace(path)
+	if trimmedPath == "" {
 		return nil, fmt.Errorf("settings file path is required")
+	}
+	resolvedPath, err := resolveWritableStorePath(trimmedPath)
+	if err != nil {
+		return nil, err
 	}
 
 	store := &FileStore{
 		MemoryStore: NewMemoryStore(agents),
-		path:        path,
+		path:        resolvedPath,
 	}
 	if err := store.loadFromFile(); err != nil {
 		return nil, err
 	}
 	return store, nil
+}
+
+func resolveWritableStorePath(path string) (string, error) {
+	cleaned := filepath.Clean(path)
+	if filepath.IsAbs(cleaned) {
+		return cleaned, nil
+	}
+
+	if err := ensureDirWritable(filepath.Dir(cleaned)); err == nil {
+		return cleaned, nil
+	}
+
+	fallback := filepath.Join(os.TempDir(), "code-agent-gateway", cleaned)
+	if err := ensureDirWritable(filepath.Dir(fallback)); err != nil {
+		return "", err
+	}
+	return fallback, nil
+}
+
+func ensureDirWritable(dir string) error {
+	if strings.TrimSpace(dir) == "" {
+		return fmt.Errorf("directory is required")
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	checkFile, err := os.CreateTemp(dir, ".write-check-")
+	if err != nil {
+		return err
+	}
+	checkPath := checkFile.Name()
+	if err := checkFile.Close(); err != nil {
+		_ = os.Remove(checkPath)
+		return err
+	}
+	if err := os.Remove(checkPath); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (s *FileStore) PutGlobal(agentType domain.AgentType, document domain.AgentConfigDocument) error {

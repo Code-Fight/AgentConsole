@@ -46,7 +46,10 @@ type threadListResponse struct {
 }
 
 type threadStartResponse struct {
-	Thread threadRecord `json:"thread"`
+	Thread         threadRecord `json:"thread"`
+	Model          string       `json:"model"`
+	ApprovalPolicy any          `json:"approvalPolicy"`
+	Sandbox        any          `json:"sandbox"`
 }
 
 type threadReadResponse struct {
@@ -54,7 +57,10 @@ type threadReadResponse struct {
 }
 
 type threadResumeResponse struct {
-	Thread threadRecord `json:"thread"`
+	Thread         threadRecord `json:"thread"`
+	Model          string       `json:"model"`
+	ApprovalPolicy any          `json:"approvalPolicy"`
+	Sandbox        any          `json:"sandbox"`
 }
 
 type turnRecord struct {
@@ -170,6 +176,27 @@ type configReadResponse struct {
 	Config map[string]any `json:"config"`
 }
 
+type modelListResponse struct {
+	Data []modelRecord `json:"data"`
+}
+
+type modelRecord struct {
+	ID          string `json:"id"`
+	Model       string `json:"model"`
+	DisplayName string `json:"displayName"`
+	Hidden      bool   `json:"hidden"`
+	IsDefault   bool   `json:"isDefault"`
+}
+
+type configRequirementsReadResponse struct {
+	Requirements *configRequirementsRecord `json:"requirements"`
+}
+
+type configRequirementsRecord struct {
+	AllowedApprovalPolicies []any    `json:"allowedApprovalPolicies"`
+	AllowedSandboxModes     []string `json:"allowedSandboxModes"`
+}
+
 type configWriteResponse struct {
 	Status   string `json:"status"`
 	Version  string `json:"version"`
@@ -181,6 +208,8 @@ type AppServerClient struct {
 	now                     func() time.Time
 	threadMu                sync.RWMutex
 	threads                 map[string]domain.Thread
+	threadRuntimeDesired    map[string]domain.ThreadRuntimePreferences
+	threadRuntimeApplied    map[string]domain.ThreadRuntimePreferences
 	turnEventMu             sync.RWMutex
 	turnEventHandler        func(agenttypes.RuntimeTurnEvent)
 	approvalMu              sync.RWMutex
@@ -194,6 +223,7 @@ type AppServerClient struct {
 	restartMu               sync.RWMutex
 	restartRequired         map[string]bool
 	homeDir                 func() (string, error)
+	configMirrorPath        string
 }
 
 type agentMessageState struct {
@@ -216,18 +246,21 @@ var _ agenttypes.RuntimeSkillConfigurator = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeSkillManager = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeMCPManager = (*AppServerClient)(nil)
 var _ agenttypes.RuntimePluginManager = (*AppServerClient)(nil)
+var _ agenttypes.RuntimeThreadRuntimeManager = (*AppServerClient)(nil)
 
 func NewAppServerClient(runner Runner) *AppServerClient {
 	client := &AppServerClient{
-		runner:           runner,
-		now:              time.Now,
-		threads:          make(map[string]domain.Thread),
-		pendingApprovals: make(map[string]pendingApprovalRequest),
-		deltaSequence:    make(map[string]int),
-		agentMessageText: make(map[string]agentMessageState),
-		turnErrors:       make(map[string]string),
-		restartRequired:  make(map[string]bool),
-		homeDir:          resolveUserHomeDir,
+		runner:               runner,
+		now:                  time.Now,
+		threads:              make(map[string]domain.Thread),
+		threadRuntimeDesired: make(map[string]domain.ThreadRuntimePreferences),
+		threadRuntimeApplied: make(map[string]domain.ThreadRuntimePreferences),
+		pendingApprovals:     make(map[string]pendingApprovalRequest),
+		deltaSequence:        make(map[string]int),
+		agentMessageText:     make(map[string]agentMessageState),
+		turnErrors:           make(map[string]string),
+		restartRequired:      make(map[string]bool),
+		homeDir:              resolveUserHomeDir,
 	}
 	if notifier, ok := runner.(notificationRunner); ok {
 		notifier.SetNotificationHandler(client.handleNotification)
@@ -291,12 +324,16 @@ func (c *AppServerClient) CreateThread(params agenttypes.CreateThreadParams) (do
 		thread.Title = strings.TrimSpace(params.Title)
 	}
 	c.rememberThread(thread)
+	c.seedThreadRuntimeState(thread.ThreadID, domain.ThreadRuntimePreferences{
+		Model:          strings.TrimSpace(response.Model),
+		ApprovalPolicy: normalizeApprovalPolicy(response.ApprovalPolicy),
+		SandboxMode:    normalizeSandboxMode(response.Sandbox),
+	})
 	return thread, nil
 }
 
 func (c *AppServerClient) StartTurn(params agenttypes.StartTurnParams) (agenttypes.StartTurnResult, error) {
-	var out turnStartResponse
-	if err := c.runner.Call("turn/start", map[string]any{
+	payload := map[string]any{
 		"threadId": params.ThreadID,
 		"input": []map[string]any{
 			{
@@ -305,8 +342,18 @@ func (c *AppServerClient) StartTurn(params agenttypes.StartTurnParams) (agenttyp
 				"text_elements": []any{},
 			},
 		},
-	}, &out); err != nil {
+	}
+	override, applied := c.turnStartRuntimeOverride(params.ThreadID)
+	for key, value := range override {
+		payload[key] = value
+	}
+
+	var out turnStartResponse
+	if err := c.runner.Call("turn/start", payload, &out); err != nil {
 		return agenttypes.StartTurnResult{}, err
+	}
+	if applied != nil {
+		c.setThreadRuntimeApplied(params.ThreadID, *applied)
 	}
 
 	return agenttypes.StartTurnResult{
@@ -369,6 +416,8 @@ func (c *AppServerClient) forgetThread(threadID string) {
 	}
 	c.threadMu.Lock()
 	delete(c.threads, threadID)
+	delete(c.threadRuntimeDesired, threadID)
+	delete(c.threadRuntimeApplied, threadID)
 	c.threadMu.Unlock()
 }
 

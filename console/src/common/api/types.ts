@@ -194,6 +194,46 @@ export interface ThreadDetailResponse {
   messages?: ThreadHistoryMessage[];
 }
 
+export interface ThreadResumeResponse {
+  thread: ThreadSummary & {
+    messages?: ThreadHistoryMessage[];
+  };
+}
+
+export interface ThreadRuntimeModelOption {
+  id: string;
+  displayName?: string;
+  isDefault?: boolean;
+}
+
+export interface ThreadRuntimePreferences {
+  model?: string;
+  approvalPolicy?: string;
+  sandboxMode?: string;
+}
+
+export interface ThreadRuntimeOptions {
+  models: ThreadRuntimeModelOption[];
+  approvalPolicies: string[];
+  sandboxModes: string[];
+}
+
+export interface ThreadRuntimeSettings {
+  threadId: string;
+  preferences: ThreadRuntimePreferences;
+  options: ThreadRuntimeOptions;
+}
+
+export interface ThreadRuntimeSettingsResponse {
+  settings: ThreadRuntimeSettings;
+}
+
+export interface ThreadRuntimeUpdateRequest {
+  model?: string;
+  approvalPolicy?: string;
+  sandboxMode?: string;
+}
+
 export interface StartTurnResponse {
   turn: {
     turnId: string;

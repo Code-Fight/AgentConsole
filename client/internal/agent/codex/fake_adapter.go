@@ -11,21 +11,29 @@ import (
 )
 
 type FakeAdapter struct {
-	mu          sync.RWMutex
-	threads     []domain.Thread
-	turns       map[string]domain.Turn
-	environment []domain.EnvironmentResource
-	nextThread  int
-	nextTurn    int
+	mu             sync.RWMutex
+	threads        []domain.Thread
+	turns          map[string]domain.Turn
+	environment    []domain.EnvironmentResource
+	threadRuntime  map[string]domain.ThreadRuntimePreferences
+	defaultRuntime domain.ThreadRuntimePreferences
+	nextThread     int
+	nextTurn       int
 }
 
 func NewFakeAdapter() *FakeAdapter {
 	return &FakeAdapter{
-		threads:     []domain.Thread{},
-		turns:       map[string]domain.Turn{},
-		environment: []domain.EnvironmentResource{},
-		nextThread:  1,
-		nextTurn:    1,
+		threads:       []domain.Thread{},
+		turns:         map[string]domain.Turn{},
+		environment:   []domain.EnvironmentResource{},
+		threadRuntime: map[string]domain.ThreadRuntimePreferences{},
+		defaultRuntime: domain.ThreadRuntimePreferences{
+			Model:          "gpt-5.4",
+			ApprovalPolicy: "on-request",
+			SandboxMode:    "workspace-write",
+		},
+		nextThread: 1,
+		nextTurn:   1,
 	}
 }
 
@@ -36,6 +44,7 @@ func (a *FakeAdapter) SeedSnapshot(threads []domain.Thread, environment []domain
 	a.threads = append([]domain.Thread(nil), threads...)
 	a.turns = map[string]domain.Turn{}
 	a.environment = append([]domain.EnvironmentResource(nil), environment...)
+	a.threadRuntime = map[string]domain.ThreadRuntimePreferences{}
 	a.nextThread = len(a.threads) + 1
 }
 
@@ -291,6 +300,7 @@ func (a *FakeAdapter) CreateThread(params agenttypes.CreateThreadParams) (domain
 	}
 	a.nextThread++
 	a.threads = append(a.threads, thread)
+	a.threadRuntime[thread.ThreadID] = a.defaultRuntime
 
 	return thread, nil
 }
@@ -317,6 +327,9 @@ func (a *FakeAdapter) ResumeThread(threadID string) (domain.Thread, error) {
 	}
 
 	a.threads[index].Status = domain.ThreadStatusIdle
+	if _, ok := a.threadRuntime[threadID]; !ok {
+		a.threadRuntime[threadID] = a.defaultRuntime
+	}
 	return a.threads[index], nil
 }
 
@@ -392,6 +405,53 @@ func (a *FakeAdapter) InterruptTurn(params agenttypes.InterruptTurnParams) (doma
 	return turn, nil
 }
 
+func (a *FakeAdapter) ReadThreadRuntimeSettings(threadID string) (domain.ThreadRuntimeSettings, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	if a.findThreadIndex(threadID) < 0 {
+		return domain.ThreadRuntimeSettings{}, fmt.Errorf("thread %q not found", threadID)
+	}
+	prefs := a.threadRuntime[threadID]
+	if prefs == (domain.ThreadRuntimePreferences{}) {
+		prefs = a.defaultRuntime
+	}
+	return domain.ThreadRuntimeSettings{
+		ThreadID:    threadID,
+		Preferences: prefs,
+		Options:     fakeThreadRuntimeOptions(),
+	}, nil
+}
+
+func (a *FakeAdapter) UpdateThreadRuntimeSettings(params agenttypes.UpdateThreadRuntimeSettingsParams) (domain.ThreadRuntimeSettings, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	if a.findThreadIndex(params.ThreadID) < 0 {
+		return domain.ThreadRuntimeSettings{}, fmt.Errorf("thread %q not found", params.ThreadID)
+	}
+	next := a.threadRuntime[params.ThreadID]
+	if next == (domain.ThreadRuntimePreferences{}) {
+		next = a.defaultRuntime
+	}
+	if params.Patch.Model != nil {
+		next.Model = strings.TrimSpace(*params.Patch.Model)
+	}
+	if params.Patch.ApprovalPolicy != nil {
+		next.ApprovalPolicy = strings.TrimSpace(*params.Patch.ApprovalPolicy)
+	}
+	if params.Patch.SandboxMode != nil {
+		next.SandboxMode = strings.TrimSpace(*params.Patch.SandboxMode)
+	}
+	a.threadRuntime[params.ThreadID] = next
+
+	return domain.ThreadRuntimeSettings{
+		ThreadID:    params.ThreadID,
+		Preferences: next,
+		Options:     fakeThreadRuntimeOptions(),
+	}, nil
+}
+
 func (a *FakeAdapter) findThreadIndex(threadID string) int {
 	for idx, thread := range a.threads {
 		if thread.ThreadID == threadID {
@@ -425,4 +485,15 @@ func mergeFakeEnvironmentResource(current domain.EnvironmentResource, next domai
 		next.Details = cloneFakeDetails(current.Details)
 	}
 	return next
+}
+
+func fakeThreadRuntimeOptions() domain.ThreadRuntimeOptions {
+	return domain.ThreadRuntimeOptions{
+		Models: []domain.ThreadRuntimeModelOption{
+			{ID: "gpt-5.4", DisplayName: "GPT-5.4", IsDefault: true},
+			{ID: "gpt-5.2", DisplayName: "GPT-5.2"},
+		},
+		ApprovalPolicies: []string{"on-request", "never"},
+		SandboxModes:     []string{"workspace-write", "danger-full-access", "read-only"},
+	}
 }

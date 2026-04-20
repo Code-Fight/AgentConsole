@@ -14,11 +14,12 @@ import (
 )
 
 type InstanceLayout struct {
-	AgentID      string
-	RootDir      string
-	HomeDir      string
-	CodexHomeDir string
-	ConfigPath   string
+	AgentID         string
+	RootDir         string
+	HomeDir         string
+	CodexHomeDir    string
+	ConfigPath      string
+	CodexConfigPath string
 }
 
 func ValidateAgentID(agentID string) error {
@@ -53,16 +54,17 @@ func NewInstanceLayout(rootDir string, agentID string) (InstanceLayout, error) {
 	instanceRoot := filepath.Join(trimmedRoot, trimmedAgentID)
 	homeDir := filepath.Join(instanceRoot, "home")
 	return InstanceLayout{
-		AgentID:      trimmedAgentID,
-		RootDir:      instanceRoot,
-		HomeDir:      homeDir,
-		CodexHomeDir: filepath.Join(instanceRoot, "codex-home"),
-		ConfigPath:   filepath.Join(homeDir, ".codex", "config.toml"),
+		AgentID:         trimmedAgentID,
+		RootDir:         instanceRoot,
+		HomeDir:         homeDir,
+		CodexHomeDir:    filepath.Join(instanceRoot, "codex-home"),
+		ConfigPath:      filepath.Join(homeDir, ".codex", "config.toml"),
+		CodexConfigPath: filepath.Join(instanceRoot, "codex-home", "config.toml"),
 	}, nil
 }
 
 func (l InstanceLayout) ApplyConfig(document domain.AgentConfigDocument) (agenttypes.ApplyConfigResult, error) {
-	return applyConfigDocument(func() (string, error) {
+	return applyConfigDocumentWithMirror(func() (string, error) {
 		if err := os.MkdirAll(l.HomeDir, 0o755); err != nil {
 			return "", err
 		}
@@ -70,7 +72,7 @@ func (l InstanceLayout) ApplyConfig(document domain.AgentConfigDocument) (agentt
 			return "", err
 		}
 		return l.HomeDir, nil
-	}, document)
+	}, document, l.CodexConfigPath)
 }
 
 func NewIsolatedAppServerClient(ctx context.Context, codexBin string, layout InstanceLayout) (*AppServerClient, func() error, error) {
@@ -104,6 +106,7 @@ func NewIsolatedAppServerClient(ctx context.Context, codexBin string, layout Ins
 	client.homeDir = func() (string, error) {
 		return layout.HomeDir, nil
 	}
+	client.configMirrorPath = layout.CodexConfigPath
 	if err := client.Initialize(); err != nil {
 		_ = runner.Close()
 		return nil, nil, err
@@ -117,30 +120,23 @@ func seedSharedCodexFiles(layout InstanceLayout) error {
 		return nil
 	}
 
-	pairs := []struct {
-		source string
-		target string
-	}{
-		{
-			source: filepath.Join(homeDir, ".codex", "auth.json"),
-			target: filepath.Join(layout.CodexHomeDir, "auth.json"),
-		},
-		{
-			source: filepath.Join(homeDir, ".codex", "config.toml"),
-			target: layout.ConfigPath,
-		},
+	sharedAuthPath := filepath.Join(homeDir, ".codex", "auth.json")
+	if err := copyIfPresent(sharedAuthPath, filepath.Join(layout.CodexHomeDir, "auth.json"), false); err != nil {
+		return err
 	}
 
-	for _, pair := range pairs {
-		if err := copyIfPresent(pair.source, pair.target); err != nil {
-			return err
-		}
+	sharedConfigPath := filepath.Join(homeDir, ".codex", "config.toml")
+	if err := copyIfPresent(sharedConfigPath, layout.ConfigPath, false); err != nil {
+		return err
+	}
+	if err := copyIfPresent(layout.ConfigPath, layout.CodexConfigPath, true); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-func copyIfPresent(sourcePath string, targetPath string) error {
+func copyIfPresent(sourcePath string, targetPath string, overwrite bool) error {
 	sourceInfo, err := os.Stat(sourcePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -157,9 +153,14 @@ func copyIfPresent(sourcePath string, targetPath string) error {
 		return err
 	}
 
-	if targetData, err := os.ReadFile(targetPath); err == nil && string(targetData) == string(sourceData) {
-		return nil
-	} else if err != nil && !os.IsNotExist(err) {
+	if targetData, err := os.ReadFile(targetPath); err == nil {
+		if string(targetData) == string(sourceData) {
+			return nil
+		}
+		if !overwrite {
+			return nil
+		}
+	} else if !os.IsNotExist(err) {
 		return err
 	}
 

@@ -59,6 +59,12 @@ type startTurnRequest struct {
 	Input string `json:"input"`
 }
 
+type threadRuntimeUpdateRequest struct {
+	Model          *string `json:"model"`
+	ApprovalPolicy *string `json:"approvalPolicy"`
+	SandboxMode    *string `json:"sandboxMode"`
+}
+
 type approvalRespondRequest struct {
 	Decision string         `json:"decision"`
 	Answers  map[string]any `json:"answers"`
@@ -137,6 +143,75 @@ func resolveThreadRoute(router *routing.Router, idx *runtimeindex.Store, threadI
 		}
 	}
 	return domain.ThreadRoute{}, false
+}
+
+func shouldAttemptLiveThreadRead(thread domain.Thread, threadExists bool) bool {
+	if !threadExists {
+		return true
+	}
+	if thread.Status == domain.ThreadStatusActive {
+		return true
+	}
+	return len(thread.Messages) == 0
+}
+
+func shouldPreferLiveThreadResume(thread domain.Thread, threadExists bool) bool {
+	if !threadExists {
+		return false
+	}
+	if thread.Status == domain.ThreadStatusActive {
+		return false
+	}
+	return len(thread.Messages) == 0
+}
+
+func liveThreadRead(ctx context.Context, sender CommandSender, machineID string, agentID string, threadID string) (domain.Thread, bool) {
+	completed, err := sender.SendCommand(ctx, machineID, "thread.read", protocol.ThreadReadCommandPayload{
+		ThreadID: threadID,
+		AgentID:  agentID,
+	})
+	if err != nil {
+		return domain.Thread{}, false
+	}
+
+	var result protocol.ThreadReadCommandResult
+	if err := json.Unmarshal(completed.Result, &result); err != nil {
+		return domain.Thread{}, false
+	}
+	return result.Thread, true
+}
+
+func liveThreadResume(ctx context.Context, sender CommandSender, machineID string, agentID string, threadID string) (domain.Thread, bool) {
+	completed, err := sender.SendCommand(ctx, machineID, "thread.resume", protocol.ThreadResumeCommandPayload{
+		ThreadID: threadID,
+		AgentID:  agentID,
+	})
+	if err != nil {
+		return domain.Thread{}, false
+	}
+
+	var result protocol.ThreadResumeCommandResult
+	if err := json.Unmarshal(completed.Result, &result); err != nil {
+		return domain.Thread{}, false
+	}
+	return result.Thread, true
+}
+
+func loadLiveThreadDetail(ctx context.Context, sender CommandSender, route domain.ThreadRoute, threadID string, preferResume bool) (domain.Thread, bool) {
+	if preferResume {
+		if thread, ok := liveThreadResume(ctx, sender, route.MachineID, route.AgentID, threadID); ok {
+			return thread, true
+		}
+	}
+	if thread, ok := liveThreadRead(ctx, sender, route.MachineID, route.AgentID, threadID); ok {
+		return thread, true
+	}
+	if !preferResume {
+		if thread, ok := liveThreadResume(ctx, sender, route.MachineID, route.AgentID, threadID); ok {
+			return thread, true
+		}
+	}
+	return domain.Thread{}, false
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
@@ -344,6 +419,20 @@ func machineIsOnline(reg *registry.Store, machineID string) bool {
 	}
 	machine, ok := reg.Get(machineID)
 	return ok && machine.Status == domain.MachineStatusOnline
+}
+
+func machineCanAttemptLiveRead(reg *registry.Store, machineID string) bool {
+	if strings.TrimSpace(machineID) == "" {
+		return false
+	}
+	if reg == nil {
+		return true
+	}
+	machine, ok := reg.Get(machineID)
+	if !ok {
+		return true
+	}
+	return machine.Status == domain.MachineStatusOnline
 }
 
 func resolveActiveTurnID(sender CommandSender, threadID string) string {
@@ -1137,49 +1226,41 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 			pendingApprovals = reg.PendingApprovalsForThread(threadID)
 		}
 		activeTurnID := resolveActiveTurnID(sender, threadID)
+		snapshotThread, hasSnapshotThread := findThread(idx, threadID)
 
 		if sender != nil && router != nil {
 			if route, ok := router.ResolveThread(threadID); ok {
-				liveReadRequired := machineIsOnline(reg, route.MachineID)
-				completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.read", protocol.ThreadReadCommandPayload{
-					ThreadID: threadID,
-					AgentID:  route.AgentID,
-				})
-				if err == nil {
-					var result protocol.ThreadReadCommandResult
-					if err := json.Unmarshal(completed.Result, &result); err == nil {
-						if result.Thread.MachineID == "" {
-							result.Thread.MachineID = route.MachineID
+				if machineCanAttemptLiveRead(reg, route.MachineID) && shouldAttemptLiveThreadRead(snapshotThread, hasSnapshotThread) {
+					preferResume := shouldPreferLiveThreadResume(snapshotThread, hasSnapshotThread)
+					liveReadCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+					liveThread, ok := loadLiveThreadDetail(liveReadCtx, sender, route, threadID, preferResume)
+					cancel()
+
+					if ok {
+						if liveThread.MachineID == "" {
+							liveThread.MachineID = route.MachineID
 						}
-						if result.Thread.AgentID == "" {
-							result.Thread.AgentID = route.AgentID
+						if liveThread.AgentID == "" {
+							liveThread.AgentID = route.AgentID
 						}
-						result.Thread = applyThreadTitleOverride(result.Thread, overrides)
-						if strings.TrimSpace(result.Thread.ThreadID) != "" {
-							router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID, result.Thread.AgentID)
+						liveThread = applyThreadTitleOverride(liveThread, overrides)
+						if strings.TrimSpace(liveThread.ThreadID) != "" {
+							router.TrackThread(liveThread.ThreadID, liveThread.MachineID, liveThread.AgentID)
 							if idx != nil {
-								idx.UpsertThread(result.Thread.MachineID, result.Thread)
+								idx.UpsertThread(liveThread.MachineID, liveThread)
 							}
 						}
-						clearDeleted(result.Thread.ThreadID)
-						messages := append([]domain.ThreadMessage(nil), result.Thread.Messages...)
-						result.Thread.Messages = nil
+						clearDeleted(liveThread.ThreadID)
+						messages := append([]domain.ThreadMessage(nil), liveThread.Messages...)
+						liveThread.Messages = nil
 						writeJSON(w, http.StatusOK, threadDetailResponse{
-							Thread:           result.Thread,
+							Thread:           liveThread,
 							ActiveTurnID:     activeTurnID,
 							PendingApprovals: pendingApprovals,
 							Messages:         messages,
 						})
 						return
 					}
-					if liveReadRequired {
-						http.Error(w, "invalid thread.read result", http.StatusBadGateway)
-						return
-					}
-				}
-				if liveReadRequired {
-					http.Error(w, err.Error(), http.StatusBadGateway)
-					return
 				}
 			}
 		}
@@ -1198,6 +1279,105 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 			PendingApprovals: pendingApprovals,
 			Messages:         messages,
 		})
+	})
+
+	mux.HandleFunc("GET /threads/{threadId}/runtime", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		threadID := r.PathValue("threadId")
+		if strings.TrimSpace(threadID) == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return
+		}
+		if isDeleted(threadID) {
+			http.Error(w, "thread not found", http.StatusNotFound)
+			return
+		}
+
+		route, ok := resolveThreadRoute(router, idx, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.runtime.read", protocol.ThreadRuntimeReadCommandPayload{
+			ThreadID: threadID,
+			AgentID:  route.AgentID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.ThreadRuntimeReadCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			http.Error(w, "invalid thread.runtime.read result", http.StatusBadGateway)
+			return
+		}
+		if strings.TrimSpace(result.Settings.ThreadID) == "" {
+			result.Settings.ThreadID = threadID
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"settings": result.Settings})
+	})
+
+	mux.HandleFunc("PATCH /threads/{threadId}/runtime", func(w http.ResponseWriter, r *http.Request) {
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
+
+		threadID := r.PathValue("threadId")
+		if strings.TrimSpace(threadID) == "" {
+			http.Error(w, "threadId is required", http.StatusBadRequest)
+			return
+		}
+		if isDeleted(threadID) {
+			http.Error(w, "thread not found", http.StatusNotFound)
+			return
+		}
+
+		var req threadRuntimeUpdateRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid json body", http.StatusBadRequest)
+			return
+		}
+		if req.Model == nil && req.ApprovalPolicy == nil && req.SandboxMode == nil {
+			http.Error(w, "at least one runtime field is required", http.StatusBadRequest)
+			return
+		}
+
+		route, ok := resolveThreadRoute(router, idx, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.runtime.update", protocol.ThreadRuntimeUpdateCommandPayload{
+			ThreadID:       threadID,
+			AgentID:        route.AgentID,
+			Model:          req.Model,
+			ApprovalPolicy: req.ApprovalPolicy,
+			SandboxMode:    req.SandboxMode,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.ThreadRuntimeUpdateCommandResult
+		if err := transport.Decode(completed.Result, &result); err != nil {
+			http.Error(w, "invalid thread.runtime.update result", http.StatusBadGateway)
+			return
+		}
+		if strings.TrimSpace(result.Settings.ThreadID) == "" {
+			result.Settings.ThreadID = threadID
+		}
+
+		writeJSON(w, http.StatusOK, map[string]any{"settings": result.Settings})
 	})
 
 	mux.HandleFunc("POST /threads", func(w http.ResponseWriter, r *http.Request) {

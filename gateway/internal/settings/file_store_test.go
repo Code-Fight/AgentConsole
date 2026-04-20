@@ -3,6 +3,7 @@ package settings
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"code-agent-gateway/common/domain"
@@ -251,5 +252,48 @@ func TestFileStorePropagatesPersistErrors(t *testing.T) {
 		Content:   "model = \"gpt-5.4\"",
 	}); err == nil {
 		t.Fatal("expected persist error")
+	}
+}
+
+func TestFileStoreFallsBackToTempPathWhenRelativePathIsNotWritable(t *testing.T) {
+	readonlyDir := filepath.Join(t.TempDir(), "readonly")
+	if err := os.MkdirAll(readonlyDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(readonlyDir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if chdirErr := os.Chdir(originalWD); chdirErr != nil {
+			t.Fatalf("restore working directory: %v", chdirErr)
+		}
+	}()
+
+	store, err := NewFileStore("data/settings.json", []domain.AgentDescriptor{
+		{AgentType: domain.AgentTypeCodex, DisplayName: "Codex"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expectedPrefix := filepath.Join(os.TempDir(), "code-agent-gateway")
+	if !strings.HasPrefix(store.path, expectedPrefix) {
+		t.Fatalf("expected fallback path under %q, got %q", expectedPrefix, store.path)
+	}
+
+	if err := store.PutConsolePreferences(domain.ConsolePreferences{
+		Profile:      "dev",
+		SafetyPolicy: "strict",
+		LastThreadID: "thread-01",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(store.path); err != nil {
+		t.Fatalf("expected persisted file at %q: %v", store.path, err)
 	}
 }

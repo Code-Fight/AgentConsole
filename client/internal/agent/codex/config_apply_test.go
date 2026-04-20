@@ -38,6 +38,32 @@ func TestApplyConfigWritesTomlToCodexConfigPath(t *testing.T) {
 	}
 }
 
+func TestApplyConfigMirrorsTomlToConfiguredCodexHomePath(t *testing.T) {
+	client := NewAppServerClient(&fakeRunner{})
+	homeDir := t.TempDir()
+	client.homeDir = func() (string, error) {
+		return homeDir, nil
+	}
+	client.configMirrorPath = filepath.Join(homeDir, "codex-home", "config.toml")
+
+	_, err := client.ApplyConfig(domain.AgentConfigDocument{
+		AgentType: domain.AgentTypeCodex,
+		Format:    domain.AgentConfigFormatTOML,
+		Content:   "model = \"gpt-5.4\"\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	content, err := os.ReadFile(client.configMirrorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("unexpected mirrored content: %q", string(content))
+	}
+}
+
 func TestApplyConfigRejectsInvalidToml(t *testing.T) {
 	client := NewAppServerClient(&fakeRunner{})
 	client.homeDir = func() (string, error) {

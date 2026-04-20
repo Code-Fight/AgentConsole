@@ -931,6 +931,63 @@ func handleCommandEnvelope(session *clientSession, mgr *manager.Manager, registr
 		}
 
 		return refreshThreadSnapshot(session, mgr, registry)
+	case "thread.runtime.read":
+		var payload protocol.ThreadRuntimeReadCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		settings, err := mgr.ReadThreadRuntimeSettings(agentID, rawThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+		settings.ThreadID = payload.ThreadID
+
+		return session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadRuntimeReadCommandResult{
+			Settings: settings,
+		})
+	case "thread.runtime.update":
+		var payload protocol.ThreadRuntimeUpdateCommandPayload
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), "")
+		}
+
+		agentID, err := resolveAgentID(payload.AgentID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		agentID, rawThreadID, err := domain.ResolveRuntimeThread(agentID, payload.ThreadID)
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+
+		settings, err := mgr.UpdateThreadRuntimeSettings(agentID, agenttypes.UpdateThreadRuntimeSettingsParams{
+			ThreadID: rawThreadID,
+			Patch: domain.ThreadRuntimePreferencePatch{
+				Model:          payload.Model,
+				ApprovalPolicy: payload.ApprovalPolicy,
+				SandboxMode:    payload.SandboxMode,
+			},
+		})
+		if err != nil {
+			return session.CommandRejected(envelope.RequestID, envelope.Name, err.Error(), payload.ThreadID)
+		}
+		settings.ThreadID = payload.ThreadID
+
+		return session.CommandCompleted(envelope.RequestID, envelope.Name, protocol.ThreadRuntimeUpdateCommandResult{
+			Settings: settings,
+		})
 	case "thread.archive":
 		var payload protocol.ThreadArchiveCommandPayload
 		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {

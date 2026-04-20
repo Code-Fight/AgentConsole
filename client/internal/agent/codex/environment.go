@@ -94,15 +94,6 @@ func (c *AppServerClient) ListEnvironment() ([]domain.EnvironmentResource, error
 				details["authPolicy"] = plugin.AuthPolicy
 			}
 			pluginName := firstNonEmpty(plugin.Name, plugin.ID)
-			if strings.TrimSpace(marketplace.Path) != "" && pluginName != "" {
-				if pluginDetail, err := c.readPluginDetail(marketplace.Path, pluginName); err == nil {
-					for key, value := range buildPluginDetails(pluginDetail) {
-						details[key] = value
-					}
-				} else {
-					details["detailError"] = err.Error()
-				}
-			}
 			environment = append(environment, domain.EnvironmentResource{
 				ResourceID:      plugin.ID,
 				Kind:            domain.EnvironmentKindPlugin,
@@ -474,8 +465,8 @@ func (c *AppServerClient) isRestartRequired(kind domain.EnvironmentKind, resourc
 }
 
 func buildMCPDetails(server mcpServerStatusRecord, config map[string]any) map[string]any {
-	details := cloneAnyMap(config)
-	if len(details) > 0 {
+	details := map[string]any{}
+	if len(config) > 0 {
 		details["config"] = cloneAnyMap(config)
 	}
 	if strings.TrimSpace(server.Status) != "" {

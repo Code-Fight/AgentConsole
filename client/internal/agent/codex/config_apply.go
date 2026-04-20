@@ -16,14 +16,14 @@ func (c *AppServerClient) ApplyConfig(document domain.AgentConfigDocument) (agen
 	if homeDir == nil {
 		homeDir = resolveUserHomeDir
 	}
-	return applyConfigDocument(homeDir, document)
+	return applyConfigDocumentWithMirror(homeDir, document, c.configMirrorPath)
 }
 
 func (a *FakeAdapter) ApplyConfig(document domain.AgentConfigDocument) (agenttypes.ApplyConfigResult, error) {
-	return applyConfigDocument(resolveUserHomeDir, document)
+	return applyConfigDocumentWithMirror(resolveUserHomeDir, document, "")
 }
 
-func applyConfigDocument(resolveHomeDir func() (string, error), document domain.AgentConfigDocument) (agenttypes.ApplyConfigResult, error) {
+func applyConfigDocumentWithMirror(resolveHomeDir func() (string, error), document domain.AgentConfigDocument, mirrorPath string) (agenttypes.ApplyConfigResult, error) {
 	if document.AgentType != domain.AgentTypeCodex {
 		return agenttypes.ApplyConfigResult{}, fmt.Errorf("unsupported agentType %q", document.AgentType)
 	}
@@ -44,21 +44,33 @@ func applyConfigDocument(resolveHomeDir func() (string, error), document domain.
 	}
 
 	configPath := filepath.Join(homeDir, ".codex", "config.toml")
-	if err := os.MkdirAll(filepath.Dir(configPath), 0o755); err != nil {
+	if err := writeConfigContent(configPath, []byte(document.Content)); err != nil {
 		return agenttypes.ApplyConfigResult{}, err
 	}
-	tmpPath := configPath + ".tmp"
-	if err := os.WriteFile(tmpPath, []byte(document.Content), 0o600); err != nil {
-		return agenttypes.ApplyConfigResult{}, err
-	}
-	if err := os.Rename(tmpPath, configPath); err != nil {
-		return agenttypes.ApplyConfigResult{}, err
+	if strings.TrimSpace(mirrorPath) != "" {
+		if err := writeConfigContent(mirrorPath, []byte(document.Content)); err != nil {
+			return agenttypes.ApplyConfigResult{}, err
+		}
 	}
 
 	return agenttypes.ApplyConfigResult{
 		AgentType: domain.AgentTypeCodex,
 		FilePath:  configPath,
 	}, nil
+}
+
+func writeConfigContent(path string, content []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, content, 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateTOML(content string) error {

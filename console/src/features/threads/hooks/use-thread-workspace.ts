@@ -4,6 +4,7 @@ import type {
   ApprovalRequiredPayload,
   ApprovalResolvedPayload,
   MachineUpdatedPayload,
+  ThreadRuntimeSettings,
   TurnCompletedPayload,
   TurnDeltaPayload,
   TurnStartedPayload,
@@ -17,10 +18,13 @@ import { connectConsoleSocket } from "../../../common/api/ws";
 import {
   getMachineDetail,
   getThreadDetail,
+  getThreadRuntimeSettings,
   interruptThreadTurn,
+  resumeThread,
   respondToApproval,
   startThreadTurn,
   steerThreadTurn,
+  updateThreadRuntimeSettings,
 } from "../api/thread-api";
 import {
   buildDefaultApprovalAnswers,
@@ -65,6 +69,14 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
   const [threadTitle, setThreadTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [runtimeModel, setRuntimeModel] = useState("");
+  const [runtimeApprovalPolicy, setRuntimeApprovalPolicy] = useState("");
+  const [runtimeSandboxMode, setRuntimeSandboxMode] = useState("");
+  const [runtimeModelOptions, setRuntimeModelOptions] = useState<
+    Array<{ id: string; displayName: string; isDefault: boolean }>
+  >([]);
+  const [runtimeSandboxOptions, setRuntimeSandboxOptions] = useState<string[]>([]);
+  const [isUpdatingRuntimeSettings, setIsUpdatingRuntimeSettings] = useState(false);
 
   useEffect(() => {
     setPrompt("");
@@ -76,24 +88,94 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     setActiveTurnId(null);
     setThreadTitle("");
     setError(null);
+    setRuntimeModel("");
+    setRuntimeApprovalPolicy("");
+    setRuntimeSandboxMode("");
+    setRuntimeModelOptions([]);
+    setRuntimeSandboxOptions([]);
+    setIsUpdatingRuntimeSettings(false);
   }, [threadId, connectionIdentity]);
+
+  const applyRuntimeSettings = useCallback((settings: ThreadRuntimeSettings) => {
+    const preferences = settings.preferences ?? {};
+    const options = settings.options ?? {
+      models: [],
+      approvalPolicies: [],
+      sandboxModes: [],
+    };
+
+    const nextModel = (preferences.model ?? "").trim();
+    const nextApprovalPolicy = (preferences.approvalPolicy ?? "").trim();
+    const nextSandboxMode = (preferences.sandboxMode ?? "").trim();
+
+    const modelOptions = (Array.isArray(options.models) ? options.models : [])
+      .map((item) => ({
+        id: (item?.id ?? "").trim(),
+        displayName: (item?.displayName ?? item?.id ?? "").trim(),
+        isDefault: Boolean(item?.isDefault),
+      }))
+      .filter((item) => item.id !== "");
+
+    if (nextModel && !modelOptions.some((item) => item.id === nextModel)) {
+      modelOptions.push({
+        id: nextModel,
+        displayName: nextModel,
+        isDefault: false,
+      });
+    }
+
+    const sandboxModes = (Array.isArray(options.sandboxModes) ? options.sandboxModes : [])
+      .map((item) => item.trim())
+      .filter((item) => item !== "");
+
+    if (nextSandboxMode && !sandboxModes.includes(nextSandboxMode)) {
+      sandboxModes.push(nextSandboxMode);
+    }
+
+    setRuntimeModel(nextModel);
+    setRuntimeApprovalPolicy(nextApprovalPolicy);
+    setRuntimeSandboxMode(nextSandboxMode);
+    setRuntimeModelOptions(modelOptions);
+    setRuntimeSandboxOptions(sandboxModes);
+  }, []);
 
   const loadWorkspace = useCallback(async () => {
     if (!enabled || !threadId) {
       return;
     }
 
+    let resolvedMachineID = "";
     try {
       const detail = await getThreadDetail(threadId);
+      let resolvedTitle = detail.thread.title ?? "";
+      let threadMessages = detail.messages ?? [];
+      let historyLoadError: string | null = null;
+      if (threadMessages.length === 0 && detail.thread.status !== "active") {
+        try {
+          const resumed = await resumeThread(threadId);
+          const resumedMessages = resumed.thread.messages ?? [];
+          if (resumedMessages.length > 0) {
+            threadMessages = resumedMessages;
+            if (resolvedTitle.trim() === "") {
+              resolvedTitle = resumed.thread.title ?? resolvedTitle;
+            }
+          }
+        } catch (resumeError) {
+          historyLoadError =
+            resumeError instanceof Error
+              ? resumeError.message
+              : "Unable to load thread history.";
+        }
+      }
       const approvals = Array.isArray(detail.pendingApprovals)
         ? detail.pendingApprovals
             .filter((approval): approval is PendingApproval => Boolean(approval?.requestId))
             .map((approval) => ({ ...approval, requestId: approval.requestId }))
         : [];
 
-      setThreadTitle(detail.thread.title ?? "");
+      setThreadTitle(resolvedTitle);
       setActiveTurnId((current) => current ?? detail.activeTurnId ?? null);
-      setMessages((current) => (current.length === 0 ? (detail.messages ?? []) : current));
+      setMessages((current) => (current.length === 0 ? threadMessages : current));
       setPendingApprovals((current) => {
         const next = current.filter(
           (item) => !approvals.some((approval) => approval.requestId === item.requestId),
@@ -111,7 +193,12 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
         }
         return next;
       });
-      setError(null);
+      if (historyLoadError !== null && threadMessages.length === 0) {
+        setError(historyLoadError);
+      } else {
+        setError(null);
+      }
+      resolvedMachineID = detail.thread.machineId;
 
       try {
         const machineDetail = await getMachineDetail(detail.thread.machineId);
@@ -121,8 +208,23 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
       }
     } catch (detailError) {
       setError(detailError instanceof Error ? detailError.message : "Unable to load thread.");
+      setMachine(null);
     }
-  }, [enabled, threadId]);
+
+    try {
+      const runtimeResponse = await getThreadRuntimeSettings(threadId);
+      applyRuntimeSettings(runtimeResponse.settings);
+    } catch {
+      setRuntimeModel("");
+      setRuntimeApprovalPolicy("");
+      setRuntimeSandboxMode("");
+      setRuntimeModelOptions([]);
+      setRuntimeSandboxOptions([]);
+      if (resolvedMachineID === "") {
+        setMachine(null);
+      }
+    }
+  }, [applyRuntimeSettings, enabled, threadId]);
 
   useEffect(() => {
     if (!enabled) {
@@ -248,7 +350,13 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
 
   const handlePromptSubmit = useCallback(async () => {
     const input = prompt.trim();
-    if (!enabled || !threadId || input === "" || !supportsCapability("startTurn")) {
+    if (
+      !enabled ||
+      !threadId ||
+      input === "" ||
+      Boolean(activeTurnId) ||
+      !supportsCapability("startTurn")
+    ) {
       return;
     }
 
@@ -274,7 +382,57 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     } finally {
       setIsSubmitting(false);
     }
-  }, [enabled, prompt, threadId]);
+  }, [activeTurnId, enabled, prompt, threadId]);
+
+  const handleRuntimeModelChange = useCallback(
+    async (nextModel: string) => {
+      const model = nextModel.trim();
+      if (!enabled || !threadId || model === "") {
+        return;
+      }
+
+      setIsUpdatingRuntimeSettings(true);
+      setError(null);
+      try {
+        const response = await updateThreadRuntimeSettings(threadId, { model });
+        applyRuntimeSettings(response.settings);
+      } catch (runtimeError) {
+        setError(
+          runtimeError instanceof Error
+            ? runtimeError.message
+            : "Unable to update thread runtime model.",
+        );
+      } finally {
+        setIsUpdatingRuntimeSettings(false);
+      }
+    },
+    [applyRuntimeSettings, enabled, threadId],
+  );
+
+  const handleRuntimePermissionChange = useCallback(
+    async (nextSandboxMode: string) => {
+      const sandboxMode = nextSandboxMode.trim();
+      if (!enabled || !threadId || sandboxMode === "") {
+        return;
+      }
+
+      setIsUpdatingRuntimeSettings(true);
+      setError(null);
+      try {
+        const response = await updateThreadRuntimeSettings(threadId, { sandboxMode });
+        applyRuntimeSettings(response.settings);
+      } catch (runtimeError) {
+        setError(
+          runtimeError instanceof Error
+            ? runtimeError.message
+            : "Unable to update thread runtime permission.",
+        );
+      } finally {
+        setIsUpdatingRuntimeSettings(false);
+      }
+    },
+    [applyRuntimeSettings, enabled, threadId],
+  );
 
   const handleSteerSubmit = useCallback(async () => {
     const input = steerPrompt.trim();
@@ -349,12 +507,20 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     prompt,
     steerPrompt,
     isSubmitting,
-    canStartTurn: enabled && supportsCapability("startTurn"),
+    runtimeModel,
+    runtimeApprovalPolicy,
+    runtimeSandboxMode,
+    runtimeModelOptions,
+    runtimeSandboxOptions,
+    isUpdatingRuntimeSettings,
+    canStartTurn: enabled && supportsCapability("startTurn") && !activeTurnId,
     canSteerTurn: enabled && supportsCapability("steerTurn") && Boolean(activeTurnId),
     canInterruptTurn: enabled && supportsCapability("interruptTurn") && Boolean(activeTurnId),
     setPrompt,
     setSteerPrompt,
     handlePromptSubmit,
+    handleRuntimeModelChange,
+    handleRuntimePermissionChange,
     handleSteerSubmit,
     handleInterrupt,
     handleApprovalAnswerChange,

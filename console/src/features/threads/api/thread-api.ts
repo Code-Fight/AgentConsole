@@ -7,6 +7,9 @@ import type {
   StartTurnResponse,
   ThreadDeleteResponse,
   ThreadDetailResponse,
+  ThreadResumeResponse,
+  ThreadRuntimeSettingsResponse,
+  ThreadRuntimeUpdateRequest,
   ThreadListResponse,
 } from "../../../common/api/types";
 
@@ -51,7 +54,7 @@ export function archiveThread(threadId: string) {
 }
 
 export function resumeThread(threadId: string) {
-  return http<void>(buildThreadApiPath(threadId, "resume"), {
+  return http<ThreadResumeResponse>(buildThreadApiPath(threadId, "resume"), {
     method: "POST",
   });
 }
@@ -64,6 +67,23 @@ export function deleteThread(threadId: string) {
 
 export function getThreadDetail(threadId: string) {
   return http<ThreadDetailResponse>(buildThreadApiPath(threadId));
+}
+
+export function getThreadRuntimeSettings(threadId: string) {
+  return http<ThreadRuntimeSettingsResponse>(buildThreadApiPath(threadId, "runtime"));
+}
+
+export function updateThreadRuntimeSettings(
+  threadId: string,
+  patch: ThreadRuntimeUpdateRequest,
+) {
+  return http<ThreadRuntimeSettingsResponse>(buildThreadApiPath(threadId, "runtime"), {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(patch),
+  });
 }
 
 export function getMachineDetail(machineId: string) {

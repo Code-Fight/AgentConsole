@@ -45,6 +45,11 @@ func (c *AppServerClient) ResumeThread(threadID string) (domain.Thread, error) {
 		}
 	}
 	c.rememberThread(thread)
+	c.seedThreadRuntimeState(thread.ThreadID, domain.ThreadRuntimePreferences{
+		Model:          strings.TrimSpace(response.Model),
+		ApprovalPolicy: normalizeApprovalPolicy(response.ApprovalPolicy),
+		SandboxMode:    normalizeSandboxMode(response.Sandbox),
+	})
 	return thread, nil
 }
 

@@ -369,6 +369,77 @@ func TestClientHubIngestsSnapshotsIntoRegistryAndRuntimeIndex(t *testing.T) {
 	}
 }
 
+func TestClientHubKeepsConnectionForLargeEnvironmentSnapshot(t *testing.T) {
+	reg := registry.NewStore()
+	idx := runtimeindex.NewStore()
+	hub := NewClientHubWithStores(reg, idx, routing.NewRouter())
+	server := httptest.NewServer(hub.Handler())
+	defer server.Close()
+
+	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws/client", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "done")
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.register",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T11:00:00Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	waitForCount(t, hub, 1, 1*time.Second)
+
+	largeBlob := strings.Repeat("x", 64*1024)
+	payload := mustMarshalJSON(t, map[string]any{
+		"environment": []map[string]any{
+			{
+				"resourceId":      "plugin-01",
+				"kind":            "plugin",
+				"displayName":     "Plugin One",
+				"status":          "enabled",
+				"restartRequired": false,
+				"lastObservedAt":  "2026-04-09T11:00:01Z",
+				"details": map[string]any{
+					"description": largeBlob,
+				},
+			},
+		},
+	})
+
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySnapshot,
+		Name:      "environment.snapshot",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T11:00:01Z",
+		Payload:   payload,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	waitForCondition(t, 2*time.Second, func() bool {
+		items := idx.Environment(domain.EnvironmentKindPlugin)
+		return len(items) == 1 && items[0].ResourceID == "plugin-01"
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	if err := writeEnvelope(t, conn, protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategorySystem,
+		Name:      "client.heartbeat",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-09T11:00:02Z",
+		Payload:   []byte(`{}`),
+	}); err != nil {
+		t.Fatalf("expected connection to remain open after large snapshot, got %v", err)
+	}
+}
+
 func TestClientHubEmitsNorthboundUpdateEvents(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()

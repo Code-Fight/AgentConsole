@@ -214,19 +214,17 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   );
 }
 
-const modelOptions = [
-  "claude-sonnet-4-5",
-  "claude-opus-4",
-  "gpt-4-turbo",
-  "gemini-1.5-pro",
-  "claude-haiku-3-5",
-];
+const sandboxModeLabels: Record<string, string> = {
+  "workspace-write": "本地",
+  "danger-full-access": "完全访问权限",
+  "read-only": "只读模式",
+};
 
-const permissionOptions = ["本地", "完全访问权限", "只读模式"];
+function formatSandboxMode(mode: string) {
+  return sandboxModeLabels[mode] ?? mode;
+}
 
 export default function SessionChat({ session, machine, workspace }: SessionChatProps) {
-  const [selectedModel, setSelectedModel] = useState(session.model);
-  const [selectedPermission, setSelectedPermission] = useState("完全访问权限");
   const [showModelDrop, setShowModelDrop] = useState(false);
   const [showPermDrop, setShowPermDrop] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -245,10 +243,6 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
       terminalOutput: message.terminalOutput,
     }));
   }, [session.messages, workspace.messages]);
-
-  useEffect(() => {
-    setSelectedModel(session.model);
-  }, [session.model]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
@@ -298,6 +292,16 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
   const displayTitle = workspace.title || session.title || "线程工作区";
   const displayMachineName = workspace.machine?.name ?? machine.name;
   const canSend = workspace.canStartTurn && !workspace.isSubmitting;
+  const selectedModel = workspace.runtimeModel || session.model;
+  const selectedPermission = workspace.runtimeSandboxMode || "workspace-write";
+  const modelOptions = workspace.runtimeModelOptions.length
+    ? workspace.runtimeModelOptions
+    : selectedModel
+      ? [{ id: selectedModel, displayName: selectedModel, isDefault: true }]
+      : [];
+  const permissionOptions = workspace.runtimeSandboxOptions.length
+    ? workspace.runtimeSandboxOptions
+    : ["workspace-write", "danger-full-access", "read-only"];
 
   const handleApprovalDecision = (
     requestId: string,
@@ -491,32 +495,33 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
             <div className="flex items-center gap-2 relative z-50">
               <div className="relative">
                 <button
+                  disabled={workspace.isUpdatingRuntimeSettings || modelOptions.length === 0}
                   onClick={() => {
                     setShowModelDrop(!showModelDrop);
                     setShowPermDrop(false);
                   }}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-700/60 hover:bg-zinc-700 transition-colors text-xs text-zinc-300"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-700/60 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs text-zinc-300"
                 >
                   <Circle className="size-2.5 text-violet-400 fill-violet-400" />
-                  <span className="max-w-[100px] truncate">{selectedModel}</span>
+                  <span className="max-w-[100px] truncate">{selectedModel || "未配置"}</span>
                   <ChevronDown className="size-3 text-zinc-500" />
                 </button>
                 {showModelDrop ? (
                   <div className="absolute bottom-full mb-2 left-0 bg-zinc-800 border border-zinc-700 rounded-lg py-1 min-w-[180px] shadow-2xl">
                     {modelOptions.map((model) => (
                       <button
-                        key={model}
-                        onClick={() => {
-                          setSelectedModel(model);
+                        key={model.id}
+                        onClick={async () => {
+                          await workspace.handleRuntimeModelChange(model.id);
                           setShowModelDrop(false);
                         }}
                         className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                          selectedModel === model
+                          selectedModel === model.id
                             ? "text-zinc-50 bg-zinc-700"
                             : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50"
                         }`}
                       >
-                        {model}
+                        {model.displayName || model.id}
                       </button>
                     ))}
                   </div>
@@ -525,14 +530,15 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
 
               <div className="relative hidden sm:block">
                 <button
+                  disabled={workspace.isUpdatingRuntimeSettings || permissionOptions.length === 0}
                   onClick={() => {
                     setShowPermDrop(!showPermDrop);
                     setShowModelDrop(false);
                   }}
-                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-700/60 hover:bg-zinc-700 transition-colors text-xs text-zinc-300"
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-zinc-700/60 hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-xs text-zinc-300"
                 >
                   <span className="text-emerald-400 text-[10px]">●</span>
-                  <span>{selectedPermission}</span>
+                  <span>{formatSandboxMode(selectedPermission)}</span>
                   <ChevronDown className="size-3 text-zinc-500" />
                 </button>
                 {showPermDrop ? (
@@ -540,8 +546,8 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
                     {permissionOptions.map((permission) => (
                       <button
                         key={permission}
-                        onClick={() => {
-                          setSelectedPermission(permission);
+                        onClick={async () => {
+                          await workspace.handleRuntimePermissionChange(permission);
                           setShowPermDrop(false);
                         }}
                         className={`w-full text-left px-3 py-2 text-xs transition-colors ${
@@ -550,7 +556,7 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
                             : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-700/50"
                         }`}
                       >
-                        {permission}
+                        {formatSandboxMode(permission)}
                       </button>
                     ))}
                   </div>

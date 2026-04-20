@@ -79,6 +79,19 @@ type TurnStartCommandPayload struct {
 	Input    string `json:"input"`
 }
 
+type ThreadRuntimeReadCommandPayload struct {
+	ThreadID string `json:"threadId"`
+	AgentID  string `json:"agentId,omitempty"`
+}
+
+type ThreadRuntimeUpdateCommandPayload struct {
+	ThreadID       string  `json:"threadId"`
+	AgentID        string  `json:"agentId,omitempty"`
+	Model          *string `json:"model,omitempty"`
+	ApprovalPolicy *string `json:"approvalPolicy,omitempty"`
+	SandboxMode    *string `json:"sandboxMode,omitempty"`
+}
+
 type TurnSteerCommandPayload struct {
 	ThreadID string `json:"threadId"`
 	TurnID   string `json:"turnId"`
@@ -229,6 +242,14 @@ type ThreadArchiveCommandResult struct {
 type TurnStartCommandResult struct {
 	TurnID   string `json:"turnId"`
 	ThreadID string `json:"threadId"`
+}
+
+type ThreadRuntimeReadCommandResult struct {
+	Settings domain.ThreadRuntimeSettings `json:"settings"`
+}
+
+type ThreadRuntimeUpdateCommandResult struct {
+	Settings domain.ThreadRuntimeSettings `json:"settings"`
 }
 
 type TurnSteerCommandResult struct {

@@ -35,6 +35,9 @@ func TestManagedInstanceLayoutKeepsAgentHomesIsolated(t *testing.T) {
 	if first.ConfigPath != filepath.Join(first.HomeDir, ".codex", "config.toml") {
 		t.Fatalf("unexpected config path: %q", first.ConfigPath)
 	}
+	if first.CodexConfigPath != filepath.Join(first.CodexHomeDir, "config.toml") {
+		t.Fatalf("unexpected codex config path: %q", first.CodexConfigPath)
+	}
 }
 
 func TestManagedInstanceLayoutAppliesConfigIntoAgentHome(t *testing.T) {
@@ -61,6 +64,14 @@ func TestManagedInstanceLayoutAppliesConfigIntoAgentHome(t *testing.T) {
 	}
 	if string(data) != "model = \"gpt-5.4\"\n" {
 		t.Fatalf("unexpected config contents: %q", string(data))
+	}
+
+	codexData, err := os.ReadFile(layout.CodexConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(codexData) != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("unexpected mirrored config contents: %q", string(codexData))
 	}
 }
 
@@ -115,7 +126,7 @@ func TestManagedInstanceLayoutSeedsSharedCodexAuthIntoIsolatedCodexHome(t *testi
 	}
 }
 
-func TestManagedInstanceLayoutSeedsSharedCodexConfigIntoIsolatedAgentHome(t *testing.T) {
+func TestManagedInstanceLayoutSeedsSharedCodexConfigIntoIsolatedAgentHomeAndCodexHome(t *testing.T) {
 	rootDir := t.TempDir()
 	layout, err := NewInstanceLayout(rootDir, "agent-01")
 	if err != nil {
@@ -156,5 +167,72 @@ func TestManagedInstanceLayoutSeedsSharedCodexConfigIntoIsolatedAgentHome(t *tes
 	}
 	if string(data) != "model = \"gpt-5.4\"\n" {
 		t.Fatalf("unexpected config contents: %q", string(data))
+	}
+
+	codexData, err := os.ReadFile(layout.CodexConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(codexData) != "model = \"gpt-5.4\"\n" {
+		t.Fatalf("unexpected mirrored config contents: %q", string(codexData))
+	}
+}
+
+func TestManagedInstanceLayoutSeedDoesNotOverwriteAgentSpecificConfig(t *testing.T) {
+	rootDir := t.TempDir()
+	layout, err := NewInstanceLayout(rootDir, "agent-01")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(layout.ConfigPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(layout.ConfigPath, []byte("model = \"gpt-5.2\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sharedHome := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(sharedHome, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(sharedHome, ".codex", "config.toml")
+	if err := os.WriteFile(configPath, []byte("model = \"gpt-5.4\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	originalHome := os.Getenv("HOME")
+	if err := os.Setenv("HOME", sharedHome); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if originalHome == "" {
+			_ = os.Unsetenv("HOME")
+			return
+		}
+		_ = os.Setenv("HOME", originalHome)
+	})
+
+	if err := os.MkdirAll(layout.CodexHomeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := seedSharedCodexFiles(layout); err != nil {
+		t.Fatalf("seedSharedCodexFiles returned error: %v", err)
+	}
+
+	agentConfig, err := os.ReadFile(layout.ConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(agentConfig) != "model = \"gpt-5.2\"\n" {
+		t.Fatalf("expected agent-specific config to be preserved, got %q", string(agentConfig))
+	}
+
+	codexConfig, err := os.ReadFile(layout.CodexConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile returned error: %v", err)
+	}
+	if string(codexConfig) != "model = \"gpt-5.2\"\n" {
+		t.Fatalf("expected codex-home config to mirror agent config, got %q", string(codexConfig))
 	}
 }
