@@ -1,5 +1,10 @@
 import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
-import type { MachineSummary, ThreadSummary } from "../../../common/api/types";
+import type {
+  EventEnvelope,
+  MachineSummary,
+  ThreadSummary,
+  TurnCompletedPayload,
+} from "../../../common/api/types";
 import { supportsCapability } from "../../../common/config/capabilities";
 import {
   getGatewayConnectionIdentity,
@@ -19,12 +24,63 @@ import { parseEnvelope, toThreadHubItem } from "../model/thread-view-model";
 
 interface UseThreadHubOptions {
   enabled?: boolean;
+  selectedThreadId?: string | null;
 }
 
 export type ThreadHubViewModel = ReturnType<typeof useThreadHub>;
+export const UNREAD_THREAD_STORAGE_KEY = "thread-hub.unread-thread-ids";
+
+function readUnreadThreadIds(): Set<string> {
+  if (typeof window === "undefined") {
+    return new Set();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(UNREAD_THREAD_STORAGE_KEY);
+    if (!raw) {
+      return new Set();
+    }
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(
+      parsed
+        .map((value) => (typeof value === "string" ? value.trim() : ""))
+        .filter((value) => value.length > 0),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function persistUnreadThreadIds(unreadThreadIds: Set<string>) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  try {
+    window.localStorage.setItem(
+      UNREAD_THREAD_STORAGE_KEY,
+      JSON.stringify(Array.from(unreadThreadIds)),
+    );
+  } catch {
+    // localStorage may be unavailable in strict privacy mode.
+  }
+}
+
+function resolveCompletedThreadId(envelope: EventEnvelope): string | null {
+  if (envelope.name !== "turn.completed" && envelope.name !== "turn.failed") {
+    return null;
+  }
+
+  const payload = envelope.payload as TurnCompletedPayload;
+  return payload.turn?.threadId ?? null;
+}
 
 export function useThreadHub(options?: UseThreadHubOptions) {
   const enabled = options?.enabled ?? true;
+  const selectedThreadId = options?.selectedThreadId ?? null;
   const connectionIdentity = useSyncExternalStore(
     subscribeGatewayConnection,
     getGatewayConnectionIdentity,
@@ -36,6 +92,7 @@ export function useThreadHub(options?: UseThreadHubOptions) {
   const [machineId, setMachineId] = useState("");
   const [title, setTitle] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [unreadThreadIds, setUnreadThreadIds] = useState<Set<string>>(readUnreadThreadIds);
 
   const loadHubData = useCallback(async () => {
     try {
@@ -86,13 +143,46 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         return;
       }
 
+      const completedThreadId = resolveCompletedThreadId(envelope);
+      if (completedThreadId) {
+        const selectedId = selectedThreadId?.trim() ?? "";
+        if (completedThreadId !== selectedId) {
+          setUnreadThreadIds((current) => {
+            if (current.has(completedThreadId)) {
+              return current;
+            }
+            const next = new Set(current);
+            next.add(completedThreadId);
+            persistUnreadThreadIds(next);
+            return next;
+          });
+        }
+      }
+
       if (envelope.name !== "thread.updated" && envelope.name !== "machine.updated") {
         return;
       }
 
       void loadHubData();
     });
-  }, [enabled, connectionIdentity, loadHubData]);
+  }, [enabled, connectionIdentity, loadHubData, selectedThreadId]);
+
+  useEffect(() => {
+    const currentThreadId = selectedThreadId?.trim();
+    if (!currentThreadId) {
+      return;
+    }
+
+    setUnreadThreadIds((current) => {
+      if (!current.has(currentThreadId)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.delete(currentThreadId);
+      persistUnreadThreadIds(next);
+      return next;
+    });
+  }, [selectedThreadId]);
 
   const handleCreateThread = useCallback(
     async (machineOverride?: string, agentOverride?: string, titleOverride?: string) => {
@@ -201,6 +291,7 @@ export function useThreadHub(options?: UseThreadHubOptions) {
 
   return {
     error,
+    unreadThreadIds,
     threadSummaries: threads,
     threads: threads.map((thread) => toThreadHubItem(thread, machines)),
     machineSummaries: Object.values(machines),

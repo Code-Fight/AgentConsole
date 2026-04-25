@@ -61,7 +61,7 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
   const restoredThreadIdRef = useRef<string | null>(null);
 
   useCapabilities(remoteEnabled);
-  const hub = useThreadHub({ enabled: remoteEnabled });
+  const hub = useThreadHub({ enabled: remoteEnabled, selectedThreadId: threadId });
   const workspace = useThreadWorkspace(threadId ?? "", { enabled: remoteEnabled });
   const {
     preferences,
@@ -293,6 +293,7 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
               <ThreadPanel
                 machines={machines}
                 selectedSessionId={selection.selectedSession?.id ?? null}
+                unreadThreadIds={hub.unreadThreadIds}
                 onSelectSession={handleSelectSession}
                 onNavigate={handleNavigate}
                 onRenameSession={(sessionId, newTitle) => void hub.handleRename(sessionId, newTitle)}
@@ -336,6 +337,7 @@ export function ThreadShell({ threadId = null }: ThreadShellProps) {
                 <ThreadPanel
                   machines={machines}
                   selectedSessionId={selection.selectedSession?.id ?? null}
+                  unreadThreadIds={hub.unreadThreadIds}
                   onSelectSession={handleSelectSession}
                   onNavigate={handleNavigate}
                   onRenameSession={(sessionId, newTitle) => void hub.handleRename(sessionId, newTitle)}

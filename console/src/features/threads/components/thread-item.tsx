@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
-import { Check, Pencil, Trash2, X } from "lucide-react";
+import { Check, Loader2, Pencil, Trash2, X } from "lucide-react";
 import type {
   ThreadMachineViewModel as Machine,
   ThreadSessionViewModel as Session,
@@ -10,24 +10,60 @@ interface ThreadItemProps {
   session: Session;
   machine: Machine;
   isSelected: boolean;
+  isUnread?: boolean;
   onSelect: (machine: Machine, session: Session) => void;
   onRename?: (sessionId: string, newTitle: string) => void;
   onDelete?: (sessionId: string) => void;
 }
 
-const sessionStatusColor: Record<string, string> = {
-  active: "bg-emerald-400",
-  idle: "bg-zinc-600",
-  completed: "bg-blue-400",
-  systemError: "bg-red-400",
-  notLoaded: "bg-amber-400",
-  unknown: "bg-zinc-500",
+export type ThreadIndicatorState = "active" | "unread" | "idle";
+export type ThreadIndicatorPresentation =
+  | { kind: "spinner"; className: string }
+  | { kind: "dot"; className: string }
+  | { kind: "none" };
+
+const threadIndicatorPresentation: Record<ThreadIndicatorState, ThreadIndicatorPresentation> = {
+  active: { kind: "spinner", className: "size-3 text-emerald-400 animate-spin" },
+  unread: { kind: "dot", className: "size-1.5 rounded-full bg-emerald-400" },
+  idle: { kind: "none" },
 };
+
+export function resolveThreadIndicatorState(
+  status: Session["status"],
+  hasUnread: boolean,
+): ThreadIndicatorState {
+  if (status === "active") {
+    return "active";
+  }
+  if (hasUnread) {
+    return "unread";
+  }
+  return "idle";
+}
+
+export function resolveThreadIndicatorPresentation(
+  indicatorState: ThreadIndicatorState,
+): ThreadIndicatorPresentation {
+  return threadIndicatorPresentation[indicatorState];
+}
+
+function renderThreadIndicator(indicatorState: ThreadIndicatorState) {
+  const presentation = resolveThreadIndicatorPresentation(indicatorState);
+
+  if (presentation.kind === "spinner") {
+    return <Loader2 className={presentation.className} />;
+  }
+  if (presentation.kind === "dot") {
+    return <div className={presentation.className} />;
+  }
+  return null;
+}
 
 export default function ThreadItem({
   session,
   machine,
   isSelected,
+  isUnread = false,
   onSelect,
   onRename,
   onDelete,
@@ -42,6 +78,7 @@ export default function ThreadItem({
 
   const swipeThreshold = 80;
   const maxSwipe = 160;
+  const indicatorState = resolveThreadIndicatorState(session.status, isUnread);
 
   useEffect(() => {
     if (isRenaming && inputRef.current) {
@@ -141,7 +178,7 @@ export default function ThreadItem({
             onSelect(machine, session);
           }
         }}
-        className={`w-full text-left flex items-start gap-2.5 px-2.5 py-2 rounded-lg transition-colors group relative ${
+        className={`w-full text-left flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-colors group relative ${
           isSelected
             ? "bg-zinc-800 text-zinc-100"
             : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50"
@@ -151,12 +188,8 @@ export default function ThreadItem({
           transition: isSwiping ? "none" : "transform 0.3s ease",
         }}
       >
-        <div className="flex items-center gap-1.5 flex-shrink-0 mt-0.5">
-          <div
-            className={`size-1.5 rounded-full ${sessionStatusColor[session.status]} ${
-              session.status === "active" ? "animate-pulse" : ""
-            }`}
-          />
+        <div className="flex items-center justify-center flex-shrink-0 w-4">
+          {renderThreadIndicator(indicatorState)}
         </div>
 
         {isRenaming ? (

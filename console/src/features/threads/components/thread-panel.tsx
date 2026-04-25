@@ -26,6 +26,7 @@ import type {
 interface ThreadPanelProps {
   machines: Machine[];
   selectedSessionId: string | null;
+  unreadThreadIds: Set<string>;
   onSelectSession: (machine: Machine, session: Session) => void;
   onNavigate?: (page: ThreadShellDestination) => void;
   onRenameSession?: (sessionId: string, newTitle: string) => void;
@@ -68,12 +69,14 @@ const statusConfig = {
 function MachineGroup({
   machine,
   selectedSessionId,
+  unreadThreadIds,
   onSelectSession,
   onRenameSession,
   onDeleteSession,
 }: {
   machine: Machine;
   selectedSessionId: string | null;
+  unreadThreadIds: Set<string>;
   onSelectSession: (machine: Machine, session: Session) => void;
   onRenameSession?: (sessionId: string, newTitle: string) => void;
   onDeleteSession?: (sessionId: string) => void;
@@ -131,6 +134,7 @@ function MachineGroup({
               session={session}
               machine={machine}
               isSelected={selectedSessionId === session.id}
+              isUnread={unreadThreadIds.has(session.id)}
               onSelect={onSelectSession}
               onRename={onRenameSession}
               onDelete={onDeleteSession}
@@ -285,6 +289,7 @@ function NewThreadDialog({
 export default function ThreadPanel({
   machines,
   selectedSessionId,
+  unreadThreadIds,
   onSelectSession,
   onNavigate,
   onRenameSession,
@@ -333,6 +338,7 @@ export default function ThreadPanel({
             key={machine.id}
             machine={machine}
             selectedSessionId={selectedSessionId}
+            unreadThreadIds={unreadThreadIds}
             onSelectSession={onSelectSession}
             onRenameSession={onRenameSession}
             onDeleteSession={onDeleteSession}
