@@ -1,7 +1,9 @@
 package runtimeindex
 
 import (
+	"strings"
 	"sync"
+	"time"
 
 	"code-agent-gateway/common/domain"
 )
@@ -25,7 +27,26 @@ func (s *Store) ReplaceSnapshot(machineID string, threads []domain.Thread, envir
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	s.threadsByMachine[machineID] = cloneThreads(threads)
+	previousByThreadID := map[string]domain.Thread{}
+	for _, item := range s.threadsByMachine[machineID] {
+		if strings.TrimSpace(item.ThreadID) == "" {
+			continue
+		}
+		previousByThreadID[item.ThreadID] = item
+	}
+
+	nextThreads := cloneThreads(threads)
+	for idx := range nextThreads {
+		threadID := strings.TrimSpace(nextThreads[idx].ThreadID)
+		if threadID == "" {
+			continue
+		}
+		if existing, ok := previousByThreadID[threadID]; ok {
+			nextThreads[idx].LastActivityAt = latestThreadActivity(existing.LastActivityAt, nextThreads[idx].LastActivityAt)
+		}
+	}
+
+	s.threadsByMachine[machineID] = nextThreads
 	s.environmentByMachine[machineID] = cloneEnvironment(environment)
 	for threadID, route := range s.threadRoutes {
 		if route.MachineID == machineID {
@@ -65,6 +86,7 @@ func (s *Store) UpsertThread(machineID string, thread domain.Thread) {
 		if items[idx].ThreadID != thread.ThreadID {
 			continue
 		}
+		thread.LastActivityAt = latestThreadActivity(items[idx].LastActivityAt, thread.LastActivityAt)
 		items[idx] = thread
 		replaced = true
 		break
@@ -198,4 +220,44 @@ func cloneThreads(threads []domain.Thread) []domain.Thread {
 
 func cloneEnvironment(environment []domain.EnvironmentResource) []domain.EnvironmentResource {
 	return append([]domain.EnvironmentResource(nil), environment...)
+}
+
+func parseThreadActivity(raw string) (time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, false
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.UTC(), true
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC(), true
+	}
+	return time.Time{}, false
+}
+
+func normalizeThreadActivity(raw string) string {
+	parsed, ok := parseThreadActivity(raw)
+	if !ok {
+		return ""
+	}
+	return parsed.Format(time.RFC3339)
+}
+
+func latestThreadActivity(current string, candidate string) string {
+	current = normalizeThreadActivity(current)
+	candidate = normalizeThreadActivity(candidate)
+	if current == "" {
+		return candidate
+	}
+	if candidate == "" {
+		return current
+	}
+
+	currentTime, _ := parseThreadActivity(current)
+	candidateTime, _ := parseThreadActivity(candidate)
+	if candidateTime.After(currentTime) {
+		return candidate
+	}
+	return current
 }

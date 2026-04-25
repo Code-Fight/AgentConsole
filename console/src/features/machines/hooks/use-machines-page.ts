@@ -64,6 +64,43 @@ function formatThreadStatus(status: ThreadSummary["status"]): string {
   }
 }
 
+function machineSortLabel(machine: MachineSummary): string {
+  const name = machine.name?.trim();
+  if (name) {
+    return name.toLowerCase();
+  }
+  return machine.id.toLowerCase();
+}
+
+function threadActivityEpoch(thread: ThreadSummary): number {
+  const raw = thread.lastActivityAt?.trim();
+  if (!raw) {
+    return 0;
+  }
+  const epoch = Date.parse(raw);
+  return Number.isNaN(epoch) ? 0 : epoch;
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatActivityTimestamp(raw: string): string {
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) {
+    return raw;
+  }
+
+  return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())} ${pad2(date.getHours())}:${pad2(date.getMinutes())}:${pad2(date.getSeconds())}`;
+}
+
+function formatLastActivity(thread: ThreadSummary): string {
+  if (thread.lastActivityAt?.trim()) {
+    return formatActivityTimestamp(thread.lastActivityAt.trim());
+  }
+  return formatThreadStatus(thread.status);
+}
+
 function buildMachinesPageModel(
   threadSummaries: ThreadSummary[],
   machineSummaries: MachineSummary[],
@@ -83,8 +120,26 @@ function buildMachinesPageModel(
     }
   });
 
-  return Array.from(machineById.values()).map((machine) => {
-    const machineThreads = threadSummaries.filter((thread) => thread.machineId === machine.id);
+  return Array.from(machineById.values())
+    .sort((left, right) => {
+      const leftLabel = machineSortLabel(left);
+      const rightLabel = machineSortLabel(right);
+      if (leftLabel !== rightLabel) {
+        return leftLabel.localeCompare(rightLabel);
+      }
+      return left.id.localeCompare(right.id);
+    })
+    .map((machine) => {
+      const machineThreads = threadSummaries
+        .filter((thread) => thread.machineId === machine.id)
+        .sort((left, right) => {
+          const leftActivity = threadActivityEpoch(left);
+          const rightActivity = threadActivityEpoch(right);
+          if (leftActivity !== rightActivity) {
+            return rightActivity - leftActivity;
+          }
+          return left.threadId.localeCompare(right.threadId);
+        });
     const agents: MachinesPageAgentViewModel[] = (machine.agents ?? []).map((agent) => {
       const agentThreads = machineThreads.filter((thread) => thread.agentId === agent.agentId);
       const hasActiveThread = agentThreads.some((thread) => thread.status === "active");
@@ -110,7 +165,7 @@ function buildMachinesPageModel(
       agentName: agents.find((agent) => agent.id === thread.agentId)?.name ?? "Unknown agent",
       model: agents.find((agent) => agent.id === thread.agentId)?.model ?? "unknown",
       status: thread.status,
-      lastActivity: formatThreadStatus(thread.status),
+      lastActivity: formatLastActivity(thread),
       messages: [],
     }));
 
@@ -122,7 +177,7 @@ function buildMachinesPageModel(
       agents,
       sessions,
     };
-  });
+    });
 }
 
 export function useMachinesPage() {
@@ -140,23 +195,17 @@ export function useMachinesPage() {
 
   const loadMachinesPageData = useCallback(async () => {
     try {
-      const threadResponse = await http<ThreadListResponse>("/threads");
+      const [threadResponse, machineResponse] = await Promise.all([
+        http<ThreadListResponse>("/threads"),
+        http<MachineListResponse>("/machines"),
+      ]);
       setThreadSummaries(threadResponse.items);
+      setMachineSummaries(machineResponse.items);
       setError(null);
     } catch {
       setThreadSummaries([]);
       setMachineSummaries([]);
       setError("Unable to load live threads.");
-      return;
-    }
-
-    try {
-      const machineResponse = await http<MachineListResponse>("/machines");
-      setMachineSummaries(machineResponse.items);
-      setError(null);
-    } catch {
-      setMachineSummaries([]);
-      setError("Unable to load machines.");
     }
   }, []);
 
@@ -188,7 +237,11 @@ export function useMachinesPage() {
         return;
       }
 
-      if (envelope.name !== "thread.updated" && envelope.name !== "machine.updated") {
+      if (
+        envelope.name !== "thread.updated" &&
+        envelope.name !== "machine.updated" &&
+        envelope.name !== "turn.started"
+      ) {
         return;
       }
 

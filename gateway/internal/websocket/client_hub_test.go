@@ -105,7 +105,7 @@ func TestClientHubTracksActiveTurnsForThreadRecovery(t *testing.T) {
 		Title:     "Investigate flaky test",
 	})
 
-	hub.setActiveTurn("machine-01", "thread-01", "turn-01")
+	hub.setActiveTurn("machine-01", "thread-01", "turn-01", "2026-04-20T10:00:00Z")
 
 	activeTurnID, ok := hub.ActiveTurnID("thread-01")
 	if !ok || activeTurnID != "turn-01" {
@@ -116,8 +116,11 @@ func TestClientHubTracksActiveTurnsForThreadRecovery(t *testing.T) {
 	if len(threads) != 1 || threads[0].Status != domain.ThreadStatusActive {
 		t.Fatalf("expected active thread snapshot, got %+v", threads)
 	}
+	if threads[0].LastActivityAt != "2026-04-20T10:00:00Z" {
+		t.Fatalf("expected active turn timestamp, got %+v", threads[0])
+	}
 
-	hub.clearActiveTurn("machine-01", "thread-01", "turn-01")
+	hub.clearActiveTurn("machine-01", "thread-01", "turn-01", "2026-04-20T10:01:00Z")
 
 	if activeTurnID, ok := hub.ActiveTurnID("thread-01"); ok || activeTurnID != "" {
 		t.Fatalf("expected active turn to clear, got %q ok=%v", activeTurnID, ok)
@@ -126,6 +129,9 @@ func TestClientHubTracksActiveTurnsForThreadRecovery(t *testing.T) {
 	threads = idx.Threads()
 	if len(threads) != 1 || threads[0].Status != domain.ThreadStatusIdle {
 		t.Fatalf("expected idle thread snapshot after clear, got %+v", threads)
+	}
+	if threads[0].LastActivityAt != "2026-04-20T10:01:00Z" {
+		t.Fatalf("expected clear turn timestamp, got %+v", threads[0])
 	}
 }
 

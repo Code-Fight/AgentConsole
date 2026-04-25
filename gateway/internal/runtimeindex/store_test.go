@@ -281,3 +281,69 @@ func TestStoreOverviewMetrics(t *testing.T) {
 		t.Fatalf("expected 3 environment items, got %d", metrics.EnvironmentItems)
 	}
 }
+
+func TestStoreUpsertPreservesLastActivityAtWhenIncomingTimestampIsEmpty(t *testing.T) {
+	store := NewStore()
+
+	store.UpsertThread("machine-a", domain.Thread{
+		ThreadID:       "thread-a-1",
+		MachineID:      "machine-a",
+		Status:         domain.ThreadStatusIdle,
+		Title:          "One",
+		LastActivityAt: "2026-04-20T10:00:00Z",
+	})
+
+	store.UpsertThread("machine-a", domain.Thread{
+		ThreadID:  "thread-a-1",
+		MachineID: "machine-a",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "One updated",
+	})
+
+	threads := store.Threads()
+	if len(threads) != 1 {
+		t.Fatalf("expected 1 thread, got %+v", threads)
+	}
+	if threads[0].LastActivityAt != "2026-04-20T10:00:00Z" {
+		t.Fatalf("expected existing activity timestamp to be preserved, got %+v", threads[0])
+	}
+}
+
+func TestStoreReplaceSnapshotPreservesLastActivityAtWhenIncomingTimestampIsEmpty(t *testing.T) {
+	store := NewStore()
+
+	store.ReplaceSnapshot(
+		"machine-a",
+		[]domain.Thread{
+			{
+				ThreadID:       "thread-a-1",
+				MachineID:      "machine-a",
+				Status:         domain.ThreadStatusIdle,
+				Title:          "One",
+				LastActivityAt: "2026-04-20T10:00:00Z",
+			},
+		},
+		nil,
+	)
+
+	store.ReplaceSnapshot(
+		"machine-a",
+		[]domain.Thread{
+			{
+				ThreadID:  "thread-a-1",
+				MachineID: "machine-a",
+				Status:    domain.ThreadStatusIdle,
+				Title:     "One refreshed",
+			},
+		},
+		nil,
+	)
+
+	threads := store.Threads()
+	if len(threads) != 1 {
+		t.Fatalf("expected 1 thread, got %+v", threads)
+	}
+	if threads[0].LastActivityAt != "2026-04-20T10:00:00Z" {
+		t.Fatalf("expected existing activity timestamp to be preserved, got %+v", threads[0])
+	}
+}

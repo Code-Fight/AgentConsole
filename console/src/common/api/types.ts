@@ -145,6 +145,7 @@ export interface ThreadSummary {
   agentId?: string;
   status: ThreadStatus;
   title: string;
+  lastActivityAt?: string;
 }
 
 export interface TurnSummary {

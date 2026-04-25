@@ -32,12 +32,13 @@ const (
 )
 
 type Thread struct {
-	ThreadID  string          `json:"threadId"`
-	MachineID string          `json:"machineId"`
-	AgentID   string          `json:"agentId,omitempty"`
-	Status    ThreadStatus    `json:"status"`
-	Title     string          `json:"title"`
-	Messages  []ThreadMessage `json:"messages,omitempty"`
+	ThreadID       string          `json:"threadId"`
+	MachineID      string          `json:"machineId"`
+	AgentID        string          `json:"agentId,omitempty"`
+	Status         ThreadStatus    `json:"status"`
+	Title          string          `json:"title"`
+	LastActivityAt string          `json:"lastActivityAt,omitempty"`
+	Messages       []ThreadMessage `json:"messages,omitempty"`
 }
 
 type ThreadMessage struct {

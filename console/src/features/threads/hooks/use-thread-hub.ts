@@ -96,25 +96,16 @@ export function useThreadHub(options?: UseThreadHubOptions) {
 
   const loadHubData = useCallback(async () => {
     try {
-      const threadResponse = await listThreads();
+      const [threadResponse, machineResponse] = await Promise.all([listThreads(), listMachines()]);
       setThreads(threadResponse.items);
-      setError(null);
-    } catch {
-      setThreads([]);
-      setMachines({});
-      setError("Unable to load live threads.");
-      return;
-    }
-
-    try {
-      const machineResponse = await listMachines();
       setMachines(
         Object.fromEntries(machineResponse.items.map((machine) => [machine.id, machine])),
       );
       setError(null);
     } catch {
+      setThreads([]);
       setMachines({});
-      setError("Unable to load machines.");
+      setError("Unable to load live threads.");
     }
   }, []);
 
@@ -159,7 +150,11 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         }
       }
 
-      if (envelope.name !== "thread.updated" && envelope.name !== "machine.updated") {
+      if (
+        envelope.name !== "thread.updated" &&
+        envelope.name !== "machine.updated" &&
+        envelope.name !== "turn.started"
+      ) {
         return;
       }
 

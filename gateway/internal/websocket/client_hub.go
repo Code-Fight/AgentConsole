@@ -271,12 +271,12 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 	case "turn.started":
 		var payload protocol.TurnStartedPayload
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {
-			h.setActiveTurn(envelope.MachineID, payload.ThreadID, payload.TurnID)
+			h.setActiveTurn(envelope.MachineID, payload.ThreadID, payload.TurnID, envelope.Timestamp)
 		}
 	case "turn.completed", "turn.failed":
 		var payload protocol.TurnCompletedPayload
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {
-			h.clearActiveTurn(envelope.MachineID, payload.Turn.ThreadID, payload.Turn.TurnID)
+			h.clearActiveTurn(envelope.MachineID, payload.Turn.ThreadID, payload.Turn.TurnID, envelope.Timestamp)
 		}
 	}
 
@@ -645,7 +645,7 @@ func (h *ClientHub) replaceMachineSnapshot(machineID string, threads []domain.Th
 	h.mu.Lock()
 	state := h.snapshotByMachine[machineID]
 	if replaceThreads {
-		state.threads = append([]domain.Thread(nil), threads...)
+		state.threads = mergeThreadActivities(state.threads, threads)
 	}
 	if replaceEnvironment {
 		state.environment = append([]domain.EnvironmentResource(nil), environment...)
@@ -670,6 +670,72 @@ func normalizeThreads(items []domain.Thread, machineID string) []domain.Thread {
 		normalized = append(normalized, thread)
 	}
 	return normalized
+}
+
+func mergeThreadActivities(previous []domain.Thread, incoming []domain.Thread) []domain.Thread {
+	if len(incoming) == 0 {
+		return nil
+	}
+
+	byID := make(map[string]domain.Thread, len(previous))
+	for _, item := range previous {
+		if strings.TrimSpace(item.ThreadID) == "" {
+			continue
+		}
+		byID[item.ThreadID] = item
+	}
+
+	merged := make([]domain.Thread, 0, len(incoming))
+	for _, item := range incoming {
+		thread := item
+		if existing, ok := byID[item.ThreadID]; ok {
+			thread.LastActivityAt = latestActivityTimestamp(existing.LastActivityAt, thread.LastActivityAt)
+		}
+		merged = append(merged, thread)
+	}
+	return merged
+}
+
+func parseActivityTimestamp(value string) (time.Time, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return time.Time{}, false
+	}
+
+	parsed, err := time.Parse(time.RFC3339Nano, trimmed)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, trimmed)
+		if err != nil {
+			return time.Time{}, false
+		}
+	}
+	return parsed.UTC(), true
+}
+
+func normalizeActivityTimestamp(value string) string {
+	parsed, ok := parseActivityTimestamp(value)
+	if !ok {
+		return ""
+	}
+	return parsed.Format(time.RFC3339)
+}
+
+func latestActivityTimestamp(current string, candidate string) string {
+	current = normalizeActivityTimestamp(current)
+	candidate = normalizeActivityTimestamp(candidate)
+	if current == "" {
+		return candidate
+	}
+	if candidate == "" {
+		return current
+	}
+
+	currentTime, _ := parseActivityTimestamp(current)
+	candidateTime, _ := parseActivityTimestamp(candidate)
+	if candidateTime.After(currentTime) {
+		return candidate
+	}
+	return current
 }
 
 func markThreadsUnknown(items []domain.Thread) []domain.Thread {
@@ -721,6 +787,7 @@ func (h *ClientHub) applyCompletedCommand(machineID string, timestamp string, co
 		if thread.MachineID == "" {
 			thread.MachineID = machineID
 		}
+		thread.LastActivityAt = latestActivityTimestamp(thread.LastActivityAt, timestamp)
 		h.upsertThreadSnapshot(machineID, thread)
 		if h.router != nil {
 			h.router.TrackThread(thread.ThreadID, thread.MachineID, thread.AgentID)
@@ -925,6 +992,7 @@ func (h *ClientHub) upsertThreadSnapshot(machineID string, thread domain.Thread)
 	replaced := false
 	for idx := range state.threads {
 		if state.threads[idx].ThreadID == thread.ThreadID {
+			thread.LastActivityAt = latestActivityTimestamp(state.threads[idx].LastActivityAt, thread.LastActivityAt)
 			state.threads[idx] = thread
 			replaced = true
 			break
@@ -943,9 +1011,13 @@ func (h *ClientHub) upsertThreadSnapshot(machineID string, thread domain.Thread)
 	}
 }
 
-func (h *ClientHub) setActiveTurn(machineID string, threadID string, turnID string) {
+func (h *ClientHub) setActiveTurn(machineID string, threadID string, turnID string, timestamp string) {
 	if machineID == "" || threadID == "" || turnID == "" {
 		return
+	}
+	activity := normalizeActivityTimestamp(timestamp)
+	if activity == "" {
+		activity = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	h.mu.Lock()
@@ -954,6 +1026,7 @@ func (h *ClientHub) setActiveTurn(machineID string, threadID string, turnID stri
 	for idx := range state.threads {
 		if state.threads[idx].ThreadID == threadID {
 			state.threads[idx].Status = domain.ThreadStatusActive
+			state.threads[idx].LastActivityAt = latestActivityTimestamp(state.threads[idx].LastActivityAt, activity)
 			break
 		}
 	}
@@ -967,9 +1040,13 @@ func (h *ClientHub) setActiveTurn(machineID string, threadID string, turnID stri
 	}
 }
 
-func (h *ClientHub) clearActiveTurn(machineID string, threadID string, turnID string) {
+func (h *ClientHub) clearActiveTurn(machineID string, threadID string, turnID string, timestamp string) {
 	if machineID == "" || threadID == "" {
 		return
+	}
+	activity := normalizeActivityTimestamp(timestamp)
+	if activity == "" {
+		activity = time.Now().UTC().Format(time.RFC3339)
 	}
 
 	h.mu.Lock()
@@ -980,6 +1057,7 @@ func (h *ClientHub) clearActiveTurn(machineID string, threadID string, turnID st
 	for idx := range state.threads {
 		if state.threads[idx].ThreadID == threadID {
 			state.threads[idx].Status = domain.ThreadStatusIdle
+			state.threads[idx].LastActivityAt = latestActivityTimestamp(state.threads[idx].LastActivityAt, activity)
 			break
 		}
 	}

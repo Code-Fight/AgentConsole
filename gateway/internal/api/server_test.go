@@ -1019,6 +1019,105 @@ func TestServerListsMachineAgentInventory(t *testing.T) {
 	}
 }
 
+func TestServerListsMachinesSortedByName(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:            "machine-c",
+		Name:          "Charlie",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusRunning,
+	})
+	reg.Upsert(domain.Machine{
+		ID:            "machine-a",
+		Name:          "alpha",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusRunning,
+	})
+	reg.Upsert(domain.Machine{
+		ID:            "machine-b",
+		Name:          "Bravo",
+		Status:        domain.MachineStatusOnline,
+		RuntimeStatus: domain.MachineRuntimeStatusRunning,
+	})
+
+	handler := NewServer(reg, runtimeindex.NewStore(), routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "/machines", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rec.Code)
+	}
+
+	var body struct {
+		Items []domain.Machine `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+
+	if len(body.Items) != 3 {
+		t.Fatalf("expected 3 machines, got %+v", body.Items)
+	}
+	if body.Items[0].ID != "machine-a" || body.Items[1].ID != "machine-b" || body.Items[2].ID != "machine-c" {
+		t.Fatalf("expected name sorted machines, got %+v", body.Items)
+	}
+}
+
+func TestServerListsThreadsSortedByLastActivityDescending(t *testing.T) {
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{
+		{
+			ThreadID:       "thread-older",
+			MachineID:      "machine-01",
+			AgentID:        "agent-01",
+			Status:         domain.ThreadStatusIdle,
+			Title:          "Older",
+			LastActivityAt: "2026-04-20T10:00:00Z",
+		},
+		{
+			ThreadID:       "thread-latest",
+			MachineID:      "machine-01",
+			AgentID:        "agent-01",
+			Status:         domain.ThreadStatusIdle,
+			Title:          "Latest",
+			LastActivityAt: "2026-04-20T11:00:00Z",
+		},
+		{
+			ThreadID:  "thread-no-activity",
+			MachineID: "machine-01",
+			AgentID:   "agent-01",
+			Status:    domain.ThreadStatusIdle,
+			Title:     "No Activity",
+		},
+	}, nil)
+
+	handler := NewServer(registry.NewStore(), idx, routing.NewRouter(), nil, http.NotFoundHandler(), http.NotFoundHandler())
+	req := httptest.NewRequest(http.MethodGet, "/threads", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var body struct {
+		Items []domain.Thread `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	if len(body.Items) != 3 {
+		t.Fatalf("expected 3 threads, got %+v", body.Items)
+	}
+
+	if body.Items[0].ThreadID != "thread-latest" ||
+		body.Items[1].ThreadID != "thread-older" ||
+		body.Items[2].ThreadID != "thread-no-activity" {
+		t.Fatalf("expected last activity sorted threads, got %+v", body.Items)
+	}
+}
+
 func TestServerCreateThreadRequiresAgentID(t *testing.T) {
 	handler := NewServer(registry.NewStore(), runtimeindex.NewStore(), routing.NewRouter(), &fakeCommandSender{}, http.NotFoundHandler(), http.NotFoundHandler())
 
@@ -2152,9 +2251,9 @@ func TestServerDeleteThreadBroadcastsThreadUpdatedInvalidation(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()
 	router := routing.NewRouter()
-	clientHub := gatewayws.NewClientHubWithStores(reg, idx, router)
 	consoleHub := gatewayws.NewConsoleHub()
-	clientHub.SetConsoleHub(consoleHub)
+
+	sender := &threadDeleteBroadcastSender{consoleHub: consoleHub}
 
 	thread := domain.Thread{
 		ThreadID:  "thread-01",
@@ -2166,7 +2265,7 @@ func TestServerDeleteThreadBroadcastsThreadUpdatedInvalidation(t *testing.T) {
 	idx.ReplaceSnapshot("machine-01", []domain.Thread{thread}, nil)
 	router.TrackThread("thread-01", "machine-01", "agent-01")
 
-	server := httptest.NewServer(NewServer(reg, idx, router, clientHub, clientHub.Handler(), consoleHub.Handler()))
+	server := httptest.NewServer(NewServer(reg, idx, router, sender, http.NotFoundHandler(), consoleHub.Handler()))
 	defer server.Close()
 
 	conn, _, err := websocket.Dial(context.Background(), "ws"+server.URL[4:]+"/ws", nil)
@@ -2177,7 +2276,7 @@ func TestServerDeleteThreadBroadcastsThreadUpdatedInvalidation(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodDelete, "/threads/thread-01", nil)
 	rec := httptest.NewRecorder()
-	NewServer(reg, idx, router, clientHub, clientHub.Handler(), consoleHub.Handler()).ServeHTTP(rec, req)
+	NewServer(reg, idx, router, sender, http.NotFoundHandler(), consoleHub.Handler()).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
@@ -2206,6 +2305,52 @@ func TestServerDeleteThreadBroadcastsThreadUpdatedInvalidation(t *testing.T) {
 	if payload.MachineID != "machine-01" || payload.ThreadID != "thread-01" {
 		t.Fatalf("unexpected payload: %+v", payload)
 	}
+}
+
+type threadDeleteBroadcastSender struct {
+	consoleHub *gatewayws.ConsoleHub
+}
+
+func (s *threadDeleteBroadcastSender) SendCommand(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+	if machineID != "machine-01" {
+		return protocol.CommandCompletedPayload{}, errors.New("unexpected machine id")
+	}
+	if name != "thread.archive" {
+		return protocol.CommandCompletedPayload{}, errors.New("unexpected command name")
+	}
+	commandPayload, ok := payload.(protocol.ThreadArchiveCommandPayload)
+	if !ok || commandPayload.ThreadID != "thread-01" || commandPayload.AgentID != "agent-01" {
+		return protocol.CommandCompletedPayload{}, errors.New("unexpected archive payload")
+	}
+	result, err := json.Marshal(protocol.ThreadArchiveCommandResult{ThreadID: "thread-01"})
+	if err != nil {
+		return protocol.CommandCompletedPayload{}, err
+	}
+	return protocol.CommandCompletedPayload{
+		CommandName: name,
+		Result:      result,
+	}, nil
+}
+
+func (s *threadDeleteBroadcastSender) EmitThreadUpdated(payload protocol.ThreadUpdatedPayload, timestamp string) {
+	if s == nil || s.consoleHub == nil {
+		return
+	}
+	if timestamp == "" {
+		timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+	encoded, err := json.Marshal(payload)
+	if err != nil {
+		return
+	}
+	_ = s.consoleHub.Broadcast(protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "thread.updated",
+		MachineID: payload.MachineID,
+		Timestamp: timestamp,
+		Payload:   encoded,
+	})
 }
 
 func TestServerThreadDetailIncludesPendingApprovalsWhenThreadIsOffline(t *testing.T) {
@@ -2509,6 +2654,67 @@ func TestServerGetsMachineByIDAndDeletesThreadThroughArchiveShim(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("expected deleted thread detail to return 404, got %d", rec.Code)
+	}
+}
+
+func TestServerDeleteThreadReturnsErrorWhenArchiveFails(t *testing.T) {
+	reg := registry.NewStore()
+	reg.Upsert(domain.Machine{
+		ID:     "machine-01",
+		Name:   "Dev Mac",
+		Status: domain.MachineStatusOnline,
+	})
+
+	idx := runtimeindex.NewStore()
+	idx.ReplaceSnapshot("machine-01", []domain.Thread{
+		{
+			ThreadID:  "thread-01",
+			MachineID: "machine-01",
+			AgentID:   "agent-01",
+			Status:    domain.ThreadStatusIdle,
+			Title:     "Investigate flaky test",
+		},
+	}, nil)
+
+	router := routing.NewRouter()
+	router.TrackThread("thread-01", "machine-01", "agent-01")
+
+	handler := NewServer(reg, idx, router, &fakeCommandSender{
+		send: func(_ context.Context, machineID string, name string, payload any) (protocol.CommandCompletedPayload, error) {
+			if machineID != "machine-01" {
+				t.Fatalf("machineID = %q", machineID)
+			}
+			if name != "thread.archive" {
+				t.Fatalf("name = %q", name)
+			}
+			return protocol.CommandCompletedPayload{}, errors.New("archive failed")
+		},
+	}, http.NotFoundHandler(), http.NotFoundHandler())
+
+	req := httptest.NewRequest(http.MethodDelete, "/threads/thread-01", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("expected 502, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/threads", nil)
+	rec = httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d with %s", rec.Code, rec.Body.String())
+	}
+
+	var threadsBody struct {
+		Items []domain.Thread `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &threadsBody); err != nil {
+		t.Fatalf("invalid threads json: %v", err)
+	}
+	if len(threadsBody.Items) != 1 || threadsBody.Items[0].ThreadID != "thread-01" {
+		t.Fatalf("expected thread to stay visible after archive failure, got %+v", threadsBody.Items)
 	}
 }
 

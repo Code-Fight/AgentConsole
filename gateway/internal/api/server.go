@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -250,6 +251,64 @@ func applyThreadTitleOverride(thread domain.Thread, overrides map[string]string)
 	if title, ok := overrides[thread.ThreadID]; ok && strings.TrimSpace(title) != "" {
 		thread.Title = title
 	}
+	return thread
+}
+
+func machineSortName(machine domain.Machine) string {
+	name := strings.TrimSpace(machine.Name)
+	if name == "" {
+		name = strings.TrimSpace(machine.ID)
+	}
+	return strings.ToLower(name)
+}
+
+func sortMachinesByName(items []domain.Machine) {
+	sort.SliceStable(items, func(i int, j int) bool {
+		iName := machineSortName(items[i])
+		jName := machineSortName(items[j])
+		if iName != jName {
+			return iName < jName
+		}
+		return strings.TrimSpace(items[i].ID) < strings.TrimSpace(items[j].ID)
+	})
+}
+
+func parseThreadActivityTimestamp(raw string) (time.Time, bool) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, false
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, value); err == nil {
+		return parsed.UTC(), true
+	}
+	if parsed, err := time.Parse(time.RFC3339, value); err == nil {
+		return parsed.UTC(), true
+	}
+	return time.Time{}, false
+}
+
+func sortThreadsByActivity(items []domain.Thread) {
+	sort.SliceStable(items, func(i int, j int) bool {
+		iTime, iOk := parseThreadActivityTimestamp(items[i].LastActivityAt)
+		jTime, jOk := parseThreadActivityTimestamp(items[j].LastActivityAt)
+		if iOk != jOk {
+			return iOk
+		}
+		if iOk && !iTime.Equal(jTime) {
+			return iTime.After(jTime)
+		}
+		if items[i].MachineID != items[j].MachineID {
+			return items[i].MachineID < items[j].MachineID
+		}
+		return items[i].ThreadID < items[j].ThreadID
+	})
+}
+
+func ensureThreadLastActivity(thread domain.Thread, fallback time.Time) domain.Thread {
+	if strings.TrimSpace(thread.LastActivityAt) != "" {
+		return thread
+	}
+	thread.LastActivityAt = fallback.UTC().Format(time.RFC3339)
 	return thread
 }
 
@@ -1140,7 +1199,9 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 	})
 
 	mux.HandleFunc("GET /machines", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{"items": reg.List()})
+		machines := append([]domain.Machine{}, reg.List()...)
+		sortMachinesByName(machines)
+		writeJSON(w, http.StatusOK, map[string]any{"items": machines})
 	})
 
 	mux.HandleFunc("GET /machines/{machineId}", func(w http.ResponseWriter, r *http.Request) {
@@ -1206,6 +1267,7 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 			}
 			threads = append(threads, applyThreadTitleOverride(thread, overrides))
 		}
+		sortThreadsByActivity(threads)
 		writeJSON(w, http.StatusOK, map[string]any{"items": threads})
 	})
 
@@ -1420,6 +1482,7 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 		if result.Thread.AgentID == "" {
 			result.Thread.AgentID = req.AgentID
 		}
+		result.Thread = ensureThreadLastActivity(result.Thread, time.Now().UTC())
 		result.Thread = applyThreadTitleOverride(result.Thread, resolveThreadTitleOverrides(settingsStore))
 		if router != nil && strings.TrimSpace(result.Thread.ThreadID) != "" {
 			router.TrackThread(result.Thread.ThreadID, result.Thread.MachineID, result.Thread.AgentID)
@@ -1612,31 +1675,45 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 			http.Error(w, "thread not found", http.StatusNotFound)
 			return
 		}
+		if sender == nil {
+			http.Error(w, "command sender unavailable", http.StatusServiceUnavailable)
+			return
+		}
 
-		archived := false
-		if sender != nil {
-			if route, ok := resolveThreadRoute(router, idx, threadID); ok {
-				completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
-					ThreadID: threadID,
-					AgentID:  route.AgentID,
-				})
-				if err == nil {
-					var result protocol.ThreadArchiveCommandResult
-					if err := json.Unmarshal(completed.Result, &result); err == nil {
-						archived = true
-					}
-				}
-			}
+		route, ok := resolveThreadRoute(router, idx, threadID)
+		if !ok {
+			http.Error(w, "thread route not found", http.StatusNotFound)
+			return
+		}
+
+		completed, err := sender.SendCommand(r.Context(), route.MachineID, "thread.archive", protocol.ThreadArchiveCommandPayload{
+			ThreadID: threadID,
+			AgentID:  route.AgentID,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+
+		var result protocol.ThreadArchiveCommandResult
+		if err := json.Unmarshal(completed.Result, &result); err != nil {
+			http.Error(w, "invalid thread.archive result", http.StatusBadGateway)
+			return
+		}
+		if strings.TrimSpace(result.ThreadID) == "" {
+			result.ThreadID = threadID
 		}
 
 		markDeleted(threadID)
+		if idx != nil && strings.TrimSpace(route.MachineID) != "" {
+			idx.RemoveThread(route.MachineID, threadID)
+		}
 		if emitter, ok := sender.(threadUpdateEmitter); ok {
-			route := domain.ThreadRoute{
-				MachineID: thread.MachineID,
-				AgentID:   thread.AgentID,
+			if strings.TrimSpace(route.MachineID) == "" {
+				route.MachineID = thread.MachineID
 			}
-			if route.MachineID == "" {
-				route, _ = resolveThreadRoute(router, idx, threadID)
+			if strings.TrimSpace(route.AgentID) == "" {
+				route.AgentID = thread.AgentID
 			}
 			emitter.EmitThreadUpdated(protocol.ThreadUpdatedPayload{
 				MachineID: route.MachineID,
@@ -1647,7 +1724,7 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 		writeJSON(w, http.StatusOK, threadDeleteResponse{
 			ThreadID: threadID,
 			Deleted:  true,
-			Archived: archived,
+			Archived: true,
 		})
 	})
 
