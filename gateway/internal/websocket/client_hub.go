@@ -259,25 +259,16 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 	}
 
 	envelope = normalizeApprovalEnvelope(envelope)
+	envelope = normalizeTimelineEnvelope(envelope)
+
+	h.applyTurnLifecycleEvent(envelope)
+	h.applyTimelineEvent(envelope)
 
 	h.mu.RLock()
 	consoleHub := h.consoleHub
 	h.mu.RUnlock()
 	if consoleHub != nil {
 		_ = consoleHub.Broadcast(envelope)
-	}
-
-	switch envelope.Name {
-	case "turn.started":
-		var payload protocol.TurnStartedPayload
-		if err := transport.Decode(envelope.Payload, &payload); err == nil {
-			h.setActiveTurn(envelope.MachineID, payload.ThreadID, payload.TurnID, envelope.Timestamp)
-		}
-	case "turn.completed", "turn.failed":
-		var payload protocol.TurnCompletedPayload
-		if err := transport.Decode(envelope.Payload, &payload); err == nil {
-			h.clearActiveTurn(envelope.MachineID, payload.Turn.ThreadID, payload.Turn.TurnID, envelope.Timestamp)
-		}
 	}
 
 	if envelope.RequestID == "" {
@@ -338,6 +329,65 @@ func (h *ClientHub) handleEventEnvelope(conn *cws.Conn, envelope protocol.Envelo
 	}
 }
 
+func (h *ClientHub) applyTurnLifecycleEvent(envelope protocol.Envelope) {
+	switch envelope.Name {
+	case "turn.started":
+		var payload protocol.TurnStartedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			h.setActiveTurn(envelope.MachineID, payload.ThreadID, payload.TurnID, envelope.Timestamp)
+		}
+	case "turn.completed", "turn.failed":
+		var payload protocol.TurnCompletedPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			h.clearActiveTurn(envelope.MachineID, payload.Turn.ThreadID, payload.Turn.TurnID, envelope.Timestamp)
+		}
+	case "timeline.event":
+		var payload protocol.TimelineEventPayload
+		if err := transport.Decode(envelope.Payload, &payload); err != nil {
+			return
+		}
+		switch payload.Event.EventType {
+		case domain.AgentTimelineEventTurnStarted:
+			h.setActiveTurn(envelope.MachineID, payload.Event.ThreadID, payload.Event.TurnID, envelope.Timestamp)
+		case domain.AgentTimelineEventTurnCompleted, domain.AgentTimelineEventTurnFailed:
+			h.clearActiveTurn(envelope.MachineID, payload.Event.ThreadID, payload.Event.TurnID, envelope.Timestamp)
+		}
+	}
+}
+
+func (h *ClientHub) applyTimelineEvent(envelope protocol.Envelope) {
+	if envelope.Name != "timeline.event" {
+		return
+	}
+	var payload protocol.TimelineEventPayload
+	if err := transport.Decode(envelope.Payload, &payload); err != nil {
+		return
+	}
+	if h.registry != nil {
+		h.registry.AppendTimelineEvent(payload.Event)
+	}
+	if payload.Event.Approval == nil || payload.Event.Approval.RequestID == "" {
+		return
+	}
+	requestID := payload.Event.Approval.RequestID
+	switch payload.Event.EventType {
+	case domain.AgentTimelineEventApprovalRequested:
+		h.mu.Lock()
+		h.approvalRequests[requestID] = envelope.MachineID
+		h.mu.Unlock()
+		if h.registry != nil {
+			h.registry.UpsertPendingApproval(envelope.MachineID, timelineApprovalToProtocol(payload.Event))
+		}
+	case domain.AgentTimelineEventApprovalResolved:
+		h.mu.Lock()
+		delete(h.approvalRequests, requestID)
+		h.mu.Unlock()
+		if h.registry != nil {
+			h.registry.RemovePendingApproval(requestID)
+		}
+	}
+}
+
 func normalizeApprovalEnvelope(envelope protocol.Envelope) protocol.Envelope {
 	switch envelope.Name {
 	case "approval.required":
@@ -372,6 +422,53 @@ func normalizeApprovalEnvelope(envelope protocol.Envelope) protocol.Envelope {
 		envelope.Payload = mustMarshalApprovalPayload(payload, envelope.Payload)
 	}
 	return envelope
+}
+
+func normalizeTimelineEnvelope(envelope protocol.Envelope) protocol.Envelope {
+	if envelope.Name != "timeline.event" {
+		return envelope
+	}
+	var payload protocol.TimelineEventPayload
+	if err := transport.Decode(envelope.Payload, &payload); err != nil {
+		return envelope
+	}
+	if payload.Event.MachineID == "" {
+		payload.Event.MachineID = envelope.MachineID
+	}
+	if payload.Event.Approval != nil && payload.Event.Approval.RequestID != "" {
+		requestID := normalizeApprovalRequestID(envelope.MachineID, payload.Event.Approval.RequestID)
+		payload.Event.Approval.RequestID = requestID
+		if envelope.RequestID == "" {
+			envelope.RequestID = requestID
+		}
+	}
+	if encoded, err := json.Marshal(payload); err == nil {
+		envelope.Payload = encoded
+	}
+	return envelope
+}
+
+func timelineApprovalToProtocol(event domain.AgentTimelineEvent) protocol.ApprovalRequiredPayload {
+	payload := protocol.ApprovalRequiredPayload{
+		ThreadID: event.ThreadID,
+		TurnID:   event.TurnID,
+		ItemID:   event.ItemID,
+	}
+	if event.Approval != nil {
+		payload.RequestID = event.Approval.RequestID
+		payload.Kind = event.Approval.Kind
+		payload.Reason = event.Approval.Reason
+		payload.Command = event.Approval.Title
+		payload.Questions = make([]protocol.ApprovalQuestionPayload, 0, len(event.Approval.Questions))
+		for _, question := range event.Approval.Questions {
+			payload.Questions = append(payload.Questions, protocol.ApprovalQuestionPayload{
+				ID:      question.ID,
+				Text:    question.Label,
+				Options: append([]string(nil), question.Options...),
+			})
+		}
+	}
+	return payload
 }
 
 func normalizeApprovalRequestID(machineID string, requestID string) string {

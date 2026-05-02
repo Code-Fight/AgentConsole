@@ -23,4 +23,5 @@ type CapabilitySnapshot struct {
 	SettingsApplyMachine        bool `json:"settingsApplyMachine"`
 	DashboardMetrics            bool `json:"dashboardMetrics"`
 	AgentLifecycle              bool `json:"agentLifecycle"`
+	AgentTimelineEvents         bool `json:"agentTimelineEvents"`
 }

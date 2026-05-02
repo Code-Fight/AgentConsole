@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   ArrowUpRight,
   Bot,
@@ -8,6 +10,7 @@ import {
   Circle,
   Copy,
   FileCode2,
+  Loader2,
   Minus,
   MoreHorizontal,
   Plus,
@@ -143,7 +146,116 @@ type ChatMessage = WorkspaceMessageViewModel & {
   terminalOutput?: string;
 };
 
-function MessageBubble({ message }: { message: ChatMessage }) {
+function ExecutingIndicator({ className = "" }: { className?: string }) {
+  return (
+    <div className={`flex items-center gap-2 text-emerald-400 text-sm ${className}`}>
+      <Loader2 className="size-4 animate-spin" />
+      <span>正在执行...</span>
+    </div>
+  );
+}
+
+function ProgressBlock({ text, isExecuting }: { text: string; isExecuting?: boolean }) {
+  const [expanded, setExpanded] = useState(Boolean(isExecuting));
+  const cleanedText = text.trim();
+  const lineCount = cleanedText ? cleanedText.split("\n").filter((line) => line.trim() !== "").length : 0;
+
+  useEffect(() => {
+    setExpanded(Boolean(isExecuting));
+  }, [isExecuting]);
+
+  if (!cleanedText) {
+    return null;
+  }
+
+  return (
+    <div className="mb-2 overflow-hidden rounded-lg border border-zinc-800/80 bg-zinc-900/40">
+      <button
+        type="button"
+        onClick={() => setExpanded((current) => !current)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left transition-colors hover:bg-zinc-800/40"
+      >
+        {expanded ? (
+          <ChevronDown className="size-4 flex-shrink-0 text-zinc-500" />
+        ) : (
+          <ChevronRight className="size-4 flex-shrink-0 text-zinc-500" />
+        )}
+        <span className="text-xs text-zinc-400">{isExecuting ? "处理中" : "已处理"}</span>
+        {lineCount > 0 ? <span className="text-xs text-zinc-600">{lineCount} 行</span> : null}
+      </button>
+      {expanded ? (
+        <div className="border-t border-zinc-800/80 px-3 py-2">
+          <AgentMarkdown text={cleanedText} />
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function AgentMarkdown({ text }: { text: string }) {
+  return (
+    <div className="text-sm text-zinc-200 leading-6 break-words">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <p className="my-2 first:mt-0 last:mb-0">{children}</p>,
+          strong: ({ children }) => <strong className="font-semibold text-zinc-100">{children}</strong>,
+          em: ({ children }) => <em className="italic text-zinc-200">{children}</em>,
+          h1: ({ children }) => <h1 className="mt-4 mb-2 text-xl font-semibold text-zinc-50">{children}</h1>,
+          h2: ({ children }) => <h2 className="mt-4 mb-2 text-lg font-semibold text-zinc-50">{children}</h2>,
+          h3: ({ children }) => <h3 className="mt-3 mb-2 text-base font-semibold text-zinc-50">{children}</h3>,
+          ul: ({ children }) => <ul className="my-2 ml-5 list-disc space-y-1">{children}</ul>,
+          ol: ({ children }) => <ol className="my-2 ml-5 list-decimal space-y-1">{children}</ol>,
+          li: ({ children }) => <li className="pl-1">{children}</li>,
+          blockquote: ({ children }) => (
+            <blockquote className="my-3 border-l-2 border-zinc-600 pl-3 text-zinc-300">
+              {children}
+            </blockquote>
+          ),
+          code: ({ children }) => (
+            <code className="rounded bg-zinc-950/70 px-1.5 py-0.5 font-mono text-[0.85em] text-zinc-100">
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => (
+            <pre className="my-3 overflow-x-auto rounded-lg border border-zinc-700/60 bg-zinc-950 p-3 text-xs leading-5">
+              {children}
+            </pre>
+          ),
+          table: ({ children }) => (
+            <div className="my-3 overflow-x-auto rounded-lg border border-zinc-700/70">
+              <table className="w-full border-collapse text-left text-xs">{children}</table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-zinc-900/80 text-zinc-200">{children}</thead>,
+          tbody: ({ children }) => <tbody className="divide-y divide-zinc-800">{children}</tbody>,
+          th: ({ children }) => <th className="border-b border-zinc-700 px-3 py-2 font-semibold">{children}</th>,
+          td: ({ children }) => <td className="px-3 py-2 align-top text-zinc-300">{children}</td>,
+          a: ({ children, href }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className="text-blue-300 underline decoration-blue-400/40 underline-offset-2 hover:text-blue-200"
+            >
+              {children}
+            </a>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function MessageBubble({
+  message,
+  isExecuting,
+}: {
+  message: ChatMessage;
+  isExecuting?: boolean;
+}) {
   const [copied, setCopied] = useState(false);
   const isUser = message.kind === "user";
 
@@ -183,15 +295,26 @@ function MessageBubble({ message }: { message: ChatMessage }) {
     );
   }
 
+  const hasAgentBody = Boolean(isExecuting || message.progressText || message.text);
+
   return (
     <div className="flex gap-3 group">
       <div className="size-8 rounded-full bg-gradient-to-br from-violet-600 to-blue-600 flex items-center justify-center flex-shrink-0 mt-1">
         <Bot className="size-4 text-white" />
       </div>
       <div className="flex-1 min-w-0">
-        {message.text ? (
-          <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-2xl rounded-tl-sm px-4 py-3">
-            <p className="text-sm text-zinc-200 whitespace-pre-wrap leading-6">{message.text}</p>
+        {hasAgentBody ? (
+          <div
+            data-testid="agent-message-bubble"
+            className="bg-zinc-800/50 border border-zinc-700/50 rounded-2xl rounded-tl-sm px-4 py-3"
+          >
+            {isExecuting ? (
+              <ExecutingIndicator className={message.progressText || message.text ? "mb-3" : ""} />
+            ) : null}
+            {message.progressText ? (
+              <ProgressBlock text={message.progressText} isExecuting={isExecuting} />
+            ) : null}
+            {message.text ? <AgentMarkdown text={message.text} /> : null}
           </div>
         ) : null}
         {message.fileChanges && message.fileChanges.length > 0 ? (
@@ -246,7 +369,7 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView?.({ behavior: "smooth" });
-  }, [messages, workspace.pendingApprovals, workspace.isSubmitting]);
+  }, [messages, workspace.pendingApprovals, workspace.isExecuting]);
 
   const handleSend = () => {
     if (workspace.isSubmitting) {
@@ -274,13 +397,12 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   };
 
-  const statusColor = {
-    active: "text-emerald-400",
-    idle: "text-zinc-500",
-    systemError: "text-red-400",
-    notLoaded: "text-amber-400",
-    unknown: "text-zinc-500",
-  }[session.status];
+  const statusColor =
+    session.status === "active"
+      ? "text-emerald-400"
+      : session.status === "systemError"
+        ? "text-red-400"
+        : "text-zinc-500";
 
   const machineStatusDot = {
     online: "bg-emerald-400",
@@ -302,6 +424,16 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
   const permissionOptions = workspace.runtimeSandboxOptions.length
     ? workspace.runtimeSandboxOptions
     : ["workspace-write", "danger-full-access", "read-only"];
+  const executingMessageId =
+    workspace.isExecuting
+      ? messages.find(
+          (message) =>
+            message.kind === "agent" &&
+            ((workspace.activeTurnId && message.turnId === workspace.activeTurnId) ||
+              message.isPending),
+        )?.id
+      : undefined;
+  const showExecutingPlaceholder = workspace.isExecuting && !executingMessageId;
 
   const handleApprovalDecision = (
     requestId: string,
@@ -353,7 +485,11 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
 
       <div className="flex-1 overflow-y-auto px-4 lg:px-8 py-6 space-y-6">
         {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble
+            key={message.id}
+            message={message}
+            isExecuting={message.id === executingMessageId}
+          />
         ))}
 
         {workspace.pendingApprovals.map((approval: WorkspaceApprovalCardViewModel) => (
@@ -461,18 +597,12 @@ export default function SessionChat({ session, machine, workspace }: SessionChat
           </div>
         ))}
 
-        {workspace.isSubmitting ? (
+        {showExecutingPlaceholder ? (
           <div className="flex gap-3">
             <div className="size-8 rounded-full bg-gradient-to-br from-violet-600 to-blue-600 flex items-center justify-center flex-shrink-0">
               <Bot className="size-4 text-white" />
             </div>
-            <div className="bg-zinc-800/50 border border-zinc-700/50 rounded-2xl rounded-tl-sm px-4 py-3">
-              <div className="flex gap-1.5 items-center h-5">
-                <div className="size-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
-                <div className="size-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
-                <div className="size-1.5 bg-zinc-400 rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
-              </div>
-            </div>
+            <ExecutingIndicator />
           </div>
         ) : null}
 

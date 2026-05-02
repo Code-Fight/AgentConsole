@@ -38,6 +38,7 @@ type threadDetailResponse struct {
 	ActiveTurnID     string                             `json:"activeTurnId,omitempty"`
 	PendingApprovals []protocol.ApprovalRequiredPayload `json:"pendingApprovals"`
 	Messages         []domain.ThreadMessage             `json:"messages,omitempty"`
+	Events           []domain.AgentTimelineEvent        `json:"events,omitempty"`
 }
 
 type threadDeleteResponse struct {
@@ -600,6 +601,7 @@ func buildCapabilitySnapshot(reg *registry.Store, idx *runtimeindex.Store, route
 		SettingsApplyMachine:        hasSettings && hasSender,
 		DashboardMetrics:            hasRegistry && hasRuntimeIndex,
 		AgentLifecycle:              hasSender && hasRegistry,
+		AgentTimelineEvents:         threadWorkspace,
 	}
 }
 
@@ -1284,8 +1286,10 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 
 		overrides := resolveThreadTitleOverrides(settingsStore)
 		pendingApprovals := []protocol.ApprovalRequiredPayload{}
+		timelineEvents := []domain.AgentTimelineEvent{}
 		if reg != nil {
 			pendingApprovals = reg.PendingApprovalsForThread(threadID)
+			timelineEvents = reg.TimelineEventsForThread(threadID)
 		}
 		activeTurnID := resolveActiveTurnID(sender, threadID)
 		snapshotThread, hasSnapshotThread := findThread(idx, threadID)
@@ -1320,6 +1324,7 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 							ActiveTurnID:     activeTurnID,
 							PendingApprovals: pendingApprovals,
 							Messages:         messages,
+							Events:           timelineEvents,
 						})
 						return
 					}
@@ -1340,6 +1345,7 @@ func newServerWithSettingsAndAPIKey(reg *registry.Store, idx *runtimeindex.Store
 			ActiveTurnID:     activeTurnID,
 			PendingApprovals: pendingApprovals,
 			Messages:         messages,
+			Events:           timelineEvents,
 		})
 	})
 

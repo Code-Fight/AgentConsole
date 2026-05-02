@@ -205,7 +205,7 @@ func (c *runtimeController) bindSession(session *clientSession, mgr *manager.Man
 	}
 	c.mu.Unlock()
 
-	streamsTurnEvents := bindRuntimeTurnEvents(runtime, session, mgr, c.registry, c.runtimeName)
+	streamsTurnEvents := bindRuntimeEventStreams(runtime, session, mgr, c.registry, c.runtimeName)
 	bindRuntimeApprovalEvents(runtime, session, c.runtimeName)
 
 	c.mu.Lock()
@@ -375,6 +375,13 @@ func (s *clientSession) CommandRejected(requestID string, commandName string, re
 
 func (s *clientSession) TurnDelta(requestID string, payload protocol.TurnDeltaPayload) error {
 	return s.delegate.TurnDelta(requestID, payload)
+}
+
+func (s *clientSession) TimelineEvent(requestID string, payload protocol.TimelineEventPayload) error {
+	if payload.Event.MachineID == "" {
+		payload.Event.MachineID = s.machineID
+	}
+	return s.sendEnvelope(protocol.CategoryEvent, "timeline.event", requestID, payload)
 }
 
 func (s *clientSession) TurnCompleted(requestID string, payload protocol.TurnCompletedPayload) error {
@@ -638,6 +645,25 @@ func (stoppedRuntime) InterruptTurn(agenttypes.InterruptTurnParams) (domain.Turn
 	return domain.Turn{}, fmt.Errorf("runtime is stopped")
 }
 
+func bindRuntimeEventStreams(runtime agenttypes.Runtime, session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string) bool {
+	if bindRuntimeTimelineEvents(runtime, session, mgr, registry, runtimeName) {
+		return true
+	}
+	return bindRuntimeTurnEvents(runtime, session, mgr, registry, runtimeName)
+}
+
+func bindRuntimeTimelineEvents(runtime agenttypes.Runtime, session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string) bool {
+	source, ok := runtime.(agenttypes.RuntimeTimelineEventSource)
+	if !ok {
+		return false
+	}
+
+	source.SetTimelineEventHandler(func(event domain.AgentTimelineEvent) {
+		_ = handleRuntimeTimelineEvent(session, mgr, registry, runtimeName, event)
+	})
+	return true
+}
+
 func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string) bool {
 	source, ok := runtime.(agenttypes.RuntimeTurnEventSource)
 	if !ok {
@@ -645,9 +671,23 @@ func bindRuntimeTurnEvents(runtime agenttypes.Runtime, session *clientSession, m
 	}
 
 	source.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
-		_ = handleRuntimeTurnEvent(session, mgr, registry, runtimeName, event)
+		_ = emitRuntimeTimelineOnly(session, runtimeName, runtimeTurnEventToTimeline(event))
+		_ = emitRuntimeTurnEvent(session, runtimeName, event)
+		if shouldRefreshThreadSnapshotForTurnEvent(event) && mgr != nil && runtimeName != "" {
+			_ = refreshThreadSnapshot(session, mgr, registry)
+		}
 	})
 	return true
+}
+
+func handleRuntimeTimelineEvent(session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string, event domain.AgentTimelineEvent) error {
+	if err := emitRuntimeTimelineEvent(session, runtimeName, event); err != nil {
+		return err
+	}
+	if !shouldRefreshThreadSnapshotForTimelineEvent(event) || mgr == nil || runtimeName == "" {
+		return nil
+	}
+	return refreshThreadSnapshot(session, mgr, registry)
 }
 
 func handleRuntimeTurnEvent(session *clientSession, mgr *manager.Manager, registry *agentregistry.Registry, runtimeName string, event agenttypes.RuntimeTurnEvent) error {
@@ -662,7 +702,16 @@ func handleRuntimeTurnEvent(session *clientSession, mgr *manager.Manager, regist
 
 func shouldRefreshThreadSnapshotForTurnEvent(event agenttypes.RuntimeTurnEvent) bool {
 	switch event.Type {
-	case agenttypes.RuntimeTurnEventTypeStarted, agenttypes.RuntimeTurnEventTypeCompleted, agenttypes.RuntimeTurnEventTypeFailed:
+	case agenttypes.RuntimeTurnEventTypeCompleted, agenttypes.RuntimeTurnEventTypeFailed:
+		return true
+	default:
+		return false
+	}
+}
+
+func shouldRefreshThreadSnapshotForTimelineEvent(event domain.AgentTimelineEvent) bool {
+	switch event.EventType {
+	case domain.AgentTimelineEventTurnCompleted, domain.AgentTimelineEventTurnFailed:
 		return true
 	default:
 		return false
@@ -682,6 +731,7 @@ func emitRuntimeTurnEvent(session *clientSession, agentID string, event agenttyp
 			TurnID:   event.TurnID,
 			Sequence: event.Sequence,
 			Delta:    event.Delta,
+			Kind:     string(event.DeltaKind),
 		})
 	case agenttypes.RuntimeTurnEventTypeCompleted:
 		return session.TurnCompleted(event.RequestID, protocol.TurnCompletedPayload{
@@ -695,6 +745,137 @@ func emitRuntimeTurnEvent(session *clientSession, agentID string, event agenttyp
 	default:
 		return nil
 	}
+}
+
+func emitRuntimeTimelineEvent(session *clientSession, agentID string, event domain.AgentTimelineEvent) error {
+	if err := emitRuntimeTimelineOnly(session, agentID, event); err != nil {
+		return err
+	}
+	return emitLegacyTurnEventForTimeline(session, agentID, event)
+}
+
+func emitRuntimeTimelineOnly(session *clientSession, agentID string, event domain.AgentTimelineEvent) error {
+	event = publicTimelineEventForAgent(agentID, event)
+	return session.TimelineEvent("", protocol.TimelineEventPayload{Event: event})
+}
+
+func emitLegacyTurnEventForTimeline(session *clientSession, agentID string, event domain.AgentTimelineEvent) error {
+	publicThreadID := publicTimelineThreadID(agentID, event.ThreadID)
+	switch event.EventType {
+	case domain.AgentTimelineEventTurnStarted:
+		return session.TurnStarted("", protocol.TurnStartedPayload{
+			ThreadID: publicThreadID,
+			TurnID:   event.TurnID,
+		})
+	case domain.AgentTimelineEventItemDelta:
+		if event.Content == nil {
+			return nil
+		}
+		delta := event.Content.Delta
+		if delta == "" {
+			delta = event.Content.Text
+		}
+		if delta == "" {
+			return nil
+		}
+		kind := string(agenttypes.RuntimeTurnDeltaKindProgress)
+		if event.Phase == domain.AgentTimelinePhaseFinal {
+			kind = string(agenttypes.RuntimeTurnDeltaKindContent)
+		}
+		return session.TurnDelta("", protocol.TurnDeltaPayload{
+			ThreadID: publicThreadID,
+			TurnID:   event.TurnID,
+			Sequence: event.Sequence,
+			Delta:    delta,
+			Kind:     kind,
+		})
+	case domain.AgentTimelineEventTurnCompleted:
+		return session.TurnCompleted("", protocol.TurnCompletedPayload{
+			Turn: domain.Turn{
+				TurnID:   event.TurnID,
+				ThreadID: publicThreadID,
+				Status:   domain.TurnStatusCompleted,
+			},
+		})
+	case domain.AgentTimelineEventTurnFailed:
+		errorMessage := ""
+		if event.Error != nil {
+			errorMessage = event.Error.Message
+		}
+		return session.TurnFailed("", protocol.TurnCompletedPayload{
+			Turn: domain.Turn{
+				TurnID:   event.TurnID,
+				ThreadID: publicThreadID,
+				Status:   domain.TurnStatusFailed,
+			},
+			ErrorMessage: errorMessage,
+		})
+	default:
+		return nil
+	}
+}
+
+func publicTimelineEventForAgent(agentID string, event domain.AgentTimelineEvent) domain.AgentTimelineEvent {
+	event = event.WithDefaults()
+	if event.AgentID == "" {
+		event.AgentID = agentID
+	}
+	event.ThreadID = publicTimelineThreadID(agentID, event.ThreadID)
+	return event
+}
+
+func publicTimelineThreadID(agentID string, threadID string) string {
+	if decodedAgentID, decodedThreadID, ok := domain.DecodePublicThreadID(threadID); ok {
+		return domain.PublicThreadID(decodedAgentID, decodedThreadID)
+	}
+	return domain.PublicThreadID(agentID, threadID)
+}
+
+func runtimeTurnEventToTimeline(event agenttypes.RuntimeTurnEvent) domain.AgentTimelineEvent {
+	sequence := event.Sequence
+	if sequence <= 0 {
+		sequence = 1
+	}
+	timeline := domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       fmt.Sprintf("%s:%d:%s", event.TurnID, sequence, event.Type),
+		Sequence:      sequence,
+		ThreadID:      event.ThreadID,
+		TurnID:        event.TurnID,
+	}
+	switch event.Type {
+	case agenttypes.RuntimeTurnEventTypeStarted:
+		timeline.EventType = domain.AgentTimelineEventTurnStarted
+		timeline.Status = domain.AgentTimelineStatusRunning
+	case agenttypes.RuntimeTurnEventTypeDelta:
+		timeline.EventType = domain.AgentTimelineEventItemDelta
+		timeline.ItemID = fmt.Sprintf("%s:legacy-message", event.TurnID)
+		timeline.ItemType = domain.AgentTimelineItemMessage
+		timeline.Role = domain.AgentTimelineRoleAssistant
+		timeline.Phase = domain.AgentTimelinePhaseFinal
+		if event.DeltaKind == agenttypes.RuntimeTurnDeltaKindProgress {
+			timeline.Phase = domain.AgentTimelinePhaseProgress
+		}
+		timeline.Status = domain.AgentTimelineStatusRunning
+		timeline.Content = &domain.AgentTimelineContent{
+			ContentType: domain.AgentTimelineContentMarkdown,
+			Delta:       event.Delta,
+			AppendMode:  domain.AgentTimelineAppendAppend,
+		}
+	case agenttypes.RuntimeTurnEventTypeCompleted:
+		timeline.EventType = domain.AgentTimelineEventTurnCompleted
+		timeline.Status = domain.AgentTimelineStatusCompleted
+	case agenttypes.RuntimeTurnEventTypeFailed:
+		timeline.EventType = domain.AgentTimelineEventTurnFailed
+		timeline.Status = domain.AgentTimelineStatusFailed
+		if event.ErrorMessage != "" {
+			timeline.Error = &domain.AgentTimelineError{Message: event.ErrorMessage}
+		}
+	default:
+		timeline.EventType = domain.AgentTimelineEventSystem
+		timeline.Status = domain.AgentTimelineStatusCompleted
+	}
+	return timeline
 }
 
 func bindRuntimeApprovalEvents(runtime agenttypes.Runtime, session *clientSession, agentID string) bool {
@@ -1617,7 +1798,7 @@ func bindManagedRuntimeEvents(agentID string, registry *agentregistry.Registry, 
 		return false
 	}
 
-	streams := bindRuntimeTurnEvents(runtime, session, mgr, registry, agentID)
+	streams := bindRuntimeEventStreams(runtime, session, mgr, registry, agentID)
 	bindRuntimeApprovalEvents(runtime, session, agentID)
 	return streams
 }
@@ -1629,6 +1810,9 @@ func runtimeStreamsTurnEventsForAgent(registry *agentregistry.Registry, agentID 
 	runtime, ok := registry.Get(agentID)
 	if !ok {
 		return false
+	}
+	if _, ok = runtime.(agenttypes.RuntimeTimelineEventSource); ok {
+		return true
 	}
 	_, ok = runtime.(agenttypes.RuntimeTurnEventSource)
 	return ok

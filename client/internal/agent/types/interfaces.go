@@ -62,6 +62,13 @@ type TurnDelta struct {
 	Delta    string
 }
 
+type RuntimeTurnDeltaKind string
+
+const (
+	RuntimeTurnDeltaKindContent  RuntimeTurnDeltaKind = "content"
+	RuntimeTurnDeltaKindProgress RuntimeTurnDeltaKind = "progress"
+)
+
 type RuntimeTurnEventType string
 
 const (
@@ -78,12 +85,17 @@ type RuntimeTurnEvent struct {
 	TurnID       string
 	Sequence     int
 	Delta        string
+	DeltaKind    RuntimeTurnDeltaKind
 	ErrorMessage string
 	Turn         domain.Turn
 }
 
 type RuntimeTurnEventSource interface {
 	SetTurnEventHandler(func(RuntimeTurnEvent))
+}
+
+type RuntimeTimelineEventSource interface {
+	SetTimelineEventHandler(func(domain.AgentTimelineEvent))
 }
 
 type RuntimeApprovalRequest struct {

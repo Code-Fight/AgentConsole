@@ -71,6 +71,7 @@ test("renders / with Gateway Thread 1 and Machine One visible", async () => {
           settingsApplyMachine: true,
           dashboardMetrics: false,
           agentLifecycle: false,
+          agentTimelineEvents: false,
         });
       }
 

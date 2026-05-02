@@ -111,6 +111,13 @@ func (s *Session) TurnDelta(requestID string, payload protocol.TurnDeltaPayload)
 	return s.sendEnvelope(protocol.CategoryEvent, "turn.delta", requestID, payload)
 }
 
+func (s *Session) TimelineEvent(requestID string, payload protocol.TimelineEventPayload) error {
+	if payload.Event.MachineID == "" {
+		payload.Event.MachineID = s.machineID
+	}
+	return s.sendEnvelope(protocol.CategoryEvent, "timeline.event", requestID, payload)
+}
+
 func (s *Session) TurnCompleted(requestID string, payload protocol.TurnCompletedPayload) error {
 	return s.sendEnvelope(protocol.CategoryEvent, "turn.completed", requestID, payload)
 }

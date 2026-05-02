@@ -157,3 +157,98 @@ test("restores unread state from localStorage on initialization", async () => {
 
   expect(result.current.unreadThreadIds.has("thread-2")).toBe(true);
 });
+
+test("reloads thread list when a turn completes", async () => {
+  let onMessage: MessageHandler | null = null;
+  connectConsoleSocketMock.mockImplementation((_, handler: MessageHandler) => {
+    onMessage = handler;
+    return () => {};
+  });
+  listThreadsMock
+    .mockResolvedValueOnce({
+      items: [
+        {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "active",
+          title: "Thread 1",
+        },
+      ],
+    })
+    .mockResolvedValueOnce({
+      items: [
+        {
+          threadId: "thread-1",
+          machineId: "machine-1",
+          status: "idle",
+          title: "Thread 1",
+        },
+      ],
+    });
+
+  const { result } = renderHook(() =>
+    useThreadHub({ enabled: true, selectedThreadId: "thread-1" }),
+  );
+
+  await waitFor(() => {
+    expect(result.current.threadSummaries[0]?.status).toBe("active");
+  });
+  expect(onMessage).not.toBeNull();
+
+  emitEnvelope(onMessage!, {
+    version: "v1",
+    category: "event",
+    name: "turn.completed",
+    timestamp: "2026-04-21T10:00:00Z",
+    payload: {
+      turn: {
+        turnId: "turn-1",
+        threadId: "thread-1",
+        status: "completed",
+      },
+    },
+  });
+
+  await waitFor(() => {
+    expect(result.current.threadSummaries[0]?.status).toBe("idle");
+  });
+});
+
+test("reloads thread list and unread state from timeline completion events", async () => {
+  let onMessage: MessageHandler | null = null;
+  connectConsoleSocketMock.mockImplementation((_, handler: MessageHandler) => {
+    onMessage = handler;
+    return () => {};
+  });
+
+  const { result } = renderHook(() =>
+    useThreadHub({ enabled: true, selectedThreadId: "thread-1" }),
+  );
+
+  await waitFor(() => {
+    expect(result.current.threadSummaries).toHaveLength(2);
+  });
+
+  emitEnvelope(onMessage!, {
+    version: "v1",
+    category: "event",
+    name: "timeline.event",
+    timestamp: "2026-04-21T10:00:00Z",
+    payload: {
+      event: {
+        schemaVersion: "agent-timeline.v1",
+        eventId: "event-1",
+        sequence: 1,
+        threadId: "thread-2",
+        turnId: "turn-2",
+        eventType: "turn.completed",
+        status: "completed",
+      },
+    },
+  });
+
+  await waitFor(() => {
+    expect(result.current.unreadThreadIds.has("thread-2")).toBe(true);
+    expect(listThreadsMock).toHaveBeenCalledTimes(2);
+  });
+});

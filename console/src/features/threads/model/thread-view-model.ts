@@ -6,6 +6,7 @@ import type {
   MachineSummary,
   ThreadStatus,
   ThreadSummary,
+  TimelineEventPayload,
   TurnCompletedPayload,
   TurnDeltaPayload,
   TurnStartedPayload,
@@ -66,7 +67,15 @@ export interface WorkspaceMessageViewModel {
   id: string;
   kind: "user" | "agent" | "system";
   text: string;
+  progressText?: string;
+  isPending?: boolean;
   turnId?: string;
+  terminalOutput?: string;
+  fileChanges?: Array<{
+    path: string;
+    additions: number;
+    deletions: number;
+  }>;
 }
 
 export interface WorkspaceApprovalQuestionViewModel {
@@ -95,14 +104,10 @@ export function formatThreadStatus(status: ThreadStatus): string {
   switch (status) {
     case "active":
       return "进行中";
-    case "idle":
-      return "空闲";
     case "systemError":
       return "异常";
-    case "notLoaded":
-      return "未加载";
     default:
-      return "未知";
+      return "空闲";
   }
 }
 
@@ -160,10 +165,10 @@ export function toThreadHubStatus(status: ThreadStatus): ThreadHubListItemViewMo
   if (status === "active") {
     return "active";
   }
-  if (status === "idle") {
-    return "idle";
+  if (status === "systemError") {
+    return "offline";
   }
-  return "offline";
+  return "idle";
 }
 
 export function toThreadHubItem(
@@ -246,7 +251,7 @@ export function buildThreadMachines(
       title: thread.title || thread.threadId,
       agentName: agents.find((agent) => agent.id === thread.agentId)?.name ?? "Unknown agent",
       model: agents.find((agent) => agent.id === thread.agentId)?.model ?? "unknown",
-      status: thread.status,
+      status: thread.status === "active" || thread.status === "systemError" ? thread.status : "idle",
       lastActivity: formatLastActivity(thread),
       messages: [],
     }));
@@ -290,37 +295,22 @@ export function findThreadSelection(
 }
 
 export function toWorkspaceMessage(delta: TurnDeltaPayload): WorkspaceMessageViewModel {
+  const isProgress = delta.kind === "progress";
+
   return {
     id: `${delta.turnId}:${delta.sequence}`,
     kind: "agent",
-    text: delta.delta,
+    text: isProgress ? "" : delta.delta,
+    progressText: isProgress ? delta.delta : undefined,
     turnId: delta.turnId,
   };
 }
 
-export function toTurnStartedMessage(payload: TurnStartedPayload): WorkspaceMessageViewModel {
-  return {
-    id: `started:${payload.turnId}`,
-    kind: "system",
-    text: `Turn started: ${payload.turnId}`,
-    turnId: payload.turnId,
-  };
-}
-
-export function toTurnCompletedMessage(payload: TurnCompletedPayload): WorkspaceMessageViewModel {
-  if (payload.turn.status === "failed" && payload.errorMessage) {
-    return {
-      id: `completed:${payload.turn.turnId}`,
-      kind: "system",
-      text: `Turn ${payload.turn.turnId} failed: ${payload.errorMessage}`,
-      turnId: payload.turn.turnId,
-    };
-  }
-
+export function toTurnFailedMessage(payload: TurnCompletedPayload): WorkspaceMessageViewModel {
   return {
     id: `completed:${payload.turn.turnId}`,
     kind: "system",
-    text: `Turn ${payload.turn.turnId} ${payload.turn.status}`,
+    text: payload.errorMessage ? `执行失败：${payload.errorMessage}` : "执行失败",
     turnId: payload.turn.turnId,
   };
 }
@@ -373,6 +363,10 @@ export function getEnvelopeThreadId(envelope: EventEnvelope): string | null {
 
   if (envelope.name === "approval.resolved") {
     return (envelope.payload as ApprovalResolvedPayload).threadId ?? null;
+  }
+
+  if (envelope.name === "timeline.event") {
+    return (envelope.payload as TimelineEventPayload).event?.threadId ?? null;
   }
 
   return null;

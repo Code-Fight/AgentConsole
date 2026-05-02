@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"code-agent-gateway/common/domain"
 	"code-agent-gateway/common/transport"
 )
 
@@ -95,5 +96,48 @@ func TestCommandEnvelopeMarshalRequiresRequestID(t *testing.T) {
 
 	if !strings.Contains(err.Error(), "requestId") {
 		t.Fatalf("expected requestId validation error, got %q", err.Error())
+	}
+}
+
+func TestTimelineEventEnvelopeAllowsEventWithoutRequestID(t *testing.T) {
+	payload := TimelineEventPayload{
+		Event: domain.AgentTimelineEvent{
+			SchemaVersion: domain.AgentTimelineSchemaVersion,
+			EventID:       "event-1",
+			Sequence:      1,
+			ThreadID:      "thread-1",
+			TurnID:        "turn-1",
+			EventType:     domain.AgentTimelineEventTurnStarted,
+			Status:        domain.AgentTimelineStatusRunning,
+		},
+	}
+	payloadBlob, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("marshal payload failed: %v", err)
+	}
+
+	msg := Envelope{
+		Version:   "v1",
+		Category:  CategoryEvent,
+		Name:      "timeline.event",
+		MachineID: "machine_01",
+		Timestamp: "2026-04-07T10:00:00Z",
+		Payload:   payloadBlob,
+	}
+
+	blob, err := transport.Encode(msg)
+	if err != nil {
+		t.Fatalf("expected timeline event envelope to encode without requestId, got %v", err)
+	}
+
+	var decoded Envelope
+	if err := json.Unmarshal(blob, &decoded); err != nil {
+		t.Fatalf("unmarshal envelope failed: %v", err)
+	}
+	if decoded.Name != "timeline.event" {
+		t.Fatalf("expected timeline.event, got %q", decoded.Name)
+	}
+	if decoded.RequestID != "" {
+		t.Fatalf("expected empty requestId, got %q", decoded.RequestID)
 	}
 }

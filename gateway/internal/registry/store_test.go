@@ -113,3 +113,55 @@ func TestStoreGetAndPendingApprovals(t *testing.T) {
 		t.Fatalf("unexpected stored approval payload: %+v", stored)
 	}
 }
+
+func TestStoreKeepsTimelineEventsPerThreadWithLimit(t *testing.T) {
+	store := NewStore()
+	store.timelineLimit = 2
+
+	store.AppendTimelineEvent(domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       "event-1",
+		Sequence:      1,
+		ThreadID:      "thread-01",
+		TurnID:        "turn-01",
+		EventType:     domain.AgentTimelineEventTurnStarted,
+	})
+	store.AppendTimelineEvent(domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       "event-other",
+		Sequence:      1,
+		ThreadID:      "thread-02",
+		TurnID:        "turn-02",
+		EventType:     domain.AgentTimelineEventTurnStarted,
+	})
+	store.AppendTimelineEvent(domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       "event-2",
+		Sequence:      2,
+		ThreadID:      "thread-01",
+		TurnID:        "turn-01",
+		EventType:     domain.AgentTimelineEventItemDelta,
+	})
+	store.AppendTimelineEvent(domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       "event-3",
+		Sequence:      3,
+		ThreadID:      "thread-01",
+		TurnID:        "turn-01",
+		EventType:     domain.AgentTimelineEventTurnCompleted,
+	})
+
+	events := store.TimelineEventsForThread("thread-01")
+	if len(events) != 2 {
+		t.Fatalf("expected latest 2 events, got %+v", events)
+	}
+	if events[0].EventID != "event-2" || events[1].EventID != "event-3" {
+		t.Fatalf("unexpected timeline events: %+v", events)
+	}
+
+	events[0].EventID = "mutated"
+	events = store.TimelineEventsForThread("thread-01")
+	if events[0].EventID != "event-2" {
+		t.Fatalf("timeline events should be copied on read, got %+v", events)
+	}
+}

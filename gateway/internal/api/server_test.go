@@ -2049,6 +2049,15 @@ func TestServerThreadDetailIncludesHistoricalMessagesFromLiveRead(t *testing.T) 
 		Name:   "machine-01",
 		Status: domain.MachineStatusOnline,
 	})
+	reg.AppendTimelineEvent(domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       "event-1",
+		Sequence:      1,
+		ThreadID:      "thread-01",
+		TurnID:        "turn-1",
+		EventType:     domain.AgentTimelineEventTurnStarted,
+		Status:        domain.AgentTimelineStatusRunning,
+	})
 
 	idx := runtimeindex.NewStore()
 	thread := domain.Thread{
@@ -2095,8 +2104,9 @@ func TestServerThreadDetailIncludesHistoricalMessagesFromLiveRead(t *testing.T) 
 	}
 
 	var body struct {
-		Thread   domain.Thread          `json:"thread"`
-		Messages []domain.ThreadMessage `json:"messages"`
+		Thread   domain.Thread               `json:"thread"`
+		Messages []domain.ThreadMessage      `json:"messages"`
+		Events   []domain.AgentTimelineEvent `json:"events"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("invalid json: %v", err)
@@ -2106,6 +2116,9 @@ func TestServerThreadDetailIncludesHistoricalMessagesFromLiveRead(t *testing.T) 
 	}
 	if len(body.Messages) != 2 || body.Messages[0].Text != "hello" || body.Messages[1].Text != "hi there" {
 		t.Fatalf("unexpected historical messages: %+v", body.Messages)
+	}
+	if len(body.Events) != 1 || body.Events[0].EventID != "event-1" {
+		t.Fatalf("unexpected timeline events: %+v", body.Events)
 	}
 }
 
@@ -2956,6 +2969,7 @@ func TestCapabilitiesEndpointReflectsDependencies(t *testing.T) {
 		SettingsApplyMachine        bool `json:"settingsApplyMachine"`
 		DashboardMetrics            bool `json:"dashboardMetrics"`
 		AgentLifecycle              bool `json:"agentLifecycle"`
+		AgentTimelineEvents         bool `json:"agentTimelineEvents"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("invalid capabilities json: %v", err)
@@ -2963,6 +2977,9 @@ func TestCapabilitiesEndpointReflectsDependencies(t *testing.T) {
 
 	if !body.ThreadHub || !body.ThreadWorkspace {
 		t.Fatalf("expected thread hub/workspace to be enabled: %+v", body)
+	}
+	if !body.AgentTimelineEvents {
+		t.Fatalf("expected agent timeline events enabled with thread workspace: %+v", body)
 	}
 	if body.Approvals || body.StartTurn || body.SteerTurn || body.InterruptTurn {
 		t.Fatalf("expected command-driven capabilities to be disabled: %+v", body)
@@ -3030,6 +3047,7 @@ func TestCapabilitiesEndpointEnablesCommandBackedFeatures(t *testing.T) {
 		EnvironmentWriteMcp        bool `json:"environmentWriteMcp"`
 		EnvironmentWriteSkills     bool `json:"environmentWriteSkills"`
 		SettingsApplyMachine       bool `json:"settingsApplyMachine"`
+		AgentTimelineEvents        bool `json:"agentTimelineEvents"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("invalid capabilities json: %v", err)
@@ -3046,6 +3064,9 @@ func TestCapabilitiesEndpointEnablesCommandBackedFeatures(t *testing.T) {
 	}
 	if !body.SettingsApplyMachine {
 		t.Fatalf("expected settings apply enabled: %+v", body)
+	}
+	if !body.AgentTimelineEvents {
+		t.Fatalf("expected agent timeline events enabled: %+v", body)
 	}
 }
 

@@ -29,6 +29,7 @@ const defaultCapabilities: CapabilitySnapshot = {
   settingsApplyMachine: false,
   dashboardMetrics: false,
   agentLifecycle: false,
+  agentTimelineEvents: false,
 };
 
 export type ConsoleCapability = keyof CapabilitySnapshot;

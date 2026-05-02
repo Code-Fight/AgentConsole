@@ -12,6 +12,8 @@ type Store struct {
 	mu               sync.RWMutex
 	machines         map[string]domain.Machine
 	pendingApprovals map[string]storedApprovalRequest
+	timelineEvents   map[string][]domain.AgentTimelineEvent
+	timelineLimit    int
 }
 
 type storedApprovalRequest struct {
@@ -23,6 +25,8 @@ func NewStore() *Store {
 	return &Store{
 		machines:         map[string]domain.Machine{},
 		pendingApprovals: map[string]storedApprovalRequest{},
+		timelineEvents:   map[string][]domain.AgentTimelineEvent{},
+		timelineLimit:    500,
 	}
 }
 
@@ -153,4 +157,38 @@ func (s *Store) PendingApprovalCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.pendingApprovals)
+}
+
+func (s *Store) AppendTimelineEvent(event domain.AgentTimelineEvent) {
+	if event.ThreadID == "" || event.EventID == "" {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	events := append(s.timelineEvents[event.ThreadID], event)
+	limit := s.timelineLimit
+	if limit <= 0 {
+		limit = 500
+	}
+	if len(events) > limit {
+		events = events[len(events)-limit:]
+	}
+	s.timelineEvents[event.ThreadID] = events
+}
+
+func (s *Store) TimelineEventsForThread(threadID string) []domain.AgentTimelineEvent {
+	if threadID == "" {
+		return nil
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	events := s.timelineEvents[threadID]
+	if len(events) == 0 {
+		return nil
+	}
+	return append([]domain.AgentTimelineEvent(nil), events...)
 }

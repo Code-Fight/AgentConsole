@@ -53,6 +53,21 @@ func (c *AppServerClient) RespondApproval(requestID string, decision string, ans
 		return err
 	}
 
+	if pending.request.ThreadID != "" && pending.request.TurnID != "" {
+		c.emitTimelineEvent(codexApprovalTimelineEvent(
+			pending.request.ThreadID,
+			pending.request.TurnID,
+			requestID,
+			pending.request.ItemID,
+			pending.request.Kind,
+			pending.request.Reason,
+			pending.request.Command,
+			pending.request.UserInputQuestions,
+			decision,
+			c.nextTimelineSequence(pending.request.TurnID),
+			true,
+		))
+	}
 	c.deletePendingApproval(requestID)
 	return nil
 }

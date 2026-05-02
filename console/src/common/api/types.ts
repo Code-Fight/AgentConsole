@@ -82,6 +82,7 @@ export interface CapabilitySnapshot {
   settingsApplyMachine: boolean;
   dashboardMetrics: boolean;
   agentLifecycle: boolean;
+  agentTimelineEvents: boolean;
 }
 
 export interface OverviewMetrics {
@@ -186,6 +187,9 @@ export interface ThreadHistoryMessage {
   kind: "user" | "agent" | "system";
   text: string;
   turnId?: string;
+  phase?: string;
+  contentType?: string;
+  progressText?: string;
 }
 
 export interface ThreadDetailResponse {
@@ -193,6 +197,7 @@ export interface ThreadDetailResponse {
   activeTurnId?: string | null;
   pendingApprovals: ApprovalRequiredPayload[];
   messages?: ThreadHistoryMessage[];
+  events?: AgentTimelineEvent[];
 }
 
 export interface ThreadResumeResponse {
@@ -247,6 +252,7 @@ export interface TurnDeltaPayload {
   turnId: string;
   sequence: number;
   delta: string;
+  kind?: "content" | "progress" | string;
 }
 
 export interface TurnStartedPayload {
@@ -275,6 +281,98 @@ export interface ApprovalResolvedPayload {
   threadId?: string;
   turnId?: string;
   decision: ApprovalDecision;
+}
+
+export type AgentTimelineEventType =
+  | "turn.started"
+  | "turn.completed"
+  | "turn.failed"
+  | "item.started"
+  | "item.delta"
+  | "item.completed"
+  | "item.failed"
+  | "approval.requested"
+  | "approval.resolved"
+  | "system.event"
+  | string;
+
+export type AgentTimelineItemType =
+  | "message"
+  | "reasoning"
+  | "plan"
+  | "tool"
+  | "command"
+  | "file_change"
+  | "web_search"
+  | "browser_action"
+  | "mcp_tool"
+  | "subagent"
+  | "artifact"
+  | "image"
+  | "context"
+  | "mode_change"
+  | "unknown"
+  | string;
+
+export type AgentTimelinePhase = "input" | "analysis" | "progress" | "final" | "system" | string;
+export type AgentTimelineStatus =
+  | "pending"
+  | "running"
+  | "blocked"
+  | "completed"
+  | "failed"
+  | "declined"
+  | "cancelled"
+  | string;
+
+export interface AgentTimelineContent {
+  contentType: "markdown" | "text" | "json" | "terminal" | "diff" | "image" | "file" | string;
+  delta?: string;
+  text?: string;
+  snapshot?: unknown;
+  appendMode?: "append" | "replace" | "snapshot" | string;
+}
+
+export interface AgentTimelineTool {
+  kind: string;
+  name?: string;
+  input?: unknown;
+  output?: unknown;
+}
+
+export interface AgentTimelineApproval {
+  requestId: string;
+  kind: string;
+  title?: string;
+  reason?: string;
+  questions?: Array<{ id: string; label: string; options?: string[] }>;
+  decision?: ApprovalDecision | string;
+}
+
+export interface AgentTimelineEvent {
+  schemaVersion: string;
+  eventId: string;
+  sequence: number;
+  timestamp?: string;
+  machineId?: string;
+  agentId?: string;
+  threadId: string;
+  turnId?: string;
+  itemId?: string;
+  eventType: AgentTimelineEventType;
+  itemType?: AgentTimelineItemType;
+  role?: "user" | "assistant" | "system" | "tool" | string;
+  phase?: AgentTimelinePhase;
+  status?: AgentTimelineStatus;
+  content?: AgentTimelineContent;
+  tool?: AgentTimelineTool;
+  approval?: AgentTimelineApproval;
+  error?: { message: string; code?: string };
+  raw?: { provider: string; method?: string; payload?: unknown };
+}
+
+export interface TimelineEventPayload {
+  event: AgentTimelineEvent;
 }
 
 export interface EventEnvelope<TPayload = unknown> {

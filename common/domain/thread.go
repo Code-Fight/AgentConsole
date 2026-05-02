@@ -42,10 +42,13 @@ type Thread struct {
 }
 
 type ThreadMessage struct {
-	ID     string            `json:"id"`
-	TurnID string            `json:"turnId,omitempty"`
-	Kind   ThreadMessageKind `json:"kind"`
-	Text   string            `json:"text"`
+	ID           string            `json:"id"`
+	TurnID       string            `json:"turnId,omitempty"`
+	Kind         ThreadMessageKind `json:"kind"`
+	Text         string            `json:"text"`
+	Phase        string            `json:"phase,omitempty"`
+	ContentType  string            `json:"contentType,omitempty"`
+	ProgressText string            `json:"progressText,omitempty"`
 }
 
 type ThreadRoute struct {

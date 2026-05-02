@@ -135,6 +135,88 @@ func TestClientHubTracksActiveTurnsForThreadRecovery(t *testing.T) {
 	}
 }
 
+func TestClientHubAppliesTimelineLifecycleAndApprovalState(t *testing.T) {
+	reg := registry.NewStore()
+	idx := runtimeindex.NewStore()
+	hub := NewClientHubWithStores(reg, idx)
+	hub.upsertThreadSnapshot("machine-01", domain.Thread{
+		ThreadID:  "thread-01",
+		MachineID: "machine-01",
+		Status:    domain.ThreadStatusIdle,
+		Title:     "Timeline",
+	})
+
+	started := protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "timeline.event",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-20T10:00:00Z",
+		Payload: mustMarshalJSON(t, protocol.TimelineEventPayload{Event: domain.AgentTimelineEvent{
+			SchemaVersion: domain.AgentTimelineSchemaVersion,
+			EventID:       "event-started",
+			Sequence:      1,
+			ThreadID:      "thread-01",
+			TurnID:        "turn-01",
+			EventType:     domain.AgentTimelineEventTurnStarted,
+			Status:        domain.AgentTimelineStatusRunning,
+		}}),
+	}
+	hub.applyTurnLifecycleEvent(started)
+	if activeTurnID, ok := hub.ActiveTurnID("thread-01"); !ok || activeTurnID != "turn-01" {
+		t.Fatalf("expected timeline turn to become active, got %q ok=%v", activeTurnID, ok)
+	}
+
+	approval := normalizeTimelineEnvelope(protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "timeline.event",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-20T10:00:01Z",
+		Payload: mustMarshalJSON(t, protocol.TimelineEventPayload{Event: domain.AgentTimelineEvent{
+			SchemaVersion: domain.AgentTimelineSchemaVersion,
+			EventID:       "event-approval",
+			Sequence:      2,
+			ThreadID:      "thread-01",
+			TurnID:        "turn-01",
+			ItemID:        "command-01",
+			EventType:     domain.AgentTimelineEventApprovalRequested,
+			ItemType:      domain.AgentTimelineItemCommand,
+			Approval: &domain.AgentTimelineApproval{
+				RequestID: "approval-01",
+				Kind:      "command",
+				Title:     "go test ./...",
+			},
+		}}),
+	})
+	hub.applyTimelineEvent(approval)
+	approvals := reg.PendingApprovalsForThread("thread-01")
+	if len(approvals) != 1 || approvals[0].RequestID != expectedApprovalRequestID("machine-01", "approval-01") {
+		t.Fatalf("unexpected timeline pending approvals: %+v", approvals)
+	}
+
+	completed := protocol.Envelope{
+		Version:   version.CurrentProtocolVersion,
+		Category:  protocol.CategoryEvent,
+		Name:      "timeline.event",
+		MachineID: "machine-01",
+		Timestamp: "2026-04-20T10:00:02Z",
+		Payload: mustMarshalJSON(t, protocol.TimelineEventPayload{Event: domain.AgentTimelineEvent{
+			SchemaVersion: domain.AgentTimelineSchemaVersion,
+			EventID:       "event-completed",
+			Sequence:      3,
+			ThreadID:      "thread-01",
+			TurnID:        "turn-01",
+			EventType:     domain.AgentTimelineEventTurnCompleted,
+			Status:        domain.AgentTimelineStatusCompleted,
+		}}),
+	}
+	hub.applyTurnLifecycleEvent(completed)
+	if activeTurnID, ok := hub.ActiveTurnID("thread-01"); ok || activeTurnID != "" {
+		t.Fatalf("expected timeline turn to clear, got %q ok=%v", activeTurnID, ok)
+	}
+}
+
 func TestClientHubIgnoresMessagesFromSupersededConnection(t *testing.T) {
 	reg := registry.NewStore()
 	idx := runtimeindex.NewStore()

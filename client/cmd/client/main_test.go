@@ -330,36 +330,28 @@ func TestHandleCommandEnvelopeAsyncRuntimeKeepsTurnStartAsAckOnly(t *testing.T) 
 		},
 	})
 
-	if len(*sent) != 6 {
-		t.Fatalf("expected ack, 3 runtime events, and 2 thread snapshots, got %d frames", len(*sent))
+	expectedNames := []string{
+		"command.completed",
+		"timeline.event",
+		"turn.started",
+		"timeline.event",
+		"turn.delta",
+		"timeline.event",
+		"turn.completed",
+		"thread.snapshot",
 	}
-	if decodeEnvelope(t, (*sent)[1]).Name != "turn.started" {
-		t.Fatalf("unexpected started envelope: %+v", decodeEnvelope(t, (*sent)[1]))
-	}
-	if decodeEnvelope(t, (*sent)[2]).Name != "thread.snapshot" {
-		t.Fatalf("unexpected first snapshot envelope: %+v", decodeEnvelope(t, (*sent)[2]))
-	}
-	if decodeEnvelope(t, (*sent)[3]).Name != "turn.delta" {
-		t.Fatalf("unexpected delta envelope: %+v", decodeEnvelope(t, (*sent)[3]))
-	}
-	if decodeEnvelope(t, (*sent)[4]).Name != "turn.completed" {
-		t.Fatalf("unexpected completed envelope: %+v", decodeEnvelope(t, (*sent)[4]))
-	}
-	if decodeEnvelope(t, (*sent)[5]).Name != "thread.snapshot" {
-		t.Fatalf("unexpected second snapshot envelope: %+v", decodeEnvelope(t, (*sent)[5]))
+	if got := envelopeNames(t, *sent); !stringSlicesEqual(got, expectedNames) {
+		t.Fatalf("unexpected envelope names: got %v want %v", got, expectedNames)
 	}
 }
 
-func TestBindRuntimeTurnEventsRefreshesThreadSnapshotOnStartedAndCompleted(t *testing.T) {
+func TestBindRuntimeTurnEventsRefreshesThreadSnapshotOnCompleted(t *testing.T) {
 	runtime := &notifyingRuntime{
 		startTurnResult: agenttypes.StartTurnResult{
 			TurnID:   "turn-async-1",
 			ThreadID: "thread-01",
 		},
 		threadSnapshots: [][]domain.Thread{
-			{
-				{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusActive, Title: "One"},
-			},
 			{
 				{ThreadID: "thread-01", MachineID: "machine-01", Status: domain.ThreadStatusIdle, Title: "One"},
 			},
@@ -388,30 +380,20 @@ func TestBindRuntimeTurnEventsRefreshesThreadSnapshotOnStartedAndCompleted(t *te
 		},
 	})
 
-	if len(*sent) != 4 {
-		t.Fatalf("expected turn events plus 2 thread snapshots, got %d frames", len(*sent))
+	expectedNames := []string{
+		"timeline.event",
+		"turn.started",
+		"timeline.event",
+		"turn.completed",
+		"thread.snapshot",
 	}
-	if decodeEnvelope(t, (*sent)[0]).Name != "turn.started" {
-		t.Fatalf("unexpected first envelope: %+v", decodeEnvelope(t, (*sent)[0]))
-	}
-	if decodeEnvelope(t, (*sent)[1]).Name != "thread.snapshot" {
-		t.Fatalf("unexpected second envelope: %+v", decodeEnvelope(t, (*sent)[1]))
-	}
-	if decodeEnvelope(t, (*sent)[2]).Name != "turn.completed" {
-		t.Fatalf("unexpected third envelope: %+v", decodeEnvelope(t, (*sent)[2]))
-	}
-	if decodeEnvelope(t, (*sent)[3]).Name != "thread.snapshot" {
-		t.Fatalf("unexpected fourth envelope: %+v", decodeEnvelope(t, (*sent)[3]))
+	if got := envelopeNames(t, *sent); !stringSlicesEqual(got, expectedNames) {
+		t.Fatalf("unexpected envelope names: got %v want %v", got, expectedNames)
 	}
 
-	firstSnapshot := decodeThreadSnapshotPayload(t, (*sent)[1])
-	if len(firstSnapshot.Threads) != 1 || firstSnapshot.Threads[0].Status != domain.ThreadStatusActive {
-		t.Fatalf("expected active thread snapshot after turn start, got %+v", firstSnapshot.Threads)
-	}
-
-	secondSnapshot := decodeThreadSnapshotPayload(t, (*sent)[3])
-	if len(secondSnapshot.Threads) != 1 || secondSnapshot.Threads[0].Status != domain.ThreadStatusIdle {
-		t.Fatalf("expected idle thread snapshot after turn completion, got %+v", secondSnapshot.Threads)
+	snapshot := decodeThreadSnapshotPayload(t, (*sent)[4])
+	if len(snapshot.Threads) != 1 || snapshot.Threads[0].Status != domain.ThreadStatusIdle {
+		t.Fatalf("expected idle thread snapshot after turn completion, got %+v", snapshot.Threads)
 	}
 }
 
@@ -442,21 +424,16 @@ func TestBindRuntimeTurnEventsEmitsTurnFailedAndRefreshesSnapshot(t *testing.T) 
 		},
 	})
 
-	if len(*sent) != 2 {
-		t.Fatalf("expected failed turn event plus snapshot, got %d frames", len(*sent))
-	}
-	if decodeEnvelope(t, (*sent)[0]).Name != "turn.failed" {
-		t.Fatalf("unexpected first envelope: %+v", decodeEnvelope(t, (*sent)[0]))
+	expectedNames := []string{"timeline.event", "turn.failed", "thread.snapshot"}
+	if got := envelopeNames(t, *sent); !stringSlicesEqual(got, expectedNames) {
+		t.Fatalf("unexpected envelope names: got %v want %v", got, expectedNames)
 	}
 	var failedPayload protocol.TurnCompletedPayload
-	if err := transport.Decode(decodeEnvelope(t, (*sent)[0]).Payload, &failedPayload); err != nil {
+	if err := transport.Decode(decodeEnvelope(t, (*sent)[1]).Payload, &failedPayload); err != nil {
 		t.Fatalf("decode failed turn payload failed: %v", err)
 	}
 	if failedPayload.ErrorMessage != "Downstream unavailable" {
 		t.Fatalf("unexpected failed turn payload: %+v", failedPayload)
-	}
-	if decodeEnvelope(t, (*sent)[1]).Name != "thread.snapshot" {
-		t.Fatalf("unexpected second envelope: %+v", decodeEnvelope(t, (*sent)[1]))
 	}
 }
 
@@ -1092,6 +1069,28 @@ func decodeEnvelope(t *testing.T, raw []byte) protocol.Envelope {
 	}
 
 	return envelope
+}
+
+func envelopeNames(t *testing.T, rawFrames [][]byte) []string {
+	t.Helper()
+
+	names := make([]string, 0, len(rawFrames))
+	for _, raw := range rawFrames {
+		names = append(names, decodeEnvelope(t, raw).Name)
+	}
+	return names
+}
+
+func stringSlicesEqual(left []string, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func decodeThreadSnapshotPayload(t *testing.T, raw []byte) protocol.ThreadSnapshotPayload {

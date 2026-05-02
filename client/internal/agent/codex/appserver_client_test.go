@@ -84,6 +84,39 @@ func (r *fakeRunner) emitServerRequest(t *testing.T, id string, method string, p
 	})
 }
 
+func TestClientInitializeEnablesExperimentalRawEventsCapability(t *testing.T) {
+	var gotMethod string
+	var gotPayload any
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			gotMethod = method
+			gotPayload = payload
+			response := out.(*initializeResponse)
+			response.UserAgent = "test"
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+	if err := client.Initialize(); err != nil {
+		t.Fatal(err)
+	}
+	if gotMethod != "initialize" {
+		t.Fatalf("unexpected method: %s", gotMethod)
+	}
+	payloadMap, ok := gotPayload.(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected payload type: %T", gotPayload)
+	}
+	capabilities, ok := payloadMap["capabilities"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected capabilities map in payload: %#v", payloadMap)
+	}
+	if capabilities["experimentalApi"] != true {
+		t.Fatalf("expected experimentalApi capability: %#v", capabilities)
+	}
+}
+
 func TestClientListThreads(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -136,6 +169,63 @@ func TestClientListThreads(t *testing.T) {
 				t.Fatalf("unexpected threads: %+v", threads)
 			}
 		})
+	}
+}
+
+func TestClientListThreadsDerivesActiveStatusFromCurrentTurnState(t *testing.T) {
+	runner := &fakeRunner{
+		call: func(method string, payload any, out any) error {
+			if method != "thread/list" {
+				t.Fatalf("unexpected method: %s", method)
+			}
+			response := out.(*threadListResponse)
+			response.Data = []threadRecord{{
+				ID:     "thread-1",
+				Name:   "Investigate flaky test",
+				Status: threadStatusRecord{Type: domain.ThreadStatusActive},
+			}}
+			return nil
+		},
+	}
+
+	client := NewAppServerClient(runner)
+
+	threads, err := client.ListThreads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].Status != domain.ThreadStatusIdle {
+		t.Fatalf("expected stale active list status to normalize to idle, got %+v", threads)
+	}
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+
+	threads, err = client.ListThreads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].Status != domain.ThreadStatusActive {
+		t.Fatalf("expected active turn to mark thread active, got %+v", threads)
+	}
+
+	runner.emitNotification(t, "turn/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"turn": map[string]any{
+			"id":     "turn-1",
+			"status": "completed",
+		},
+	})
+
+	threads, err = client.ListThreads()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].Status != domain.ThreadStatusIdle {
+		t.Fatalf("expected completed turn to mark thread idle, got %+v", threads)
 	}
 }
 
@@ -1287,7 +1377,7 @@ func TestClientCreateThreadUsesExpectedMethodAndPayload(t *testing.T) {
 			if payloadMap["title"] != tt.title {
 				t.Fatalf("unexpected payload: %#v", payloadMap)
 			}
-			if payloadMap["experimentalRawEvents"] != false || payloadMap["persistExtendedHistory"] != false {
+			if payloadMap["experimentalRawEvents"] != true || payloadMap["persistExtendedHistory"] != false {
 				t.Fatalf("expected thread/start defaults in payload: %#v", payloadMap)
 			}
 
@@ -1570,10 +1660,10 @@ func TestAppServerClientTranslatesNotificationsIntoTurnEvents(t *testing.T) {
 		t.Fatalf("unexpected started event: %+v", events[0])
 	}
 	if events[1].Type != agenttypes.RuntimeTurnEventTypeDelta || events[1].Sequence != 1 || events[1].Delta != "hello" {
-		t.Fatalf("unexpected first delta event: %+v", events[1])
+		t.Fatalf("unexpected first content delta event: %+v", events[1])
 	}
 	if events[2].Type != agenttypes.RuntimeTurnEventTypeDelta || events[2].Sequence != 2 || events[2].Delta != " world" {
-		t.Fatalf("unexpected second delta event: %+v", events[2])
+		t.Fatalf("unexpected second content delta event: %+v", events[2])
 	}
 	if events[3].Type != agenttypes.RuntimeTurnEventTypeCompleted {
 		t.Fatalf("unexpected completed event: %+v", events[3])
@@ -1587,7 +1677,7 @@ func TestAppServerClientEmitsCompletedAgentMessageTextWhenNoDeltaArrives(t *test
 	runner := &fakeRunner{}
 	client := NewAppServerClient(runner)
 
-	events := make([]agenttypes.RuntimeTurnEvent, 0, 3)
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 4)
 	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
 		events = append(events, event)
 	})
@@ -1621,11 +1711,195 @@ func TestAppServerClientEmitsCompletedAgentMessageTextWhenNoDeltaArrives(t *test
 	}
 }
 
+func TestAppServerClientUsesActiveTurnIDForAgentMessageItemsWithoutTurnID(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 5)
+	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		events = append(events, event)
+	})
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+	runner.emitNotification(t, "item/completed", map[string]any{
+		"threadId": "thread-1",
+		"item": map[string]any{
+			"id":   "msg-1",
+			"type": "agentMessage",
+			"text": "hello",
+		},
+	})
+	runner.emitNotification(t, "item/completed", map[string]any{
+		"threadId": "thread-1",
+		"item": map[string]any{
+			"id":   "msg-2",
+			"type": "agentMessage",
+			"text": " world",
+		},
+	})
+	runner.emitNotification(t, "turn/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+
+	if len(events) != 4 {
+		t.Fatalf("unexpected event count: %d", len(events))
+	}
+	if events[1].Type != agenttypes.RuntimeTurnEventTypeDelta || events[1].TurnID != "turn-1" || events[1].Sequence != 1 || events[1].Delta != "hello" {
+		t.Fatalf("unexpected first completed item event: %+v", events[1])
+	}
+	if events[2].Type != agenttypes.RuntimeTurnEventTypeDelta || events[2].TurnID != "turn-1" || events[2].Sequence != 2 || events[2].Delta != " world" {
+		t.Fatalf("unexpected second completed item event: %+v", events[2])
+	}
+}
+
+func TestAppServerClientEmitsProgressDeltasForToolItemEvents(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 6)
+	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		events = append(events, event)
+	})
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+	runner.emitNotification(t, "item/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"type": "reasoning",
+		},
+	})
+	runner.emitNotification(t, "item/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"type":   "webSearch",
+			"action": map[string]any{"type": "other"},
+		},
+	})
+	runner.emitNotification(t, "item/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"type":   "webSearch",
+			"action": map[string]any{"type": "search", "query": "latest AI agents"},
+		},
+	})
+	runner.emitNotification(t, "item/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"type":    "commandExecution",
+			"command": "go test ./...",
+		},
+	})
+	runner.emitNotification(t, "item/completed", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"type":   "commandExecution",
+			"status": "completed",
+		},
+	})
+
+	if len(events) != 5 {
+		t.Fatalf("unexpected event count: %d", len(events))
+	}
+	assertions := []struct {
+		index    int
+		sequence int
+		contains string
+	}{
+		{index: 1, sequence: 1, contains: "正在搜索"},
+		{index: 2, sequence: 2, contains: "已完成搜索：latest AI agents"},
+		{index: 3, sequence: 3, contains: "正在执行命令：`go test ./...`"},
+		{index: 4, sequence: 4, contains: "命令执行完成"},
+	}
+	for _, assertion := range assertions {
+		event := events[assertion.index]
+		if event.Type != agenttypes.RuntimeTurnEventTypeDelta || event.DeltaKind != agenttypes.RuntimeTurnDeltaKindProgress || event.TurnID != "turn-1" || event.Sequence != assertion.sequence || !strings.Contains(event.Delta, assertion.contains) {
+			t.Fatalf("unexpected progress delta at %d: %+v", assertion.index, event)
+		}
+	}
+}
+
+func TestAppServerClientClassifiesAgentMessageDeltaByPhase(t *testing.T) {
+	runner := &fakeRunner{}
+	client := NewAppServerClient(runner)
+
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 5)
+	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
+		events = append(events, event)
+	})
+
+	runner.emitNotification(t, "turn/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+	})
+	runner.emitNotification(t, "item/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"id":    "msg-commentary",
+			"type":  "agentMessage",
+			"phase": "commentary",
+		},
+	})
+	runner.emitNotification(t, "item/agentMessage/delta", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "msg-commentary",
+		"delta":    "我先查资料",
+	})
+	runner.emitNotification(t, "item/started", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"item": map[string]any{
+			"id":    "msg-final",
+			"type":  "agentMessage",
+			"phase": "final",
+		},
+	})
+	runner.emitNotification(t, "item/agentMessage/delta", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "msg-final",
+		"delta":    "最终报告",
+	})
+	runner.emitNotification(t, "item/agentMessage/delta", map[string]any{
+		"threadId": "thread-1",
+		"turnId":   "turn-1",
+		"itemId":   "msg-direct",
+		"phase":    "commentary",
+		"delta":    "直接进度",
+	})
+
+	if len(events) != 4 {
+		t.Fatalf("unexpected event count: %d", len(events))
+	}
+	if events[1].DeltaKind != agenttypes.RuntimeTurnDeltaKindProgress || events[1].Delta != "我先查资料" {
+		t.Fatalf("expected commentary delta to be progress, got %+v", events[1])
+	}
+	if events[2].DeltaKind != agenttypes.RuntimeTurnDeltaKindContent || events[2].Delta != "最终报告" {
+		t.Fatalf("expected final delta to be content, got %+v", events[2])
+	}
+	if events[3].DeltaKind != agenttypes.RuntimeTurnDeltaKindProgress || events[3].Delta != "直接进度" {
+		t.Fatalf("expected direct commentary delta to be progress, got %+v", events[3])
+	}
+}
+
 func TestAppServerClientEmitsOnlyMissingCompletedAgentMessageSuffix(t *testing.T) {
 	runner := &fakeRunner{}
 	client := NewAppServerClient(runner)
 
-	events := make([]agenttypes.RuntimeTurnEvent, 0, 4)
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 5)
 	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
 		events = append(events, event)
 	})
@@ -1669,7 +1943,7 @@ func TestAppServerClientIncludesErrorMessageOnFailedTurnEvent(t *testing.T) {
 	runner := &fakeRunner{}
 	client := NewAppServerClient(runner)
 
-	events := make([]agenttypes.RuntimeTurnEvent, 0, 2)
+	events := make([]agenttypes.RuntimeTurnEvent, 0, 3)
 	client.SetTurnEventHandler(func(event agenttypes.RuntimeTurnEvent) {
 		events = append(events, event)
 	})
@@ -2019,6 +2293,11 @@ func TestClientReadThreadMapsHistoricalMessages(t *testing.T) {
 								Type: "agentMessage",
 								Text: "hi there",
 							},
+							{
+								ID:   "agent-2",
+								Type: "agentMessage",
+								Text: "second update",
+							},
 						},
 					},
 					{
@@ -2046,7 +2325,7 @@ func TestClientReadThreadMapsHistoricalMessages(t *testing.T) {
 	if thread.Messages[0].Kind != domain.ThreadMessageKindUser || thread.Messages[0].Text != "hello" {
 		t.Fatalf("unexpected user message: %+v", thread.Messages[0])
 	}
-	if thread.Messages[1].Kind != domain.ThreadMessageKindAgent || thread.Messages[1].Text != "hi there" {
+	if thread.Messages[1].Kind != domain.ThreadMessageKindAgent || thread.Messages[1].Text != "hi there\n\nsecond update" {
 		t.Fatalf("unexpected agent message: %+v", thread.Messages[1])
 	}
 	if thread.Messages[2].Kind != domain.ThreadMessageKindSystem || thread.Messages[2].Text != "Turn turn-2 failed: Downstream unavailable" {

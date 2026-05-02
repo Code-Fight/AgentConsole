@@ -44,6 +44,7 @@ const capabilitySnapshot = {
   settingsApplyMachine: true,
   dashboardMetrics: false,
   agentLifecycle: false,
+  agentTimelineEvents: false,
 };
 
 function jsonResponse(payload: unknown) {

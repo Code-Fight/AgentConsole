@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import type {
   EventEnvelope,
   MachineSummary,
+  TimelineEventPayload,
   ThreadSummary,
   TurnCompletedPayload,
 } from "../../../common/api/types";
@@ -70,12 +71,43 @@ function persistUnreadThreadIds(unreadThreadIds: Set<string>) {
 }
 
 function resolveCompletedThreadId(envelope: EventEnvelope): string | null {
+  if (envelope.name === "timeline.event") {
+    const event = (envelope.payload as TimelineEventPayload).event;
+    if (event?.eventType === "turn.completed" || event?.eventType === "turn.failed") {
+      return event.threadId ?? null;
+    }
+    return null;
+  }
+
   if (envelope.name !== "turn.completed" && envelope.name !== "turn.failed") {
     return null;
   }
 
   const payload = envelope.payload as TurnCompletedPayload;
   return payload.turn?.threadId ?? null;
+}
+
+function isThreadHubRefreshEvent(envelope: EventEnvelope): boolean {
+  if (
+    envelope.name === "thread.updated" ||
+    envelope.name === "machine.updated" ||
+    envelope.name === "turn.started" ||
+    envelope.name === "turn.completed" ||
+    envelope.name === "turn.failed"
+  ) {
+    return true;
+  }
+
+  if (envelope.name !== "timeline.event") {
+    return false;
+  }
+
+  const event = (envelope.payload as TimelineEventPayload).event;
+  return (
+    event?.eventType === "turn.started" ||
+    event?.eventType === "turn.completed" ||
+    event?.eventType === "turn.failed"
+  );
 }
 
 export function useThreadHub(options?: UseThreadHubOptions) {
@@ -95,17 +127,25 @@ export function useThreadHub(options?: UseThreadHubOptions) {
   const [unreadThreadIds, setUnreadThreadIds] = useState<Set<string>>(readUnreadThreadIds);
 
   const loadHubData = useCallback(async () => {
-    try {
-      const [threadResponse, machineResponse] = await Promise.all([listThreads(), listMachines()]);
-      setThreads(threadResponse.items);
-      setMachines(
-        Object.fromEntries(machineResponse.items.map((machine) => [machine.id, machine])),
-      );
-      setError(null);
-    } catch {
+    const [threadResult, machineResult] = await Promise.allSettled([listThreads(), listMachines()]);
+
+    if (threadResult.status === "fulfilled") {
+      setThreads(threadResult.value.items);
+    } else {
       setThreads([]);
       setMachines({});
       setError("Unable to load live threads.");
+      return;
+    }
+
+    if (machineResult.status === "fulfilled") {
+      setMachines(
+        Object.fromEntries(machineResult.value.items.map((machine) => [machine.id, machine])),
+      );
+      setError(null);
+    } else {
+      setMachines({});
+      setError("Unable to load live machines.");
     }
   }, []);
 
@@ -150,11 +190,7 @@ export function useThreadHub(options?: UseThreadHubOptions) {
         }
       }
 
-      if (
-        envelope.name !== "thread.updated" &&
-        envelope.name !== "machine.updated" &&
-        envelope.name !== "turn.started"
-      ) {
+      if (!isThreadHubRefreshEvent(envelope)) {
         return;
       }
 

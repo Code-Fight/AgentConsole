@@ -96,6 +96,7 @@ test("composes app shell routes from the new router entry", async () => {
         settingsApplyMachine: true,
         dashboardMetrics: false,
         agentLifecycle: false,
+        agentTimelineEvents: false,
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }
 

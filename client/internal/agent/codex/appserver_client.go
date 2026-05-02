@@ -212,14 +212,17 @@ type AppServerClient struct {
 	threadRuntimeApplied    map[string]domain.ThreadRuntimePreferences
 	turnEventMu             sync.RWMutex
 	turnEventHandler        func(agenttypes.RuntimeTurnEvent)
+	timelineEventHandler    func(domain.AgentTimelineEvent)
 	approvalMu              sync.RWMutex
 	approvalHandler         func(agenttypes.RuntimeApprovalRequest)
 	approvalResolvedHandler func(ApprovalResolvedEvent)
 	pendingApprovals        map[string]pendingApprovalRequest
 	deltaMu                 sync.Mutex
 	deltaSequence           map[string]int
+	timelineSequence        map[string]int
 	agentMessageText        map[string]agentMessageState
 	turnErrors              map[string]string
+	activeTurnsByThread     map[string]string
 	restartMu               sync.RWMutex
 	restartRequired         map[string]bool
 	homeDir                 func() (string, error)
@@ -229,6 +232,7 @@ type AppServerClient struct {
 type agentMessageState struct {
 	turnID string
 	text   string
+	kind   agenttypes.RuntimeTurnDeltaKind
 }
 
 type ApprovalResolvedEvent struct {
@@ -240,6 +244,7 @@ type ApprovalResolvedEvent struct {
 
 var _ agenttypes.Runtime = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeTurnEventSource = (*AppServerClient)(nil)
+var _ agenttypes.RuntimeTimelineEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalEventSource = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeApprovalResponder = (*AppServerClient)(nil)
 var _ agenttypes.RuntimeSkillConfigurator = (*AppServerClient)(nil)
@@ -257,8 +262,10 @@ func NewAppServerClient(runner Runner) *AppServerClient {
 		threadRuntimeApplied: make(map[string]domain.ThreadRuntimePreferences),
 		pendingApprovals:     make(map[string]pendingApprovalRequest),
 		deltaSequence:        make(map[string]int),
+		timelineSequence:     make(map[string]int),
 		agentMessageText:     make(map[string]agentMessageState),
 		turnErrors:           make(map[string]string),
+		activeTurnsByThread:  make(map[string]string),
 		restartRequired:      make(map[string]bool),
 		homeDir:              resolveUserHomeDir,
 	}
@@ -278,7 +285,9 @@ func (c *AppServerClient) Initialize() error {
 			"name":    "code-agent-gateway",
 			"version": "dev",
 		},
-		"capabilities": nil,
+		"capabilities": map[string]any{
+			"experimentalApi": true,
+		},
 	}, &out)
 }
 
@@ -292,6 +301,7 @@ func (c *AppServerClient) ListThreads() ([]domain.Thread, error) {
 	seen := make(map[string]struct{}, len(response.Data))
 	for _, record := range response.Data {
 		thread := record.toDomain()
+		thread.Status = c.runtimeThreadStatus(thread)
 		if current, ok := c.threadByID(thread.ThreadID); ok {
 			thread = mergeRememberedThread(current, thread)
 		}
@@ -309,11 +319,30 @@ func (c *AppServerClient) ListThreads() ([]domain.Thread, error) {
 	return threads, nil
 }
 
+func (c *AppServerClient) runtimeThreadStatus(thread domain.Thread) domain.ThreadStatus {
+	threadID := strings.TrimSpace(thread.ThreadID)
+	if threadID != "" {
+		c.deltaMu.Lock()
+		_, active := c.activeTurnsByThread[threadID]
+		c.deltaMu.Unlock()
+		if active {
+			return domain.ThreadStatusActive
+		}
+	}
+
+	switch thread.Status {
+	case domain.ThreadStatusError:
+		return domain.ThreadStatusError
+	default:
+		return domain.ThreadStatusIdle
+	}
+}
+
 func (c *AppServerClient) CreateThread(params agenttypes.CreateThreadParams) (domain.Thread, error) {
 	var response threadStartResponse
 	if err := c.runner.Call("thread/start", map[string]any{
 		"title":                  params.Title,
-		"experimentalRawEvents":  false,
+		"experimentalRawEvents":  true,
 		"persistExtendedHistory": false,
 	}, &response); err != nil {
 		return domain.Thread{}, err
@@ -365,6 +394,12 @@ func (c *AppServerClient) StartTurn(params agenttypes.StartTurnParams) (agenttyp
 func (c *AppServerClient) SetTurnEventHandler(handler func(agenttypes.RuntimeTurnEvent)) {
 	c.turnEventMu.Lock()
 	c.turnEventHandler = handler
+	c.turnEventMu.Unlock()
+}
+
+func (c *AppServerClient) SetTimelineEventHandler(handler func(domain.AgentTimelineEvent)) {
+	c.turnEventMu.Lock()
+	c.timelineEventHandler = handler
 	c.turnEventMu.Unlock()
 }
 
@@ -465,6 +500,7 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 		c.deltaMu.Lock()
 		c.deltaSequence[turnID] = 0
 		delete(c.turnErrors, turnID)
+		c.activeTurnsByThread[threadID] = turnID
 		c.deltaMu.Unlock()
 		c.emitTurnEvent(agenttypes.RuntimeTurnEvent{
 			Type:      agenttypes.RuntimeTurnEventTypeStarted,
@@ -472,8 +508,12 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 			ThreadID:  threadID,
 			TurnID:    turnID,
 		})
+		if event, ok := codexTurnTimelineEvent(notification.Params, domain.AgentTimelineEventTurnStarted, domain.AgentTimelineStatusRunning, c.nextTimelineSequence(turnID), ""); ok {
+			c.emitTimelineEvent(event)
+		}
 	case "item/agentMessage/delta":
 		threadID, turnID, requestID := extractTurnNotificationIDs(notification.Params)
+		turnID = c.resolveTurnID(threadID, turnID)
 		itemID := extractNotificationString(notification.Params,
 			[]string{"itemId"},
 			[]string{"item", "id"},
@@ -487,9 +527,41 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 		if threadID == "" || turnID == "" || delta == "" {
 			return
 		}
-		if itemID != "" {
-			c.appendAgentMessageDelta(itemID, turnID, delta)
+		phase := extractNotificationString(notification.Params,
+			[]string{"phase"},
+			[]string{"item", "phase"},
+		)
+		var directDeltaKind agenttypes.RuntimeTurnDeltaKind
+		if phase != "" {
+			directDeltaKind = deltaKindForAgentMessagePhase(phase)
 		}
+		deltaKind := firstNonEmptyDeltaKind(directDeltaKind, c.agentMessageDeltaKind(itemID))
+		if itemID != "" {
+			c.appendAgentMessageDelta(itemID, turnID, delta, deltaKind)
+		}
+		sequence := c.nextTimelineSequence(turnID)
+		if itemID == "" {
+			itemID = fmt.Sprintf("%s:message", turnID)
+		}
+		c.emitTimelineEvent(domain.AgentTimelineEvent{
+			SchemaVersion: domain.AgentTimelineSchemaVersion,
+			EventID:       fmt.Sprintf("%s:%d:%s:%s", turnID, sequence, domain.AgentTimelineEventItemDelta, itemID),
+			Sequence:      sequence,
+			ThreadID:      threadID,
+			TurnID:        turnID,
+			ItemID:        itemID,
+			EventType:     domain.AgentTimelineEventItemDelta,
+			ItemType:      domain.AgentTimelineItemMessage,
+			Role:          domain.AgentTimelineRoleAssistant,
+			Phase:         timelinePhaseForDeltaKind(deltaKind),
+			Status:        domain.AgentTimelineStatusRunning,
+			Content: &domain.AgentTimelineContent{
+				ContentType: domain.AgentTimelineContentMarkdown,
+				Delta:       delta,
+				AppendMode:  domain.AgentTimelineAppendAppend,
+			},
+			Raw: codexTimelineRaw(notification.Method, notification.Params),
+		})
 		c.emitTurnEvent(agenttypes.RuntimeTurnEvent{
 			Type:      agenttypes.RuntimeTurnEventTypeDelta,
 			RequestID: requestID,
@@ -497,15 +569,44 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 			TurnID:    turnID,
 			Sequence:  c.nextDeltaSequence(turnID),
 			Delta:     delta,
+			DeltaKind: deltaKind,
 		})
+	case "item/plan/delta":
+		c.emitGenericTimelineDelta(notification, domain.AgentTimelineItemPlan, domain.AgentTimelinePhaseProgress, domain.AgentTimelineContentMarkdown)
+	case "item/reasoning/summaryTextDelta":
+		c.emitGenericTimelineDelta(notification, domain.AgentTimelineItemReasoning, domain.AgentTimelinePhaseAnalysis, domain.AgentTimelineContentMarkdown)
+	case "item/reasoning/textDelta":
+		c.emitRawTimelineEvent(notification, domain.AgentTimelineItemReasoning, domain.AgentTimelinePhaseAnalysis)
+	case "command/exec/outputDelta", "item/commandExecution/outputDelta":
+		c.emitGenericTimelineDelta(notification, domain.AgentTimelineItemCommand, domain.AgentTimelinePhaseProgress, domain.AgentTimelineContentTerminal)
+	case "item/fileChange/outputDelta":
+		c.emitGenericTimelineDelta(notification, domain.AgentTimelineItemFileChange, domain.AgentTimelinePhaseProgress, domain.AgentTimelineContentDiff)
+	case "item/mcpToolCall/progress":
+		c.emitGenericTimelineDelta(notification, domain.AgentTimelineItemMCPTool, domain.AgentTimelinePhaseProgress, domain.AgentTimelineContentText)
+	case "item/started":
+		if event, ok := codexItemTimelineEvent(notification.Params, domain.AgentTimelineEventItemStarted, domain.AgentTimelineStatusRunning, c.nextTimelineSequence(c.resolveTurnIDFromParams(notification.Params))); ok {
+			c.emitTimelineEvent(event)
+		}
+		if c.rememberAgentMessageItem(notification.Params) {
+			return
+		}
+		c.emitItemProgressDelta(notification.Params, true)
 	case "item/completed":
 		threadID, turnID, requestID := extractTurnNotificationIDs(notification.Params)
-		itemID, completedText, ok := extractCompletedAgentMessage(notification.Params)
-		if !ok || threadID == "" || turnID == "" {
+		turnID = c.resolveTurnID(threadID, turnID)
+		if event, ok := codexItemTimelineEvent(notification.Params, domain.AgentTimelineEventItemCompleted, domain.AgentTimelineStatusCompleted, c.nextTimelineSequence(turnID)); ok {
+			c.emitTimelineEvent(event)
+		}
+		itemID, completedText, completedKind, ok := extractCompletedAgentMessage(notification.Params)
+		if !ok {
+			c.emitItemProgressDelta(notification.Params, false)
+			return
+		}
+		if threadID == "" || turnID == "" {
 			return
 		}
 
-		if missingText := c.takeCompletedAgentMessageDelta(itemID, completedText); missingText != "" {
+		if missingText, deltaKind := c.takeCompletedAgentMessageDelta(itemID, completedText, completedKind); missingText != "" {
 			c.emitTurnEvent(agenttypes.RuntimeTurnEvent{
 				Type:      agenttypes.RuntimeTurnEventTypeDelta,
 				RequestID: requestID,
@@ -513,10 +614,12 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 				TurnID:    turnID,
 				Sequence:  c.nextDeltaSequence(turnID),
 				Delta:     missingText,
+				DeltaKind: deltaKind,
 			})
 		}
 	case "error":
 		threadID, turnID, _ := extractTurnNotificationIDs(notification.Params)
+		turnID = c.resolveTurnID(threadID, turnID)
 		errorMessage := extractNotificationString(notification.Params,
 			[]string{"error", "message"},
 			[]string{"message"},
@@ -528,8 +631,23 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 			return
 		}
 		c.rememberTurnError(turnID, errorMessage)
+		sequence := c.nextTimelineSequence(turnID)
+		c.emitTimelineEvent(domain.AgentTimelineEvent{
+			SchemaVersion: domain.AgentTimelineSchemaVersion,
+			EventID:       fmt.Sprintf("%s:%d:error", turnID, sequence),
+			Sequence:      sequence,
+			ThreadID:      threadID,
+			TurnID:        turnID,
+			EventType:     domain.AgentTimelineEventItemFailed,
+			ItemType:      domain.AgentTimelineItemUnknown,
+			Phase:         domain.AgentTimelinePhaseSystem,
+			Status:        domain.AgentTimelineStatusFailed,
+			Error:         &domain.AgentTimelineError{Message: errorMessage},
+			Raw:           codexTimelineRaw(notification.Method, notification.Params),
+		})
 	case "turn/completed":
 		threadID, turnID, requestID := extractTurnNotificationIDs(notification.Params)
+		turnID = c.resolveTurnID(threadID, turnID)
 		if threadID == "" || turnID == "" {
 			return
 		}
@@ -551,6 +669,9 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 		storedError := ""
 		c.deltaMu.Lock()
 		delete(c.deltaSequence, turnID)
+		if c.activeTurnsByThread[threadID] == turnID {
+			delete(c.activeTurnsByThread, threadID)
+		}
 		for itemID, state := range c.agentMessageText {
 			if state.turnID == turnID {
 				delete(c.agentMessageText, itemID)
@@ -562,6 +683,18 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 		if errorMessage == "" {
 			errorMessage = storedError
 		}
+		timelineEventType := domain.AgentTimelineEventTurnCompleted
+		timelineStatus := domain.AgentTimelineStatusCompleted
+		if eventType == agenttypes.RuntimeTurnEventTypeFailed {
+			timelineEventType = domain.AgentTimelineEventTurnFailed
+			timelineStatus = domain.AgentTimelineStatusFailed
+		}
+		if event, ok := codexTurnTimelineEvent(notification.Params, timelineEventType, timelineStatus, c.nextTimelineSequence(turnID), errorMessage); ok {
+			c.emitTimelineEvent(event)
+		}
+		c.deltaMu.Lock()
+		delete(c.timelineSequence, turnID)
+		c.deltaMu.Unlock()
 		c.emitTurnEvent(agenttypes.RuntimeTurnEvent{
 			Type:         eventType,
 			RequestID:    requestID,
@@ -586,16 +719,32 @@ func (c *AppServerClient) handleNotification(notification jsonRPCNotification) {
 		if !ok {
 			return
 		}
+		decision := extractNotificationString(notification.Params,
+			[]string{"decision"},
+			[]string{"result", "decision"},
+			[]string{"response", "decision"},
+			[]string{"resolution"},
+		)
+		if pending.request.ThreadID != "" && pending.request.TurnID != "" {
+			c.emitTimelineEvent(codexApprovalTimelineEvent(
+				pending.request.ThreadID,
+				pending.request.TurnID,
+				requestID,
+				pending.request.ItemID,
+				pending.request.Kind,
+				pending.request.Reason,
+				pending.request.Command,
+				pending.request.UserInputQuestions,
+				decision,
+				c.nextTimelineSequence(pending.request.TurnID),
+				true,
+			))
+		}
 		c.emitApprovalResolved(ApprovalResolvedEvent{
 			RequestID: requestID,
 			ThreadID:  pending.request.ThreadID,
 			TurnID:    pending.request.TurnID,
-			Decision: extractNotificationString(notification.Params,
-				[]string{"decision"},
-				[]string{"result", "decision"},
-				[]string{"response", "decision"},
-				[]string{"resolution"},
-			),
+			Decision:  decision,
 		})
 	}
 }
@@ -662,6 +811,22 @@ func (c *AppServerClient) handleServerRequest(request jsonRPCServerRequest) {
 	handler := c.approvalHandler
 	c.approvalMu.Unlock()
 
+	if approval.ThreadID != "" && approval.TurnID != "" {
+		c.emitTimelineEvent(codexApprovalTimelineEvent(
+			approval.ThreadID,
+			approval.TurnID,
+			approval.RequestID,
+			approval.ItemID,
+			approval.Kind,
+			approval.Reason,
+			approval.Command,
+			approval.UserInputQuestions,
+			"",
+			c.nextTimelineSequence(approval.TurnID),
+			false,
+		))
+	}
+
 	if handler != nil {
 		handler(agenttypes.RuntimeApprovalRequest{
 			RequestID: approval.RequestID,
@@ -682,6 +847,115 @@ func (c *AppServerClient) emitTurnEvent(event agenttypes.RuntimeTurnEvent) {
 	if handler != nil {
 		handler(event)
 	}
+}
+
+func (c *AppServerClient) emitTimelineEvent(event domain.AgentTimelineEvent) {
+	event = event.WithDefaults()
+	if event.EventID == "" {
+		event.EventID = fmt.Sprintf("%s:%d:%s:%s", event.TurnID, event.Sequence, event.EventType, event.ItemID)
+	}
+	c.turnEventMu.RLock()
+	handler := c.timelineEventHandler
+	c.turnEventMu.RUnlock()
+	if handler != nil {
+		handler(event)
+	}
+}
+
+func (c *AppServerClient) emitItemProgressDelta(params json.RawMessage, started bool) {
+	threadID, turnID, requestID := extractTurnNotificationIDs(params)
+	turnID = c.resolveTurnID(threadID, turnID)
+	delta := extractItemProgressDelta(params, started)
+	if threadID == "" || turnID == "" || delta == "" {
+		return
+	}
+	c.emitTurnEvent(agenttypes.RuntimeTurnEvent{
+		Type:      agenttypes.RuntimeTurnEventTypeDelta,
+		RequestID: requestID,
+		ThreadID:  threadID,
+		TurnID:    turnID,
+		Sequence:  c.nextDeltaSequence(turnID),
+		Delta:     delta,
+		DeltaKind: agenttypes.RuntimeTurnDeltaKindProgress,
+	})
+}
+
+func (c *AppServerClient) emitGenericTimelineDelta(notification jsonRPCNotification, itemType domain.AgentTimelineItemType, phase domain.AgentTimelinePhase, contentType domain.AgentTimelineContentType) {
+	threadID, turnID, _ := extractTurnNotificationIDs(notification.Params)
+	turnID = c.resolveTurnID(threadID, turnID)
+	itemID := extractNotificationString(notification.Params,
+		[]string{"itemId"},
+		[]string{"item", "id"},
+	)
+	delta := extractNotificationText(notification.Params,
+		[]string{"delta"},
+		[]string{"text"},
+		[]string{"output"},
+		[]string{"item", "delta"},
+		[]string{"item", "text"},
+	)
+	if threadID == "" || turnID == "" || delta == "" {
+		return
+	}
+	sequence := c.nextTimelineSequence(turnID)
+	if itemID == "" {
+		itemID = fmt.Sprintf("%s:%s", turnID, itemType)
+	}
+	role := domain.AgentTimelineRoleAssistant
+	if itemType == domain.AgentTimelineItemCommand || itemType == domain.AgentTimelineItemMCPTool || itemType == domain.AgentTimelineItemFileChange {
+		role = domain.AgentTimelineRoleTool
+	}
+	c.emitTimelineEvent(domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       fmt.Sprintf("%s:%d:%s:%s", turnID, sequence, domain.AgentTimelineEventItemDelta, itemID),
+		Sequence:      sequence,
+		ThreadID:      threadID,
+		TurnID:        turnID,
+		ItemID:        itemID,
+		EventType:     domain.AgentTimelineEventItemDelta,
+		ItemType:      itemType,
+		Role:          role,
+		Phase:         phase,
+		Status:        domain.AgentTimelineStatusRunning,
+		Content: &domain.AgentTimelineContent{
+			ContentType: contentType,
+			Delta:       delta,
+			AppendMode:  domain.AgentTimelineAppendAppend,
+		},
+		Raw: codexTimelineRaw(notification.Method, notification.Params),
+	})
+}
+
+func (c *AppServerClient) emitRawTimelineEvent(notification jsonRPCNotification, itemType domain.AgentTimelineItemType, phase domain.AgentTimelinePhase) {
+	threadID, turnID, _ := extractTurnNotificationIDs(notification.Params)
+	turnID = c.resolveTurnID(threadID, turnID)
+	if threadID == "" || turnID == "" {
+		return
+	}
+	itemID := extractNotificationString(notification.Params,
+		[]string{"itemId"},
+		[]string{"item", "id"},
+	)
+	sequence := c.nextTimelineSequence(turnID)
+	c.emitTimelineEvent(domain.AgentTimelineEvent{
+		SchemaVersion: domain.AgentTimelineSchemaVersion,
+		EventID:       fmt.Sprintf("%s:%d:%s:%s", turnID, sequence, domain.AgentTimelineEventItemDelta, itemID),
+		Sequence:      sequence,
+		ThreadID:      threadID,
+		TurnID:        turnID,
+		ItemID:        itemID,
+		EventType:     domain.AgentTimelineEventItemDelta,
+		ItemType:      itemType,
+		Role:          domain.AgentTimelineRoleAssistant,
+		Phase:         phase,
+		Status:        domain.AgentTimelineStatusRunning,
+		Raw:           codexTimelineRaw(notification.Method, notification.Params),
+	})
+}
+
+func (c *AppServerClient) resolveTurnIDFromParams(params json.RawMessage) string {
+	threadID, turnID, _ := extractTurnNotificationIDs(params)
+	return c.resolveTurnID(threadID, turnID)
 }
 
 func (c *AppServerClient) emitApprovalResolved(event ApprovalResolvedEvent) {
@@ -729,22 +1003,68 @@ func (c *AppServerClient) nextDeltaSequence(turnID string) int {
 	return c.deltaSequence[turnID]
 }
 
-func (c *AppServerClient) appendAgentMessageDelta(itemID string, turnID string, delta string) {
+func (c *AppServerClient) nextTimelineSequence(turnID string) int {
+	c.deltaMu.Lock()
+	defer c.deltaMu.Unlock()
+	c.timelineSequence[turnID]++
+	return c.timelineSequence[turnID]
+}
+
+func (c *AppServerClient) resolveTurnID(threadID string, turnID string) string {
+	turnID = strings.TrimSpace(turnID)
+	if turnID != "" {
+		return turnID
+	}
+	threadID = strings.TrimSpace(threadID)
+	if threadID == "" {
+		return ""
+	}
+
+	c.deltaMu.Lock()
+	defer c.deltaMu.Unlock()
+	return c.activeTurnsByThread[threadID]
+}
+
+func (c *AppServerClient) rememberAgentMessageItem(params json.RawMessage) bool {
+	itemID, kind, ok := extractAgentMessageItemKind(params)
+	if !ok || itemID == "" {
+		return false
+	}
+
+	c.deltaMu.Lock()
+	state := c.agentMessageText[itemID]
+	state.kind = kind
+	c.agentMessageText[itemID] = state
+	c.deltaMu.Unlock()
+	return true
+}
+
+func (c *AppServerClient) agentMessageDeltaKind(itemID string) agenttypes.RuntimeTurnDeltaKind {
+	if itemID == "" {
+		return agenttypes.RuntimeTurnDeltaKindContent
+	}
+	c.deltaMu.Lock()
+	defer c.deltaMu.Unlock()
+	return normalizeDeltaKind(c.agentMessageText[itemID].kind)
+}
+
+func (c *AppServerClient) appendAgentMessageDelta(itemID string, turnID string, delta string, kind agenttypes.RuntimeTurnDeltaKind) {
 	c.deltaMu.Lock()
 	state := c.agentMessageText[itemID]
 	state.turnID = turnID
 	state.text += delta
+	state.kind = normalizeDeltaKind(kind)
 	c.agentMessageText[itemID] = state
 	c.deltaMu.Unlock()
 }
 
-func (c *AppServerClient) takeCompletedAgentMessageDelta(itemID string, completedText string) string {
+func (c *AppServerClient) takeCompletedAgentMessageDelta(itemID string, completedText string, fallbackKind agenttypes.RuntimeTurnDeltaKind) (string, agenttypes.RuntimeTurnDeltaKind) {
 	c.deltaMu.Lock()
 	state := c.agentMessageText[itemID]
 	delete(c.agentMessageText, itemID)
 	c.deltaMu.Unlock()
 
-	return trimSharedPrefix(state.text, completedText)
+	return trimSharedPrefix(state.text, completedText), normalizeDeltaKind(firstNonEmptyDeltaKind(state.kind, fallbackKind))
 }
 
 func (c *AppServerClient) rememberTurnError(turnID string, errorMessage string) {
@@ -764,7 +1084,6 @@ func extractTurnNotificationIDs(params json.RawMessage) (threadID string, turnID
 		[]string{"turn", "turnId"},
 		[]string{"turn", "id"},
 		[]string{"item", "turnId"},
-		[]string{"item", "id"},
 	)
 	requestID = extractNotificationString(params,
 		[]string{"requestId"},
@@ -883,7 +1202,7 @@ func extractNotificationBool(params json.RawMessage, paths ...[]string) bool {
 	return false
 }
 
-func extractCompletedAgentMessage(params json.RawMessage) (itemID string, text string, ok bool) {
+func extractAgentMessageItemKind(params json.RawMessage) (itemID string, kind agenttypes.RuntimeTurnDeltaKind, ok bool) {
 	if len(params) == 0 {
 		return "", "", false
 	}
@@ -905,9 +1224,159 @@ func extractCompletedAgentMessage(params json.RawMessage) (itemID string, text s
 		return "", "", false
 	}
 
+	phaseValue, _ := nestedValue(payload, "item", "phase")
+	phase, _ := phaseValue.(string)
+	return strings.TrimSpace(itemID), deltaKindForAgentMessagePhase(phase), true
+}
+
+func extractCompletedAgentMessage(params json.RawMessage) (itemID string, text string, kind agenttypes.RuntimeTurnDeltaKind, ok bool) {
+	if len(params) == 0 {
+		return "", "", "", false
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return "", "", "", false
+	}
+
+	itemType, _ := nestedValue(payload, "item", "type")
+	typeValue, typeOK := itemType.(string)
+	if !typeOK || strings.TrimSpace(typeValue) != "agentMessage" {
+		return "", "", "", false
+	}
+
+	itemIDValue, _ := nestedValue(payload, "item", "id")
+	itemID, _ = itemIDValue.(string)
+	if strings.TrimSpace(itemID) == "" {
+		return "", "", "", false
+	}
+
 	textValue, _ := nestedValue(payload, "item", "text")
 	text, _ = textValue.(string)
-	return itemID, text, true
+	phaseValue, _ := nestedValue(payload, "item", "phase")
+	phase, _ := phaseValue.(string)
+	return strings.TrimSpace(itemID), text, deltaKindForAgentMessagePhase(phase), true
+}
+
+func deltaKindForAgentMessagePhase(phase string) agenttypes.RuntimeTurnDeltaKind {
+	switch strings.TrimSpace(phase) {
+	case "commentary":
+		return agenttypes.RuntimeTurnDeltaKindProgress
+	case "final", "final_answer":
+		return agenttypes.RuntimeTurnDeltaKindContent
+	default:
+		return agenttypes.RuntimeTurnDeltaKindContent
+	}
+}
+
+func timelinePhaseForDeltaKind(kind agenttypes.RuntimeTurnDeltaKind) domain.AgentTimelinePhase {
+	if kind == agenttypes.RuntimeTurnDeltaKindProgress {
+		return domain.AgentTimelinePhaseProgress
+	}
+	return domain.AgentTimelinePhaseFinal
+}
+
+func normalizeDeltaKind(kind agenttypes.RuntimeTurnDeltaKind) agenttypes.RuntimeTurnDeltaKind {
+	if kind == agenttypes.RuntimeTurnDeltaKindProgress {
+		return agenttypes.RuntimeTurnDeltaKindProgress
+	}
+	return agenttypes.RuntimeTurnDeltaKindContent
+}
+
+func firstNonEmptyDeltaKind(values ...agenttypes.RuntimeTurnDeltaKind) agenttypes.RuntimeTurnDeltaKind {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return agenttypes.RuntimeTurnDeltaKindContent
+}
+
+func extractItemProgressDelta(params json.RawMessage, started bool) string {
+	if len(params) == 0 {
+		return ""
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(params, &payload); err != nil {
+		return ""
+	}
+
+	rawItem, ok := nestedValue(payload, "item")
+	if !ok {
+		return ""
+	}
+	item, ok := rawItem.(map[string]any)
+	if !ok {
+		return ""
+	}
+
+	itemType := stringFromMap(item, "type")
+	switch itemType {
+	case "webSearch":
+		if started {
+			return "\n\n正在搜索..."
+		}
+		action, _ := item["action"].(map[string]any)
+		actionType := stringFromMap(action, "type")
+		if actionType == "openPage" || actionType == "open_page" {
+			if url := stringFromMap(action, "url"); url != "" {
+				return "\n\n已打开页面：" + truncateProgressValue(url)
+			}
+			return "\n\n已打开页面。"
+		}
+		query := stringFromMap(action, "query")
+		if query == "" {
+			query = stringFromMap(item, "query")
+		}
+		if query != "" {
+			return "\n\n已完成搜索：" + truncateProgressValue(query)
+		}
+		return "\n\n搜索完成。"
+	case "commandExecution":
+		if started {
+			command := stringFromMap(item, "command")
+			if command != "" {
+				return "\n\n正在执行命令：`" + escapeInlineCode(truncateProgressValue(command)) + "`"
+			}
+			return "\n\n正在执行命令..."
+		}
+		status := stringFromMap(item, "status")
+		if status == "failed" {
+			return "\n\n命令执行失败。"
+		}
+		return "\n\n命令执行完成。"
+	default:
+		return ""
+	}
+}
+
+func stringFromMap(values map[string]any, key string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	value, ok := values[key]
+	if !ok {
+		return ""
+	}
+	text, ok := value.(string)
+	if !ok {
+		return ""
+	}
+	return strings.TrimSpace(text)
+}
+
+func truncateProgressValue(value string) string {
+	const maxRunes = 180
+	runes := []rune(strings.TrimSpace(value))
+	if len(runes) <= maxRunes {
+		return string(runes)
+	}
+	return string(runes[:maxRunes]) + "..."
+}
+
+func escapeInlineCode(value string) string {
+	return strings.ReplaceAll(value, "`", "\\`")
 }
 
 func trimSharedPrefix(existing string, completed string) string {
@@ -932,6 +1401,8 @@ func flattenThreadMessages(turns []turnRecord) []domain.ThreadMessage {
 	messages := make([]domain.ThreadMessage, 0, len(turns)*2)
 	for _, turn := range turns {
 		turnID := strings.TrimSpace(turn.ID)
+		agentMessageID := ""
+		agentTexts := make([]string, 0)
 		for _, item := range turn.Items {
 			text := flattenThreadItemText(item)
 			if text == "" {
@@ -946,13 +1417,20 @@ func flattenThreadMessages(turns []turnRecord) []domain.ThreadMessage {
 					Text:   text,
 				})
 			case "agentMessage":
-				messages = append(messages, domain.ThreadMessage{
-					ID:     firstNonEmptyString(strings.TrimSpace(item.ID), "agent:"+turnID),
-					TurnID: turnID,
-					Kind:   domain.ThreadMessageKindAgent,
-					Text:   text,
-				})
+				if agentMessageID == "" {
+					agentMessageID = firstNonEmptyString(strings.TrimSpace(item.ID), "agent:"+turnID)
+				}
+				agentTexts = append(agentTexts, text)
 			}
+		}
+
+		if len(agentTexts) > 0 {
+			messages = append(messages, domain.ThreadMessage{
+				ID:     agentMessageID,
+				TurnID: turnID,
+				Kind:   domain.ThreadMessageKindAgent,
+				Text:   strings.Join(agentTexts, "\n\n"),
+			})
 		}
 
 		if turn.Status == domain.TurnStatusFailed && turn.Error != nil && strings.TrimSpace(turn.Error.Message) != "" {

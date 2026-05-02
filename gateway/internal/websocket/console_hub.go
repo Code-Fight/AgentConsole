@@ -204,6 +204,11 @@ func envelopeThreadID(envelope protocol.Envelope) string {
 		if err := transport.Decode(envelope.Payload, &payload); err == nil {
 			return payload.Turn.ThreadID
 		}
+	case "timeline.event":
+		var payload protocol.TimelineEventPayload
+		if err := transport.Decode(envelope.Payload, &payload); err == nil {
+			return payload.Event.ThreadID
+		}
 	case "command.completed":
 		var payload protocol.CommandCompletedPayload
 		if err := transport.Decode(envelope.Payload, &payload); err != nil {

@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import type {
   ApprovalDecision,
   ApprovalRequiredPayload,
   ApprovalResolvedPayload,
+  AgentTimelineEvent,
   MachineUpdatedPayload,
+  ThreadHistoryMessage,
   ThreadRuntimeSettings,
   TurnCompletedPayload,
   TurnDeltaPayload,
@@ -32,16 +34,89 @@ import {
   getEnvelopeThreadId,
   parseEnvelope,
   toApprovalCardViewModel,
-  toTurnCompletedMessage,
-  toTurnStartedMessage,
+  toTurnFailedMessage,
   toWorkspaceMessage,
   type WorkspaceMessageViewModel,
 } from "../model/thread-view-model";
+import {
+  isTimelineEventEnvelope,
+  mergeTimelineEventIntoMessages,
+  timelineEventMarksTurnCompleted,
+  timelineEventToApprovalRequired,
+} from "../model/timeline-model";
 
 type ApprovalAnswerMap = Record<string, string>;
 type PendingApproval = ApprovalRequiredPayload & { requestId: string };
 
 export type ThreadWorkspaceViewModel = ReturnType<typeof useThreadWorkspace>;
+
+const transientAnalyzingDelta = "\n\n正在分析...";
+
+function mergeTurnDeltaText(currentText: string, delta: string): string {
+  if (delta === transientAnalyzingDelta && currentText.includes(transientAnalyzingDelta)) {
+    return currentText;
+  }
+
+  if (delta === transientAnalyzingDelta) {
+    return `${currentText}${delta}`;
+  }
+
+  return `${currentText.replace(transientAnalyzingDelta, "")}${delta}`;
+}
+
+function cleanTransientProgressText(text?: string): string | undefined {
+  const cleaned = (text ?? "").replace(transientAnalyzingDelta, "");
+  return cleaned.length > 0 ? cleaned : undefined;
+}
+
+function mergeProgressDeltaText(currentText: string | undefined, delta: string): string | undefined {
+  const current = currentText ?? "";
+  if (delta === transientAnalyzingDelta) {
+    if (current.includes(transientAnalyzingDelta)) {
+      return current;
+    }
+    return `${current}${delta}`;
+  }
+
+  const merged = `${current.replace(transientAnalyzingDelta, "")}${delta}`;
+  return merged.length > 0 ? merged : undefined;
+}
+
+function isProgressDelta(payload: TurnDeltaPayload): boolean {
+  return payload.kind === "progress";
+}
+
+function withoutPendingFlag(message: WorkspaceMessageViewModel): WorkspaceMessageViewModel {
+  const { isPending: _isPending, ...next } = message;
+  return next;
+}
+
+function withOptionalProgressText(
+  message: WorkspaceMessageViewModel,
+  progressText: string | undefined,
+): WorkspaceMessageViewModel {
+  if (progressText) {
+    return { ...message, progressText };
+  }
+  const { progressText: _progressText, ...next } = message;
+  return next;
+}
+
+function toWorkspaceHistoryMessages(messages: ThreadHistoryMessage[]): WorkspaceMessageViewModel[] {
+  return messages.map((message) => ({
+    id: message.id,
+    kind: message.kind,
+    text: message.text,
+    turnId: message.turnId,
+    progressText: message.progressText,
+  }));
+}
+
+function buildTimelineWorkspaceMessages(events: AgentTimelineEvent[]): WorkspaceMessageViewModel[] {
+  return [...events]
+    .sort((left, right) => left.sequence - right.sequence)
+    .reduce<WorkspaceMessageViewModel[]>(mergeTimelineEventIntoMessages, []);
+}
 
 interface UseThreadWorkspaceOptions {
   enabled?: boolean;
@@ -69,6 +144,7 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
   const [threadTitle, setThreadTitle] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isTurnPending, setIsTurnPending] = useState(false);
   const [runtimeModel, setRuntimeModel] = useState("");
   const [runtimeApprovalPolicy, setRuntimeApprovalPolicy] = useState("");
   const [runtimeSandboxMode, setRuntimeSandboxMode] = useState("");
@@ -77,6 +153,9 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
   >([]);
   const [runtimeSandboxOptions, setRuntimeSandboxOptions] = useState<string[]>([]);
   const [isUpdatingRuntimeSettings, setIsUpdatingRuntimeSettings] = useState(false);
+  const completedTurnIdsRef = useRef<Set<string>>(new Set());
+  const timelineTurnIdsRef = useRef<Set<string>>(new Set());
+  const pendingAgentMessageIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     setPrompt("");
@@ -88,13 +167,75 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     setActiveTurnId(null);
     setThreadTitle("");
     setError(null);
+    setIsSubmitting(false);
+    setIsTurnPending(false);
     setRuntimeModel("");
     setRuntimeApprovalPolicy("");
     setRuntimeSandboxMode("");
     setRuntimeModelOptions([]);
     setRuntimeSandboxOptions([]);
     setIsUpdatingRuntimeSettings(false);
+    completedTurnIdsRef.current.clear();
+    timelineTurnIdsRef.current.clear();
+    pendingAgentMessageIdRef.current = null;
   }, [threadId, connectionIdentity]);
+
+  const appendTurnDelta = useCallback((payload: TurnDeltaPayload) => {
+    completedTurnIdsRef.current.delete(payload.turnId);
+    setIsTurnPending(false);
+    setActiveTurnId((current) => current ?? payload.turnId);
+    setMessages((current) => {
+      const next = [...current];
+      const lastMessage = next[next.length - 1];
+      const pendingAgentMessageId = pendingAgentMessageIdRef.current;
+      if (
+        lastMessage?.kind === "agent" &&
+        (lastMessage.turnId === payload.turnId || lastMessage.id === pendingAgentMessageId)
+      ) {
+        if (lastMessage.id === pendingAgentMessageId) {
+          pendingAgentMessageIdRef.current = null;
+        }
+        if (isProgressDelta(payload)) {
+          next[next.length - 1] = withOptionalProgressText(
+            withoutPendingFlag({
+              ...lastMessage,
+              turnId: payload.turnId,
+            }),
+            mergeProgressDeltaText(lastMessage.progressText, payload.delta),
+          );
+        } else {
+          next[next.length - 1] = withOptionalProgressText(
+            withoutPendingFlag({
+              ...lastMessage,
+              turnId: payload.turnId,
+              text: mergeTurnDeltaText(lastMessage.text, payload.delta),
+            }),
+            cleanTransientProgressText(lastMessage.progressText),
+          );
+        }
+        return next;
+      }
+
+      next.push(toWorkspaceMessage(payload));
+      return next;
+    });
+  }, []);
+
+  const bindPendingAgentMessageToTurn = useCallback((turnId: string) => {
+    const pendingAgentMessageId = pendingAgentMessageIdRef.current;
+    if (!pendingAgentMessageId) {
+      return;
+    }
+
+    pendingAgentMessageIdRef.current = null;
+    setMessages((current) =>
+      current.map((message) =>
+        message.id === pendingAgentMessageId
+          ? withoutPendingFlag({ ...message, id: `agent:${turnId}`, turnId })
+          : message,
+      ),
+    );
+  }, []);
 
   const applyRuntimeSettings = useCallback((settings: ThreadRuntimeSettings) => {
     const preferences = settings.preferences ?? {};
@@ -148,14 +289,17 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     try {
       const detail = await getThreadDetail(threadId);
       let resolvedTitle = detail.thread.title ?? "";
-      let threadMessages = detail.messages ?? [];
+      let threadMessages =
+        detail.events?.length
+          ? buildTimelineWorkspaceMessages(detail.events)
+          : toWorkspaceHistoryMessages(detail.messages ?? []);
       let historyLoadError: string | null = null;
       if (threadMessages.length === 0 && detail.thread.status !== "active") {
         try {
           const resumed = await resumeThread(threadId);
           const resumedMessages = resumed.thread.messages ?? [];
           if (resumedMessages.length > 0) {
-            threadMessages = resumedMessages;
+            threadMessages = toWorkspaceHistoryMessages(resumedMessages);
             if (resolvedTitle.trim() === "") {
               resolvedTitle = resumed.thread.title ?? resolvedTitle;
             }
@@ -239,7 +383,7 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
       return undefined;
     }
 
-    return connectConsoleSocket(undefined, (event) => {
+    return connectConsoleSocket(threadId, (event) => {
       const envelope = parseEnvelope(event.data);
       if (!envelope) {
         return;
@@ -252,6 +396,69 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
       }
 
       if (getEnvelopeThreadId(envelope) !== threadId) {
+        return;
+      }
+
+      if (isTimelineEventEnvelope(envelope)) {
+        const timelineEvent = envelope.payload.event;
+        const timelineTurnId = timelineEvent.turnId?.trim() ?? "";
+        if (timelineTurnId) {
+          timelineTurnIdsRef.current.add(timelineTurnId);
+        }
+
+        if (timelineEvent.eventType === "turn.started" && timelineTurnId) {
+          completedTurnIdsRef.current.delete(timelineTurnId);
+          setIsTurnPending(false);
+          setActiveTurnId(timelineTurnId);
+          bindPendingAgentMessageToTurn(timelineTurnId);
+        } else if (timelineTurnId && !timelineEventMarksTurnCompleted(timelineEvent)) {
+          completedTurnIdsRef.current.delete(timelineTurnId);
+          setIsTurnPending(false);
+          setActiveTurnId((current) => current ?? timelineTurnId);
+          bindPendingAgentMessageToTurn(timelineTurnId);
+        }
+
+        if (timelineEventMarksTurnCompleted(timelineEvent) && timelineTurnId) {
+          completedTurnIdsRef.current.add(timelineTurnId);
+          setIsTurnPending(false);
+          setActiveTurnId((current) => (current === timelineTurnId ? null : current));
+          const pendingAgentMessageId = pendingAgentMessageIdRef.current;
+          if (pendingAgentMessageId) {
+            pendingAgentMessageIdRef.current = null;
+            setMessages((current) =>
+              current.filter((message) => message.id !== pendingAgentMessageId),
+            );
+          }
+        }
+
+        const approval = timelineEventToApprovalRequired(timelineEvent);
+        if (approval) {
+          setPendingApprovals((current) => {
+            const next = current.filter((item) => item.requestId !== approval.requestId);
+            next.push({ ...approval, requestId: approval.requestId });
+            return next;
+          });
+          setApprovalAnswers((current) => ({
+            ...current,
+            [approval.requestId]: {
+              ...(current[approval.requestId] ?? {}),
+              ...buildDefaultApprovalAnswers(approval.questions),
+            },
+          }));
+        } else if (
+          timelineEvent.eventType === "approval.resolved" &&
+          timelineEvent.approval?.requestId
+        ) {
+          const requestId = timelineEvent.approval.requestId;
+          setPendingApprovals((current) => current.filter((item) => item.requestId !== requestId));
+          setApprovalAnswers((current) => {
+            const next = { ...current };
+            delete next[requestId];
+            return next;
+          });
+        }
+
+        setMessages((current) => mergeTimelineEventIntoMessages(current, timelineEvent));
         return;
       }
 
@@ -295,37 +502,58 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
 
       if (envelope.name === "turn.delta") {
         const payload = envelope.payload as TurnDeltaPayload;
-        setMessages((current) => {
-          const next = [...current];
-          const lastMessage = next[next.length - 1];
-          if (lastMessage?.kind === "agent" && lastMessage.turnId === payload.turnId) {
-            next[next.length - 1] = {
-              ...lastMessage,
-              text: `${lastMessage.text}${payload.delta}`,
-            };
-            return next;
-          }
-
-          next.push(toWorkspaceMessage(payload));
-          return next;
-        });
+        if (timelineTurnIdsRef.current.has(payload.turnId)) {
+          return;
+        }
+        appendTurnDelta(payload);
         return;
       }
 
       if (envelope.name === "turn.started") {
         const payload = envelope.payload as TurnStartedPayload;
+        if (timelineTurnIdsRef.current.has(payload.turnId)) {
+          return;
+        }
+        completedTurnIdsRef.current.delete(payload.turnId);
+        setIsTurnPending(false);
         setActiveTurnId(payload.turnId);
-        setMessages((current) => [...current, toTurnStartedMessage(payload)]);
+        const pendingAgentMessageId = pendingAgentMessageIdRef.current;
+        if (pendingAgentMessageId) {
+          pendingAgentMessageIdRef.current = null;
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === pendingAgentMessageId
+                ? withoutPendingFlag({ ...message, turnId: payload.turnId })
+                : message,
+            ),
+          );
+        }
         return;
       }
 
       if (envelope.name === "turn.completed" || envelope.name === "turn.failed") {
         const payload = envelope.payload as TurnCompletedPayload;
+        if (timelineTurnIdsRef.current.has(payload.turn.turnId)) {
+          return;
+        }
+        completedTurnIdsRef.current.add(payload.turn.turnId);
         setActiveTurnId((current) => (current === payload.turn.turnId ? null : current));
-        setMessages((current) => [...current, toTurnCompletedMessage(payload)]);
+        setMessages((current) =>
+          current.map((message) =>
+            message.kind === "agent" && message.turnId === payload.turn.turnId
+              ? withOptionalProgressText(
+                  withoutPendingFlag(message),
+                  cleanTransientProgressText(message.progressText),
+                )
+              : message,
+          ),
+        );
+        if (envelope.name === "turn.failed") {
+          setMessages((current) => [...current, toTurnFailedMessage(payload)]);
+        }
       }
     });
-  }, [enabled, threadId, connectionIdentity]);
+  }, [appendTurnDelta, bindPendingAgentMessageToTurn, enabled, threadId, connectionIdentity]);
 
   const handleApprovalDecision = useCallback(
     async (requestId: string, decision: ApprovalDecision, answers?: ApprovalAnswerMap) => {
@@ -361,21 +589,49 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     }
 
     setIsSubmitting(true);
+    setIsTurnPending(true);
     setError(null);
+    const messageSeed = `${Date.now()}`;
+    const pendingAgentMessageId = `pending-agent:${messageSeed}`;
+    pendingAgentMessageIdRef.current = pendingAgentMessageId;
+    setMessages((current) => [
+      ...current,
+      {
+        id: `user:${messageSeed}`,
+        text: input,
+        kind: "user",
+      },
+      {
+        id: pendingAgentMessageId,
+        text: "",
+        kind: "agent",
+        isPending: true,
+      },
+    ]);
+    setPrompt("");
 
     try {
       const response = await startThreadTurn(threadId, input);
-      setActiveTurnId(response.turn.turnId);
-      setMessages((current) => [
-        ...current,
-        {
-          id: `user:${Date.now()}`,
-          text: input,
-          kind: "user",
-        },
-      ]);
-      setPrompt("");
+      setIsTurnPending(false);
+      if (!completedTurnIdsRef.current.has(response.turn.turnId)) {
+        setActiveTurnId((current) => current ?? response.turn.turnId);
+        if (pendingAgentMessageIdRef.current === pendingAgentMessageId) {
+          pendingAgentMessageIdRef.current = null;
+          setMessages((current) =>
+            current.map((message) =>
+              message.id === pendingAgentMessageId
+                ? withoutPendingFlag({ ...message, turnId: response.turn.turnId })
+                : message,
+            ),
+          );
+        }
+      }
     } catch (submissionError) {
+      setIsTurnPending(false);
+      if (pendingAgentMessageIdRef.current === pendingAgentMessageId) {
+        pendingAgentMessageIdRef.current = null;
+        setMessages((current) => current.filter((message) => message.id !== pendingAgentMessageId));
+      }
       setError(
         submissionError instanceof Error ? submissionError.message : "Unable to start turn.",
       );
@@ -507,13 +763,14 @@ export function useThreadWorkspace(threadId: string, options?: UseThreadWorkspac
     prompt,
     steerPrompt,
     isSubmitting,
+    isExecuting: isTurnPending || Boolean(activeTurnId),
     runtimeModel,
     runtimeApprovalPolicy,
     runtimeSandboxMode,
     runtimeModelOptions,
     runtimeSandboxOptions,
     isUpdatingRuntimeSettings,
-    canStartTurn: enabled && supportsCapability("startTurn") && !activeTurnId,
+    canStartTurn: enabled && supportsCapability("startTurn") && !activeTurnId && !isTurnPending,
     canSteerTurn: enabled && supportsCapability("steerTurn") && Boolean(activeTurnId),
     canInterruptTurn: enabled && supportsCapability("interruptTurn") && Boolean(activeTurnId),
     setPrompt,

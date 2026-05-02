@@ -340,6 +340,16 @@ type TurnDeltaPayload struct {
 	TurnID   string `json:"turnId"`
 	Sequence int    `json:"sequence"`
 	Delta    string `json:"delta"`
+	Kind     string `json:"kind,omitempty"`
+}
+
+type TimelineEventPayload struct {
+	Event domain.AgentTimelineEvent `json:"event"`
+}
+
+type TimelineSnapshotPayload struct {
+	ThreadID string                      `json:"threadId"`
+	Events   []domain.AgentTimelineEvent `json:"events"`
 }
 
 type TurnStartedPayload struct {

@@ -4,6 +4,7 @@ import type {
   EventEnvelope,
   MachineListResponse,
   MachineSummary,
+  TimelineEventPayload,
   ThreadListResponse,
   ThreadSummary,
 } from "../../../common/api/types";
@@ -53,14 +54,10 @@ function formatThreadStatus(status: ThreadSummary["status"]): string {
   switch (status) {
     case "active":
       return "进行中";
-    case "idle":
-      return "空闲";
     case "systemError":
       return "异常";
-    case "notLoaded":
-      return "未加载";
     default:
-      return "未知";
+      return "空闲";
   }
 }
 
@@ -180,6 +177,29 @@ function buildMachinesPageModel(
     });
 }
 
+function isMachinesPageRefreshEvent(envelope: EventEnvelope): boolean {
+  if (
+    envelope.name === "thread.updated" ||
+    envelope.name === "machine.updated" ||
+    envelope.name === "turn.started" ||
+    envelope.name === "turn.completed" ||
+    envelope.name === "turn.failed"
+  ) {
+    return true;
+  }
+
+  if (envelope.name !== "timeline.event") {
+    return false;
+  }
+
+  const event = (envelope.payload as TimelineEventPayload).event;
+  return (
+    event?.eventType === "turn.started" ||
+    event?.eventType === "turn.completed" ||
+    event?.eventType === "turn.failed"
+  );
+}
+
 export function useMachinesPage() {
   const connection = useGatewayConnectionState();
   const remoteEnabled = connection.remoteEnabled;
@@ -237,11 +257,7 @@ export function useMachinesPage() {
         return;
       }
 
-      if (
-        envelope.name !== "thread.updated" &&
-        envelope.name !== "machine.updated" &&
-        envelope.name !== "turn.started"
-      ) {
+      if (!isMachinesPageRefreshEvent(envelope)) {
         return;
       }
 

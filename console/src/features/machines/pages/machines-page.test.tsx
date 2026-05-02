@@ -53,6 +53,7 @@ const capabilities = {
   settingsApplyMachine: true,
   dashboardMetrics: false,
   agentLifecycle: true,
+  agentTimelineEvents: true,
 };
 
 function jsonResponse(body: unknown, status = 200) {
